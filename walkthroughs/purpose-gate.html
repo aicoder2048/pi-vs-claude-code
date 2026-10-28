@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>purpose-gate.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 11</div>
+<h1>purpose-gate.ts</h1>
+<p class="subtitle">会话一开始就弹框问“这个 agent 的目的是什么”，答了才放行：目的显示在编辑器上方的 widget 里，并追加到每次请求的系统提示词末尾；没答之前，任何提问都被 <code>input</code> 拦下。84 行，订阅 <code>session_start</code>、<code>before_agent_start</code>、<code>input</code> 三个事件。这一篇第一次订阅 <code>input</code>：settle 外循环最前面的那道门。<br>运行：<code>just ext-purpose-gate</code>（同时加载 minimal）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。三个回调各管一段：<code>session_start</code> 发起问询（不等待），<code>input</code> 在没答之前把门关上，<code>before_agent_start</code> 在答了之后把目的写进系统提示词。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+本扩展守在外循环入口的前两道：<code>input</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a>）在 <code>prompt()</code> 里、<code>_startRun</code> 之前，返回 <code>handled</code> 就直接结束，<b>连 settle 都不会开始</b>；<code>before_agent_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>:1935</code></a>）在 <code>_startRun</code> 之后、第一个 run 之前，改系统提示词。两个都是每次 settle 1 次。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：启动 → 按 Esc 一次 → 填目的 → 提问</option>
+    <option value="gate">场景 B：还没填目的时，另一个扩展用 sendUserMessage 发消息</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">终端底部（实时，简化）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 发起问询（不 await）</td></tr>
+<tr class="hl"><td><code>input</code></td><td><span class="tag outer">外</span> 最前面，<code>_startRun</code> 之前</td><td>1（被拦时 settle 不发生）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2041"><code>_runInputHandlers</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1525"><code>runner.emitInput</code></a></td><td>✔ 没目的 → <code>handled</code></td></tr>
+<tr class="hl"><td><code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口，起 run 之前</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a></td><td>✔ 追加 &lt;purpose&gt;</td></tr>
+<tr><td><code>agent_start</code> · <code>agent_end</code> · <code>agent_settled</code></td><td><span class="tag outer">外</span></td><td>N · N · 1</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1084"><code>agent-session.ts:1084</code></a></td><td>–</td></tr>
+<tr><td><code>turn_*</code> · <code>context</code> · <code>message_*</code> · <code>tool_*</code></td><td><span class="tag inner">内</span></td><td>M / K</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>agent-loop.ts:216</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L400"><code>:400</code></a></td><td>–</td></tr>
+<tr class="hl"><td>purpose widget <code>render(w)</code></td><td>与循环异步</td><td>每帧</td><td><a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔ 3 行紫底</td></tr>
+</tbody></table></div>
+<p class="small muted"><code>input</code> 的三种返回：<code>continue</code> 原样往下走；<code>transform</code> 换掉文字或图片，后面的扩展看到的是换过的；<code>handled</code> 立即结束，后面的扩展不再被调用（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1546"><code>runner.ts:1546</code></a>），<code>prompt()</code> 直接返回（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2123"><code>agent-session.ts:2123</code></a>），消息不进会话。本扩展只用了 <code>continue</code> 和 <code>handled</code>。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–7 步是启动链：<code>session_start</code> 发起问询后立刻返回，弹框从此占住编辑器的位置，直到答完才换成 widget。第 8–13 步是答完之后的一次提问：先过 <code>input</code> 这道门，再在 <code>before_agent_start</code> 里把目的追加到系统提示词。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、提问链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 13</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–7 步在循环外；第 8 步起是一次提问，先过 input 再到 before_agent_start。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>purpose-gate 同时站在<b>控制</b>的两头：<code>input</code> 决定用户消息能不能进来，<code>before_agent_start</code> 决定系统提示词长什么样。和第 10 篇一样，系统提示词的改动走的是“强制提示词”那条路：本次 settle 有效，只在请求里投影，不记进会话。不同的是本扩展把内容<b>追加在末尾</b>，system-select 是<b>加在前面</b>。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 330" role="img" aria-label="提示词上下文：input 门和系统提示词末尾的 purpose 段">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">用户消息这条路</text>
+  <g class="chip"><rect x="16" y="38" width="200" height="44" rx="7"/><text x="26" y="56" font-size="11">editor / sendUserMessage / RPC</text><text class="mut" x="26" y="72" font-size="10">source: interactive / extension / rpc</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M216,60 L250,60"/>
+  <g class="chip hit"><rect x="252" y="38" width="220" height="44" rx="7"/><text class="mono" x="262" y="56" font-size="11">input（第 77 行）</text><text class="mut" x="262" y="72" font-size="10">没目的 → handled；有 → continue</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M472,60 L506,60"/>
+  <g class="chip"><rect x="508" y="38" width="300" height="44" rx="7"/><text x="518" y="56" font-size="11">user 消息 → 落盘 → 进上下文</text><text class="mut" x="518" y="72" font-size="10">handled 时这一步不发生：消息不进会话</text></g>
+
+  <text class="bt" x="20" y="116" font-size="13" style="fill:var(--accent)">系统提示词这条路</text>
+  <g class="chip"><rect x="16" y="130" width="200" height="44" rx="7"/><text x="26" y="148" font-size="11">弹框里填的目的</text><text class="mut" x="26" y="164" font-size="10">闭包变量 purpose（第 35 行）</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M216,152 L250,152"/>
+  <g class="chip hit"><rect x="252" y="130" width="220" height="44" rx="7"/><text class="mono" x="262" y="148" font-size="11">before_agent_start（第 70 行）</text><text class="mut" x="262" y="164" font-size="10">event.systemPrompt + &lt;purpose&gt;…</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M472,152 L506,152"/>
+  <g class="chip"><rect x="508" y="130" width="300" height="44" rx="7"/><text x="518" y="148" font-size="11">forceSystemPrompt（本次 settle）</text><text class="mut" x="518" y="164" font-size="10">transformContext 投影到请求开头，不落盘</text></g>
+
+  <!-- 拼出来的提示词 -->
+  <g class="chip"><rect x="16" y="200" width="792" height="110" rx="7"/></g>
+  <text class="mono" x="30" y="222" font-size="11" style="fill:var(--muted)">[ system-select 的 agent 正文（若装了且选了，加在前面）]</text>
+  <text class="mono" x="30" y="242" font-size="11">You are an expert coding assistant operating inside pi …  &lt;tools&gt; … &lt;rules&gt; … &lt;project_context&gt; … &lt;cwd&gt;</text>
+  <text class="mono" x="30" y="266" font-size="11" style="fill:var(--hit)">&lt;purpose&gt;</text>
+  <text class="mono" x="30" y="282" font-size="11" style="fill:var(--hit)">Your singular purpose this session: Refactor the auth module to use JWT</text>
+  <text class="mono" x="30" y="298" font-size="11" style="fill:var(--hit)">Stay focused on this goal. If a request drifts from this purpose, gently remind the user. &lt;/purpose&gt;</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>东西</th><th>段</th><th>本次 settle</th><th>记进会话吗</th><th>/reload、/new、/resume 之后</th></tr></thead>
+<tbody>
+<tr class="hl"><td>被 <code>handled</code> 的消息</td><td>控制</td><td>不开始</td><td>不记：<code>prompt()</code> 在落盘之前就返回</td><td>–</td></tr>
+<tr class="hl"><td><code>&lt;purpose&gt;</code> 段</td><td>控制</td><td>所有 run、turn 都带</td><td>不记（同第 10 篇的强制提示词）</td><td>闭包清空，重新弹框</td></tr>
+<tr><td>purpose widget</td><td>– （UI）</td><td>–</td><td>不记</td><td>工厂重跑后重新问，答完才重新挂</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器分两半。左边复刻 <code>input</code> 这道门：选消息从哪来、目的填没填、弹框是不是正占着编辑器。右边复刻 <code>before_agent_start</code> 的接力：和第 10 篇的 system-select 一起装时，按 <code>-e</code> 顺序拼出最终的系统提示词。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">消息来源 <select id="m-src">
+      <option value="interactive">interactive（编辑器回车）</option>
+      <option value="extension">extension（别的扩展 sendUserMessage）</option>
+      <option value="rpc">rpc（SDK / RPC 客户端）</option>
+    </select></label>
+    <label class="small">目的 <input id="m-purpose" type="text" value="" placeholder="（还没填）" style="width:260px"></label>
+  </div>
+  <div class="controls">
+    <label class="small">-e 顺序 <select id="m-order">
+      <option value="pg">只装 purpose-gate</option>
+      <option value="pg-ss">purpose-gate → system-select</option>
+      <option value="ss-pg">system-select → purpose-gate</option>
+    </select></label>
+    <label class="small"><input type="checkbox" id="m-agent" checked> system-select 已选 scout</label>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>问目的</td><td><code>while (!purpose)</code> 反复问（第 38–49 行）</td><td><code>ctx.ui.input</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L583"><code>runner.ts:583</code></a> 包一层 ui_prompt 事件</td><td>–</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2778"><code>showExtensionInput</code></a>：对话框压进编辑器位置（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2710"><code>:2710</code></a>）</td><td>session_start 后，不阻塞启动</td></tr>
+<tr class="hl"><td>关门</td><td>没目的 → <code>handled</code>（第 78–81 行）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1525"><code>emitInput</code></a></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2052"><code>_runInputHandlers</code></a> 返回 undefined → <code>prompt()</code> 结束</td><td>notify “Set a purpose first.”</td><td><span class="tag outer">外</span> 每次提问，最前面</td></tr>
+<tr class="hl"><td>写进提示词</td><td>拼 <code>&lt;purpose&gt;</code> 段（第 73 行）</td><td><code>emitBeforeAgentStart</code> → <code>forceSystemPrompt</code></td><td><code>_runSystemPromptOptions</code>，每 turn 投影</td><td>–</td><td><span class="tag outer">外</span> 每次 settle 开始</td></tr>
+<tr><td>widget</td><td>紫底、粉色标签、青色文字（硬编码 RGB）</td><td><code>ctx.ui.setWidget("purpose")</code></td><td>–</td><td>编辑器上方（默认 aboveEditor）</td><td>每帧</td></tr>
+<tr><td>主题</td><td><code>themeMap.ts</code>：tokyo-night</td><td><code>hasUI</code>；只有第一个 <code>-e</code> 设主题</td><td>–</td><td><code>setTheme</code> / <code>setTitle</code></td><td>循环外</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：没有 UI 的模式下，问询循环永远停不下来。</b>第 38 行的 <code>while (!purpose)</code> 只有用户答了才会退出。没有 UI 时（print 模式、没接 UI 的 SDK），<code>ctx.ui</code> 是一个空实现，<code>input</code> 固定返回 <code>undefined</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L334"><code>runner.ts:334</code></a>）。于是循环永远拿不到答案；而且每一轮 <code>await</code> 的都是已经 resolve 的 Promise，只让出微任务，不让出事件循环（推断：会把进程卡在 100% CPU，没有实际在 print 模式下跑过）。<code>void</code> 让 session_start 本身不卡，但后面的一切都等不到执行。修法：第 67 行前加 <code>if (!ctx.hasUI) return;</code>（<code>applyExtensionDefaults</code> 自己就是这样判断的），无 UI 时干脆不关门，或者在 <code>input</code> 里对 <code>source === "rpc"</code> 放行。</div>
+
+<div class="callout"><b>弹框关不掉。</b>输入框里 Esc 和 Ctrl+C 都算“取消”（<code>tui.select.cancel</code>，<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/extension-input.ts#L84"><code>extension-input.ts:84</code></a>），取消得到 <code>undefined</code>，第 47 行提示 “Purpose is required.” 后立刻再弹一次。这是“必须先声明目的”的设计，但用户想先看看会话、或者只想用 /replay 这类命令都不行，只能先随便填一句。</div>
+
+<div class="callout"><b><code>input</code> 这道门，在 TUI 里用户其实碰不到。</b>对话框是压进编辑器位置的（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2707"><code>showTopExtensionDialog</code></a> 把编辑器换下去），没答之前用户根本没有地方输入提问。第 77–83 行真正拦住的是程序发出的消息：别的扩展的 <code>sendUserMessage</code>（第 08 篇 cross-agent 的命令就是这样）、RPC / SDK 客户端的 <code>prompt</code>。另外，扩展命令在 <code>input</code> 之前就被执行了（第 07 篇），这道门拦不住任何命令。场景 B 演示的是被拦住的那种情况。</div>
+
+<div class="callout"><b>目的只活在内存里。</b><code>purpose</code> 是闭包变量，<code>&lt;purpose&gt;</code> 段又走“强制提示词”那条不落盘的路，所以 /reload、/new、/resume 之后都要重新填，会话文件里也看不出当时的目的是什么。想保留，可以答完后 <code>pi.appendEntry("purpose", { text })</code>，session_start 时从 <code>ctx.sessionManager</code> 读回来，读到就不再弹框。</div>
+
+<div class="callout"><b>和其他扩展叠加。</b>和第 10 篇的 system-select 一起装时，两个 <code>before_agent_start</code> 按 <code>-e</code> 顺序接力，一个加前面、一个加后面，谁先谁后结果都一样：agent 正文 + 默认提示词 + &lt;purpose&gt;。模拟器右半边可以验证。widget 方面，第 03 篇讲过：purpose 要等用户答完才 <code>setWidget</code>，所以总排在同在 aboveEditor 的其他 widget 下面。另外 widget 用的是写死的 synthwave 颜色，而本扩展自己的主题是 tokyo-night，两者对不上。</div>
+
+<h2 id="sum">小结</h2>
+<p>purpose-gate 守在 settle 外循环的最前面：<code>input</code> 返回 <code>handled</code>，<code>prompt()</code> 直接结束，settle 根本不开始；放行之后，<code>before_agent_start</code> 再把目的追加到系统提示词末尾。它让人看到 <code>input</code> 和 <code>before_agent_start</code> 的分工：前者决定消息进不进来，后者决定模型带着什么指令去处理它。下一篇 <code>tilldone.ts</code> 是回调最多的一篇：input、tool_call、agent_end 续跑和会话分支都会用到。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [6, ' * rest of the session, keeping focus. Blocks all prompts until answered.', 'l3', '“答了才放行”有两层：弹框占住编辑器，input 再关一道门。'],
+  [16, 'function bg(s: string): string {', 'l4', '写死的 synthwave 紫色背景，不跟主题变。'],
+  [35, '	let purpose: string | undefined;', 'l3', '唯一的状态，闭包变量。/reload 时工厂重跑，它回到 undefined。'],
+  [37, '	async function askForPurpose(ctx: any) {', 'l3', 'ctx 用了 any：TS 不会提醒你 ctx.ui 在无 UI 时是空实现。'],
+  [38, '		while (!purpose) {', 'l3', '⚠ 只有答了才退出。无 UI 时 input 永远返回 undefined，这里出不去。'],
+  [39, '			const answer = await ctx.ui.input(', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L583"><code>runner.ts:583</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2778"><code>showExtensionInput</code></a>：对话框压进编辑器的位置，焦点也给它。'],
+  [47, '			ctx.ui.notify("Purpose is required.", "warning");', 'l4', '取消（Esc / Ctrl+C）后提示一次，循环马上再弹框。'],
+  [51, '		ctx.ui.setWidget("purpose", () => {', 'l4', '答完才挂 widget，默认在编辑器上方。'],
+  [57, '				const content = bg(truncateToWidth(label + msg + " ".repeat(width), width, ""));', 'l4', '先补空格再截断，让紫底铺满整行。'],
+  [65, '	pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。'],
+  [67, '		void askForPurpose(ctx);', 'l3', '不 await：session_start 立刻返回，启动不被卡住；问询在后台挂着。⚠ 这里没有判断 <code>ctx.hasUI</code>。'],
+  [70, '	pi.on("before_agent_start", async (event) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a>：<span class="tag outer">settle 外循环</span>入口，每次 settle 1 次（同第 10 篇）。'],
+  [73, '			systemPrompt: event.systemPrompt + `\\n\\n<purpose>\\nYour singular purpose this session: ${purpose}\\n…</purpose>`,', 'hit', '追加在末尾。<code>event.systemPrompt</code> 已含前面扩展的覆盖，所以和 system-select 叠加时不会互相冲掉。'],
+  [77, '	pi.on("input", async (_event, ctx) => {', 'hit', '本篇新出现的回调。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1525"><code>runner.emitInput</code></a>。在 <code>prompt()</code> 里、<code>_startRun</code> 之前，每条进来的消息 1 次。'],
+  [80, '		return { action: "handled" as const };', 'hit', '关门：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1546"><code>runner.ts:1546</code></a> 立即返回，后面的 input 订阅者不再被调用；<code>prompt()</code> 在 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2123"><code>:2123</code></a> 结束，消息不进会话。'],
+  [82, '		return { action: "continue" as const };', 'l3', '放行，文字原样往下走。'],
+];
+WT.source(SRC);
+
+// ─────────── 拼系统提示词 / input 门 复刻 ───────────
+const BASE = 'You are an expert coding assistant operating inside pi … <tools>…</tools> <rules>…</rules> <cwd>…</cwd>';
+const SCOUT = 'You are a scout agent. Investigate the codebase quickly … Do NOT modify any files.';
+const purposeBlock = p => `<purpose>\nYour singular purpose this session: ${p}\nStay focused on this goal. If a request drifts from this purpose, gently remind the user.\n</purpose>`;
+// 按 -e 顺序依次调用 before_agent_start；每个 handler 看到的是上一个的结果（runner.ts:1449 的 getter）
+function compose(order, purpose, agentPicked) {
+  let sys = BASE; const steps = [];
+  for (const ext of order) {
+    if (ext === 'pg') { if (purpose) { sys = sys + '\n\n' + purposeBlock(purpose); steps.push('purpose-gate：追加 <purpose>'); } else steps.push('purpose-gate：没目的，不返回'); }
+    if (ext === 'ss') { if (agentPicked) { sys = SCOUT + '\n\n' + sys; steps.push('system-select：在前面加 scout 正文'); } else steps.push('system-select：没选 agent，不返回'); }
+  }
+  return { sys, steps };
+}
+
+// ─────────── 双循环动画 ───────────
+// 状态：purpose、dialog（弹框是否占着编辑器）、widget、chat、sys（最近一次请求的系统提示词）
+const SCN = {
+  normal: [
+    ['session', 'session_start', '', { dialog: true }, 'void askForPurpose(ctx)：不等待，弹框压进编辑器位置'],
+    ['session', '用户按 Esc', '', { chat: 'Purpose is required.' }, 'input 返回 undefined → notify → while 循环再弹一次'],
+    ['session', '填写目的 → 回车', '', { purpose: 'Refactor the auth module to use JWT', dialog: false, widget: true }, 'purpose 赋值，循环退出；setWidget("purpose")，编辑器回来'],
+    ['input', 'input → continue', '', { chat: '你：先看看现在的 session 是怎么校验的' }, '有目的，放行'],
+    ['bas', 'before_agent_start', 'outer', { sysOp: true }, '返回 systemPrompt = 默认 + <purpose>…'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '请求开头是带 <purpose> 的系统提示词'],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：grep "session"'],
+    ['tools', 'tool_execution_end', 'inner', {}, ''],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '同一 settle：仍带 <purpose>'],
+    ['msg', 'message_end (assistant)', 'inner', {}, ''],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳。下一次提问会再过一遍 input 和 before_agent_start'],
+  ],
+  gate: [
+    ['session', 'session_start', '', { dialog: true }, '弹框占着编辑器，用户还没填'],
+    ['input', 'sendUserMessage（source: extension）', '', {}, '比如别的扩展在 session_start 里自动发了一条消息'],
+    ['input', 'input → handled', '', { chat: 'Set a purpose first.' }, 'runner.ts:1546 立即返回；prompt() 在 agent-session.ts:2123 结束'],
+    ['input', '（没有 before_agent_start、没有 run）', '', {}, '消息不进会话，settle 没有开始'],
+    ['session', '填写目的 → 回车', '', { purpose: 'Write release notes for v2', dialog: false, widget: true }, '之后的消息才会放行；刚才那条已经丢了，不会补发'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1]; if (r[2]) s.style.background = r[2];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+WT.loops({
+  hit: ['session', 'input', 'bas'],
+  sub: { input: 'input：handled / continue', bas: '追加 <purpose>' },
+  legend: [
+    '橙框 = purpose-gate 用到的回调：session_start 发起问询，input 守门，before_agent_start 改系统提示词。',
+    'input 返回 handled 时，外循环根本不开始：后面的节点一个都不会亮。widget 的 render() 不在图里。',
+  ],
+  scenes: SCN,
+  state: () => ({ purpose: '', dialog: false, widget: false, chat: '', sys: '' }),
+  onStep(st, s) { if (s.patch.sysOp) st.sys = compose(['pg'], st.purpose, false).sys; },
+  logTag: s => /session_start|input|before_agent_start|目的|Esc/.test(s.event) && !/sendUserMessage|没有/.test(s.event) ? '<span class="tag hit">本扩展</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    const rows = [[' ' + (st.chat || ''), 'dim']];
+    if (st.widget) rows.push([' '.repeat(64), '', 'rgb(74,30,106)'], [('  PURPOSE: ' + st.purpose + ' '.repeat(64)).slice(0, 64), 'acc', 'rgb(74,30,106)'], [' '.repeat(64), '', 'rgb(74,30,106)']);
+    if (st.dialog) rows.push([' ┌ What is the purpose of this agent?', 'acc'], [' │ e.g. Refactor the auth module to use JWT', 'dim'], [' └ （对话框占着编辑器的位置）', 'dim']);
+    else rows.push([' ─'.repeat(32), 'dim'], [' > ', 'dim'], [' ─'.repeat(32), 'dim']);
+    paintLines(foot1, rows);
+    WT.flash(foot1);
+    rc.textContent = st.sys ? '系统提示词末尾：' + st.sys.split('\n').slice(-3).join(' ') : (st.purpose ? '' : '还没有目的：input 会返回 handled');
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 提问链 ───────────
+const CHIPS = {
+  dialog:  ['showExtensionInput（压进编辑器位）', 110, 225, 51, 1],
+  widget:  ['setWidget("purpose")', 347, 140, 51, 1],
+  notify:  ['notify', 499, 55, 51, 1],
+  ask:     ['askForPurpose while（37–63）', 110, 190, 147, 1],
+  gate:    ['purpose ? continue : handled', 312, 195, 147, 1],
+  append:  ['默认 + <purpose>（73）', 519, 155, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  on:      ['pi.on ×3', 222, 65, 243, 1],
+  ctxui:   ['ctx.ui.input（runner:583）', 299, 160, 243, 1],
+  emitin:  ['runner.emitInput', 471, 115, 243, 1],
+  emitbas: ['emitBeforeAgentStart', 598, 140, 243, 1],
+  sess:    ['AgentSession', 110, 100, 339, 1],
+  prompt:  ['prompt()', 222, 70, 339, 1],
+  runin:   ['_runInputHandlers', 304, 125, 339, 1],
+  prep:    ['_startRun → _prepareRun', 441, 160, 339, 1],
+  proj:    ['投影 → LLM', 613, 95, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/purpose-gate.ts -e extensions/minimal.ts</code>。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），第 34 行：<code>purpose</code> 为空。'],
+  ['on', '<span class="tag l2">L2</span> 登记 <code>session_start</code>、<code>before_agent_start</code>、<code>input</code>。'],
+  ['ask', '<span class="tag l3">L3</span> <code>session_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>）：设主题，<code>void askForPurpose(ctx)</code>，handler 立刻返回。'],
+  ['ctxui', '<span class="tag l2">L2</span> <code>ctx.ui.input</code> 经 runner 包装（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L583"><code>runner.ts:583</code></a>）发出 ui_prompt 事件。'],
+  ['dialog', '<span class="tag l4">L4</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2778"><code>showExtensionInput</code></a> 把输入框压进对话框栈，<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2707"><code>showTopExtensionDialog</code></a> 用它换下编辑器并取得焦点。Esc / Ctrl+C 取消后，循环再弹一次。'],
+  ['widget', '<span class="tag l4">L4</span> 用户填完回车：<code>purpose</code> 赋值，循环退出，<code>setWidget("purpose")</code>，编辑器回到原位。<br><b>启动链结束。下面是一次提问。</b>'],
+  ['prompt', '<span class="tag l1">L1</span> 用户提问，<code>session.prompt(text)</code>：不是命令，往下走。'],
+  ['runin', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2041"><code>_runInputHandlers</code></a>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>:2117</code></a> 调用）：有 input 订阅者就交给 runner。'],
+  ['emitin', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1525"><code>emitInput</code></a> 按扩展顺序调用，遇到 handled 立即返回。'],
+  ['gate', '<span class="tag l3">L3</span> 第 77–83 行：有目的 → <code>continue</code>。（没有的话 → <code>handled</code>，<code>prompt()</code> 在 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2123"><code>:2123</code></a> 结束，后面的步骤都不会发生。）'],
+  ['prep', '<span class="tag l1">L1</span> <code>_startRun</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1926"><code>_prepareRun</code></a> → <code>emitBeforeAgentStart</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>:1935</code></a>）。'],
+  ['append', '<span class="tag l3">L3</span> 第 73 行：<code>event.systemPrompt + &lt;purpose&gt;…</code> 作为 <code>systemPrompt</code> 返回，成为本次 settle 的强制提示词，每个 turn 投影到请求开头（同第 10 篇）。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+function drawSim() {
+  const src = $('m-src').value, purpose = $('m-purpose').value.trim(), order = $('m-order').value, agent = $('m-agent').checked;
+  const rows = [[' input 这道门', 'acc']];
+  if (!purpose && src === 'interactive') rows.push(['  对话框正占着编辑器：用户根本没地方输入，input 不会被触发', 'dim']);
+  else if (!purpose) rows.push([`  source = ${src} → handled：notify “Set a purpose first.”，prompt() 结束，消息丢弃`, 'sw-wrn']);
+  else rows.push([`  source = ${src} → continue：进入 _startRun`, 'sw-ok']);
+  rows.push(['', ''], [' before_agent_start 接力', 'acc']);
+  const seq = order === 'pg' ? ['pg'] : order === 'pg-ss' ? ['pg', 'ss'] : ['ss', 'pg'];
+  if (!purpose) rows.push(['  （消息没进来，这一步不发生）', 'dim']);
+  else {
+    const { sys, steps } = compose(seq, purpose, agent);
+    steps.forEach((t, i) => rows.push([`  ${i + 1}. ${t}`, 'dim']));
+    rows.push(['  最终系统提示词：', 'dim']);
+    sys.split('\n').forEach(l => rows.push(['    ' + l, /purpose|singular|Stay focused/.test(l) ? 'sw-ok' : /scout/.test(l) ? 'sw-acc' : 'dim']));
+  }
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  const notes = [];
+  if (order !== 'pg' && purpose) notes.push('换一下 -e 顺序：结果相同，因为一个加前面、一个加后面，且后者看到的是前者的结果');
+  if (!purpose && src === 'rpc') notes.push('RPC / SDK 场景：若根本没有 UI，askForPurpose 的循环本身就出不来（见 ③ 的警示）');
+  $('m-note').textContent = notes.join(' · ');
+}
+['m-src', 'm-purpose', 'm-order', 'm-agent'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>
