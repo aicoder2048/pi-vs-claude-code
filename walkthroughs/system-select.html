@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>system-select.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 10</div>
+<h1>system-select.ts</h1>
+<p class="subtitle">扫描 <code>.pi/agents</code>、<code>.claude/agents</code> 等目录里的 agent 定义，用 <code>/system</code> 选一个：把它的正文加到系统提示词前面，并按 frontmatter 的 <code>tools</code> 限制可用工具。167 行，订阅 <code>session_start</code> 和 <code>before_agent_start</code>，注册 1 个命令。前九篇都没碰过提示词；这一篇第一次<b>改系统提示词</b>，也第一次改<b>工具清单</b>。<br>运行：<code>just ext-system-select</code>（同时加载 minimal 和 theme-cycler）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。分工很清楚：<code>/system</code> 命令（第 122–159 行）只记下选了谁、改工具清单；真正改提示词的是第 161–166 行的 <code>before_agent_start</code>，每次提问都要重新返回一次。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+<code>before_agent_start</code> 挂在 <b>settle 外循环的入口</b>：<code>_prepareRun</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a>）在起第一个 run 之前调它，每次 settle 1 次。返回的 <code>systemPrompt</code> 记在 <code>_runSystemPromptOptions</code> 里，管住这次 settle 的所有 run 和 turn，settle 结束时清掉（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1913"><code>:1913</code></a>）。所以扩展必须每次都返回，它也确实每次都返回。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：/system 选 scout，提问一次（2 个 turn）</option>
+    <option value="reload">场景 B：选了 scout 之后 /reload，再 “Reset to Default”</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">发给模型的请求（实时）：系统提示词开头 + 工具清单</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 扫描 agent，记下“默认工具”</td></tr>
+<tr class="hl"><td><code>/system</code> 命令 handler</td><td>循环外（截在 <code>prompt()</code> 入口）</td><td>0（每次输入 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2193"><code>agent-session.ts:2193</code></a></td><td>✔ 选 agent、<code>setActiveTools</code></td></tr>
+<tr><td><code>input</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a></td><td>–</td></tr>
+<tr class="hl"><td><code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口，起 run 之前</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1427"><code>runner.emitBeforeAgentStart</code></a></td><td>✔ 返回 <code>systemPrompt</code></td></tr>
+<tr><td><code>agent_start</code> · <code>agent_end</code></td><td><span class="tag outer">外</span> 每 run</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>:329</code></a></td><td>–（同一 settle 的后续 run 沿用强制提示词）</td></tr>
+<tr><td><code>context</code>（transformContext）</td><td><span class="tag inner">内</span> 每 turn</td><td>M</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L400"><code>agent-loop.ts:400</code></a></td><td>– 未订阅；Pi 自己在这里把强制提示词投影成请求开头（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1807"><code>agent-session.ts:1807</code></a>）</td></tr>
+<tr><td><code>turn_*</code> · <code>message_*</code> · <code>tool_*</code></td><td><span class="tag inner">内</span></td><td>M / K</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>agent-loop.ts:216</code></a></td><td>–</td></tr>
+</tbody></table></div>
+<p class="small muted">同一事件被多个扩展订阅时，<code>systemPrompt</code> 可以接力：每个 handler 拿到的 <code>event.systemPrompt</code> 是个 getter（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1449"><code>runner.ts:1449</code></a>），会反映前一个扩展的覆盖（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1460"><code>:1460</code></a>）。本扩展用 <code>body + "\n\n" + event.systemPrompt</code>，所以排在后面也不会冲掉前面扩展的改动。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–6 步是启动链：扫描 agent，并把<b>此刻</b>的工具清单当作“默认”。第 7–10 步是 <code>/system</code>：在循环外改工具清单。第 11–16 步是选完之后的一次提问：L1 在起 run 前问 L2，L3 拼出新提示词，L1 每个 turn 在 transformContext 里把它换到请求开头。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、命令链、提示词链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 16</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–10 步都在双循环之外；第 11 步起是一次提问，从 settle 外循环的入口进去。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>system-select 同时动了<b>安装</b>和<b>控制</b>两段，而且走的是 Pi 1.4.0 里两条完全不同的路。工具清单（<code>setActiveTools</code>）改的是会话的“基础”状态：Pi 重建系统提示词的分段，并把工具增减作为 system 消息<b>记进会话</b>。强制提示词（<code>before_agent_start</code> 返回的 <code>systemPrompt</code>）只活在这一次 settle 里，<b>不记进会话</b>，每次请求时在 transformContext 里临时投影成第一条 system 消息。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 380" role="img" aria-label="提示词上下文：工具清单记进会话，强制提示词只在请求里投影">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">安装 · 谁放进来</text>
+  <text class="bt" x="290" y="24" font-size="13" style="fill:var(--accent)">控制 · 谁能改</text>
+  <text class="bt" x="572" y="24" font-size="13" style="fill:var(--accent)">装配 · 怎么拼</text>
+
+  <!-- 工具清单这条路 -->
+  <g class="chip hit"><rect x="16" y="40" width="250" height="44" rx="7"/><text class="mono" x="26" y="58" font-size="11">pi.setActiveTools(agent.tools)</text><text class="mut" x="26" y="74" font-size="10">/system 时，循环外（第 151 行）</text><title>agent-session.ts:1538 setActiveToolsByName：不认识的名字直接忽略</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M266,62 L288,62"/>
+  <g class="chip"><rect x="290" y="40" width="250" height="44" rx="7"/><text class="mono" x="300" y="58" font-size="11">_rebuildSystemPrompt</text><text class="mut" x="300" y="74" font-size="10">基础提示词的 tools / rules 分段跟着变</text><title>agent-session.ts:1550</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M540,62 L570,62"/>
+  <g class="chip"><rect x="572" y="40" width="236" height="44" rx="7"/><text x="582" y="58" font-size="11">system 消息（toolsAdded / Removed）</text><text class="mut" x="582" y="74" font-size="10">下一次 _prepareRun 时<tspan font-weight="700">记进会话</tspan></text><title>agent-session.ts:1976 _preparePromptAndToolLoadout → message_end 落盘</title></g>
+
+  <!-- 强制提示词这条路 -->
+  <g class="chip"><rect x="16" y="120" width="250" height="44" rx="7"/><text class="mono" x="26" y="138" font-size="11">.pi/agents/scout.md 正文</text><text class="mut" x="26" y="154" font-size="10">session_start 时读进内存（第 47–52 行）</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M266,142 L288,142"/>
+  <g class="chip hit"><rect x="290" y="120" width="250" height="56" rx="7"/><text class="mono" x="300" y="138" font-size="11">before_agent_start（第 161 行）</text><text class="mut" x="300" y="154" font-size="10">return { systemPrompt: body + "\n\n" + 默认 }</text><text x="300" y="168" font-size="10" style="fill:var(--outer)">每次 settle 1 次</text><title>runner.ts:1460 → currentOptions.forceSystemPrompt</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M540,148 L570,148"/>
+  <g class="chip"><rect x="572" y="120" width="236" height="56" rx="7"/><text class="mono" x="582" y="138" font-size="11">_runSystemPromptOptions</text><text class="mut" x="582" y="154" font-size="10">.forceSystemPrompt：本次 settle 有效</text><text class="mut" x="582" y="168" font-size="10">settle 结束清掉（:1913）</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M690,176 L690,206"/>
+  <g class="chip"><rect x="572" y="208" width="236" height="56" rx="7"/><text class="mono" x="582" y="226" font-size="11">transformContext 投影（:1807）</text><text class="mut" x="582" y="242" font-size="10">丢掉所有 system 消息，换成一条</text><text class="mut" x="582" y="256" font-size="10">强制提示词 + 当前工具声明</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M690,264 L690,292"/>
+  <g class="chip"><rect x="572" y="294" width="236" height="40" rx="7"/><text x="690" y="318" text-anchor="middle" font-size="12" font-weight="700">LLM 请求（每个 turn）</text></g>
+
+  <g class="chip"><rect x="16" y="208" width="524" height="56" rx="7"/><text x="26" y="226" font-size="11">“默认”里已经包含新的工具清单</text><text class="mut" x="26" y="242" font-size="10">event.systemPrompt 是按当前 selectedTools 现渲染的（runner.ts:1449），所以 scout 正文后面跟着的是</text><text class="mut" x="26" y="256" font-size="10">“只有 read / grep / find / ls”的那份默认提示词，两条路在请求里对得上。</text></g>
+  <g class="chip"><rect x="16" y="294" width="524" height="40" rx="7"/><text x="26" y="312" font-size="11">会话文件里看得到工具变了，看不到用的是哪个 agent 的提示词</text><text class="mut" x="26" y="326" font-size="10">导出、/tree、session-replay 都找不到 scout.md 的正文</text></g>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>改动</th><th>段</th><th>生效范围</th><th>记进会话吗</th><th>/reload 之后</th></tr></thead>
+<tbody>
+<tr class="hl"><td>工具清单 <code>setActiveTools</code></td><td>安装</td><td>从下一个 turn 起，一直有效</td><td>记：作为带 toolsAdded / toolsRemoved 的 system 消息</td><td><b>保留</b>：reload 用当前工具重建（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3743"><code>agent-session.ts:3743</code></a>）</td></tr>
+<tr class="hl"><td>强制提示词 <code>systemPrompt</code></td><td>控制</td><td>本次 settle 的所有 run、turn</td><td>不记：只在 transformContext 里投影</td><td><b>消失</b>：<code>activeAgent</code> 被第 71 行清空</td></tr>
+<tr><td>状态行</td><td>–（UI）</td><td>到下一次 setStatus</td><td>不记</td><td>回到 “Default”</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器复刻了扩展的三个状态（<code>activeAgent</code>、<code>defaultTools</code>、Pi 的当前工具）和它们在 <code>/system</code>、<code>/reload</code>、提问时的变化。agent 列表取自本仓库 <code>.pi/agents</code> 的真实 frontmatter，另外加了一个按 Claude Code 写法声明工具的示例 agent。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">/system 选 <select id="m-agent"></select></label>
+    <button id="m-pick">确定</button>
+    <button id="m-reset">Reset to Default</button>
+    <button id="m-reload">/reload</button>
+    <button id="m-ask">提问一次</button>
+    <button id="m-restart">重新启动 Pi</button>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：默认工具按 Pi 的默认值 read / bash / edit / write（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/settings-manager.ts#L85"><code>settings-manager.ts:85</code></a>）；没有模拟 <code>--tools</code> 参数、MCP 工具和隐藏工具；系统提示词只显示开头几行。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>扫描 agent</td><td>8 个目录，项目优先，按小写名去重（第 77–100 行）</td><td><code>pi.on("session_start")</code>，用 <code>ctx.cwd</code></td><td>–</td><td>notify：几个 agent、默认提示词多少行 / 字符</td><td>每次 session_start</td></tr>
+<tr><td>记下默认工具</td><td><code>defaultTools = pi.getActiveTools()</code>（第 102 行）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L419"><code>loader.ts:419</code></a></td><td>当前工具清单</td><td>–</td><td>每次 session_start</td></tr>
+<tr class="hl"><td>选 agent</td><td><code>activeAgent = agent</code></td><td><code>/system</code> → <code>ctx.ui.select</code>；<code>pi.setActiveTools</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L434"><code>loader.ts:434</code></a>）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1538"><code>setActiveToolsByName</code></a>：未注册的名字忽略，重建基础提示词</td><td>状态 “System Prompt: Scout”</td><td>命令执行时</td></tr>
+<tr class="hl"><td>换提示词</td><td><code>body + "\n\n" + event.systemPrompt</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1427"><code>emitBeforeAgentStart</code></a>：写 <code>forceSystemPrompt</code></td><td><code>_prepareRun</code> 存进 <code>_runSystemPromptOptions</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1974"><code>:1974</code></a>）；每个 turn 投影（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1820"><code>:1820</code></a>）</td><td>–</td><td><span class="tag outer">外</span> 每次 settle 开始</td></tr>
+<tr><td>重置</td><td><code>activeAgent = null</code>，工具回 <code>defaultTools</code></td><td>同上</td><td>同上</td><td>状态 “Default”</td><td>命令执行时</td></tr>
+<tr><td>主题</td><td><code>themeMap.ts</code>：catppuccin-mocha</td><td><code>hasUI</code>；只有第一个 <code>-e</code> 设主题</td><td>–</td><td><code>setTheme</code> / <code>setTitle</code></td><td>循环外</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：/reload 之后提示词回到默认，工具却还被限制着，“Reset to Default” 也救不回来。</b><code>/reload</code> 用<b>当前</b>工具清单重建运行时（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3743"><code>agent-session.ts:3743</code></a>），然后发 <code>session_start</code>。第 71 行把 <code>activeAgent</code> 清空，第 102 行却把此刻已经被 scout 限制过的 <code>[read, grep, find, ls]</code> 当成“默认工具”记下来。结果：状态显示 “Default”，提示词也是默认的，但模型没有 bash / edit / write；选 “Reset to Default” 只是把同一份受限清单再设一遍。<code>/resume</code> 一个用过 agent 的会话也一样：工具清单从会话记录里恢复（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L525"><code>agent-session.ts:525</code></a>），提示词却没了。修法：只在工厂里或第一次 session_start 时记一次默认工具，或者用 <code>pi.getAllTools()</code> 按 Pi 的默认集合重算；更稳的做法是用 <code>pi.appendEntry</code> 记下所选 agent，session_start 时读回来恢复。场景 B 和模拟器都能复现。</div>
+
+<div class="callout warn"><b>Bug：<code>.claude/agents</code> 的工具名对不上，选了之后模型一个工具都没有。</b>扩展扫描 <code>.claude/agents</code>，但第 51 行把 <code>tools</code> 原样交给 <code>setActiveTools</code>。Claude Code 的 agent 写的是 <code>Read, Grep, Glob</code> 这类首字母大写的名字（这是 Claude Code 的约定，页面外的知识），Pi 的工具名是小写的 <code>read</code>、<code>grep</code>、<code>find</code>。<code>setActiveToolsByName</code> 对未注册的名字直接忽略（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1534"><code>agent-session.ts:1534</code></a>），于是清单变成空的，系统提示词的工具段变成 “(none)”（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/system-prompt.ts#L159"><code>system-prompt.ts:159</code></a>）。修法：转小写并做一张名字映射（Glob → find 等），映射后为空时退回 <code>defaultTools</code> 并提示用户。模拟器里选 “claude-style” 那一项能看到。</div>
+
+<div class="callout"><b>用的是哪个 agent，会话里没有记录。</b>强制提示词按 Pi 1.4.0 的设计只投影、不落盘（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1807"><code>agent-session.ts:1807</code></a> 上方的注释）。工具变化会作为 system 消息记下来，scout.md 的正文却不会。事后看会话文件、导出、或者第 07 篇的 /replay，只能看出“工具少了”，看不出当时的指令是什么。想留痕可以在 <code>/system</code> 里 <code>pi.appendEntry("system-select", { agent: name })</code>，这样也顺便解决了上面的恢复问题。</div>
+
+<div class="callout"><b>和 <code>just</code> 里另外两个扩展叠加。</b>状态 “System Prompt: Scout” 用 <code>setStatus</code> 写（key 是对的），但 minimal 换掉了内置页脚，所以看不到，只能靠 notify。theme-cycler 和本扩展没有冲突。另外，如果有别的扩展也在 <code>before_agent_start</code> 返回 <code>systemPrompt</code>，按 <code>-e</code> 顺序接力：排在后面的会拿到前面的结果，本扩展的写法是“加在前面”，不会覆盖别人，但若别的扩展排在后面且直接返回一个全新的字符串，scout 的正文就被丢掉了。</div>
+
+<div class="callout"><b>小处。</b>手写的 frontmatter 解析只认单行 <code>key: value</code>：本仓库 <code>bowser.md</code> 的 <code>skills:</code> 是多行列表，会被忽略；<code>model: opus</code> 被解析了但没用。没有 <code>tools</code> 字段的 agent 会把工具恢复成 <code>defaultTools</code>（第 153 行），而不是保持当前清单。选择框里每项是 “名字 — 描述 [来源]”，第 146 行用 <code>indexOf</code> 反查下标，靠的是名字已去重，所以不会选错。</div>
+
+<h2 id="sum">小结</h2>
+<p>system-select 第一次改提示词，而且一次用上了两条路：<code>setActiveTools</code> 在循环外改工具清单，Pi 把变化记进会话；<code>before_agent_start</code> 在 settle 外循环入口返回 <code>systemPrompt</code>，Pi 把它存成本次 settle 的强制提示词，每个 turn 在 transformContext 里投影到请求开头，不落盘。两条路的寿命不同，<code>/reload</code> 就把它们拆开了。下一篇 <code>purpose-gate.ts</code> 继续往入口前移：订阅 <code>input</code> 改写用户输入，并动态生成系统提示词。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [8, ' * agent\'s body is prepended to Pi\'s default instructions so tool usage', 'l3', '设计说明：把 agent 正文放在默认提示词前面，而不是替换掉，这样工具说明和规则还在。'],
+  [30, '	const match = raw.match(/^---\\s*\\n([\\s\\S]*?)\\n---\\s*\\n([\\s\\S]*)$/);', 'l3', '和第 08 篇同一个手写解析：只认单行 key: value。'],
+  [51, '				tools: fields.tools ? fields.tools.split(",").map((t) => t.trim()) : [],', 'l3', '⚠ 原样保留大小写：<code>Read, Grep</code> 这种 Claude Code 写法交给 Pi 会全部被忽略。'],
+  [64, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调用。下面三个闭包变量是扩展的全部状态。'],
+  [65, '	let activeAgent: AgentDef | null = null;', 'l3', '当前选中的 agent。只在内存里，/reload 后丢失。'],
+  [67, '	let defaultTools: string[] = [];', 'l3', '“默认工具”的快照，每次 session_start 重新拍。'],
+  [69, '	pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。和第 08 篇不同，这里用 <code>ctx.cwd</code> 扫描。'],
+  [71, '		activeAgent = null;', 'l3', '每次 session_start 都清空选择：/reload 会把提示词恢复成默认。'],
+  [94, '				const key = agent.name.toLowerCase();', 'l3', '按小写名去重，先扫到的赢：项目的 .pi 优先于 .claude，项目优先于家目录。'],
+  [102, '		defaultTools = pi.getActiveTools();', 'l2', '⚠ 拍的是<b>此刻</b>的工具清单。/reload 时它已经被上一个 agent 限制过了（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3743"><code>agent-session.ts:3743</code></a> 用当前工具重建）。'],
+  [103, '		ctx.ui.setStatus("system-prompt", "System Prompt: Default");', 'l4', 'key 写对了。装了 minimal 时看不到。'],
+  [105, '		const defaultPrompt = ctx.getSystemPrompt();', 'l2', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L957"><code>runner.ts:957</code></a>：当前的基础系统提示词，用来在 notify 里报行数和字符数。'],
+  [122, '	pi.registerCommand("system", {', 'hit', '命令，循环外（同第 07 篇）。'],
+  [135, '			const choice = await ctx.ui.select("Select System Prompt", options);', 'l4', '选择框，await 到用户选择或取消。'],
+  [140, '				pi.setActiveTools(defaultTools);', 'l2', 'Reset：工具回到快照。快照本身可能是受限的。'],
+  [148, '			activeAgent = agent;', 'l3', '只是记下来。提示词要等下一次 before_agent_start 才换。'],
+  [151, '				pi.setActiveTools(agent.tools);', 'l2', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L434"><code>loader.ts:434</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1538"><code>setActiveToolsByName</code></a>：未注册的名字忽略；重建基础提示词的工具段。下一个 turn 生效。'],
+  [153, '				pi.setActiveTools(defaultTools);', 'l2', '没声明 tools 的 agent：恢复成快照，而不是保持当前。'],
+  [161, '	pi.on("before_agent_start", async (event, _ctx) => {', 'hit', '本篇的核心回调。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a> 在 <code>_prepareRun</code> 里调用，<span class="tag outer">settle 外循环</span>入口，每次 settle 1 次。'],
+  [162, '		if (!activeAgent) return;', 'l3', '没选 agent 时不返回任何东西，提示词保持默认。'],
+  [164, '			systemPrompt: activeAgent.body + "\\n\\n" + event.systemPrompt,', 'hit', '<code>event.systemPrompt</code> 是 getter，按当前选项现渲染（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1449"><code>runner.ts:1449</code></a>），已含新的工具清单。返回后写进 <code>forceSystemPrompt</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1460"><code>:1460</code></a>）。'],
+];
+WT.source(SRC);
+
+// ─────────── 状态模型 ───────────
+const DEFAULT_TOOLS = ['read', 'bash', 'edit', 'write'];
+const REGISTERED = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'];
+const AGENTS = [
+  { name: 'scout', tools: ['read', 'grep', 'find', 'ls'], body: 'You are a scout agent. Investigate the codebase quickly and report findings concisely. Do NOT modify any files.' },
+  { name: 'planner', tools: ['read', 'grep', 'find', 'ls'], body: 'You are a planner agent. Analyze requirements and produce clear, actionable implementation plans.' },
+  { name: 'builder', tools: ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls'], body: 'You are a builder agent. Implement the requested changes thoroughly.' },
+  { name: 'reviewer', tools: ['read', 'bash', 'grep', 'find', 'ls'], body: 'You are a code reviewer agent. Review code for bugs, security issues, style problems.' },
+  { name: 'bowser', tools: [], body: '（bowser.md 正文：没有 tools 字段）' },
+  { name: 'claude-style（示例）', tools: ['Read', 'Grep', 'Glob'], body: 'You are a research agent.（按 Claude Code 写法：tools: Read, Grep, Glob）' },
+];
+const setActive = (names) => names.filter(n => REGISTERED.includes(n)); // setActiveToolsByName：未注册的忽略
+function newPi() { return { active: [...DEFAULT_TOOLS], activeAgent: null, defaultTools: [], status: '' }; }
+function sessionStart(p) { p.activeAgent = null; p.defaultTools = [...p.active]; p.status = 'System Prompt: Default'; } // 第 71、102、103 行
+function pick(p, a) { p.activeAgent = a; p.active = setActive(a.tools.length ? a.tools : p.defaultTools); p.status = 'System Prompt: ' + a.name; }
+function resetDefault(p) { p.activeAgent = null; p.active = setActive(p.defaultTools); p.status = 'System Prompt: Default'; }
+function request(p) {
+  const base = ['You are an expert coding assistant operating inside pi …', '<tools>', p.active.length ? p.active.map(t => '- ' + t).join(' ') : '(none)', '</tools>'];
+  return p.activeAgent ? [p.activeAgent.body, '', ...base] : base;
+}
+
+// ─────────── 双循环动画 ───────────
+const SCN = {
+  normal: [
+    ['session', 'session_start', '', { op: 'start' }, '扫描 agent；defaultTools = [read, bash, edit, write]'],
+    ['input', 'prompt("/system") → 选 scout', '', { op: 'scout' }, '命令（循环外）：activeAgent = scout；setActiveTools([read, grep, find, ls])，基础提示词的工具段重建'],
+    ['input', 'input', '', { op: 'none' }, '用户：帮我看看 auth 模块怎么组织的'],
+    ['bas', 'before_agent_start', 'outer', { op: 'force' }, '返回 systemPrompt = scout 正文 + 默认（已含新工具段）→ forceSystemPrompt'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'transformContext（投影）→ LLM', 'inner', { op: 'send' }, 'agent-session.ts:1807：丢掉记录里的 system 消息，换成一条强制提示词'],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：grep "auth"'],
+    ['tools', 'tool_execution_end', 'inner', {}, ''],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'transformContext（投影）→ LLM', 'inner', { op: 'send' }, '同一次 settle：还是 scout 提示词'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['post', '_handlePostAgentRun', 'outer', {}, ''],
+    ['settle', 'agent_before_settle', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', { op: 'clear' }, 'agent-session.ts:1913：_runSystemPromptOptions 清掉。下次提问 before_agent_start 会再返回一次'],
+  ],
+  reload: [
+    ['session', 'session_start', '', { op: 'start' }, 'defaultTools = [read, bash, edit, write]'],
+    ['input', 'prompt("/system") → 选 scout', '', { op: 'scout' }, '工具 → [read, grep, find, ls]'],
+    ['session', '/reload → session_shutdown', '', {}, ''],
+    ['session', '_buildRuntime(当前工具)', '', {}, 'agent-session.ts:3743：用当前（已受限）的工具重建'],
+    ['session', 'session_start (reload)', '', { op: 'start' }, 'activeAgent = null；defaultTools = [read, grep, find, ls] ← 快照拍到的是受限清单'],
+    ['input', 'prompt("/system") → Reset to Default', '', { op: 'reset' }, 'setActiveTools(defaultTools)：还是那 4 个工具'],
+    ['input', 'input', '', { op: 'none' }, '用户：把这个 bug 修一下'],
+    ['bas', 'before_agent_start', 'outer', { op: 'force' }, 'activeAgent 为空 → 不返回，提示词是默认的'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', { op: 'send' }, '默认提示词，但工具里没有 bash / edit / write'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“我没有编辑文件的工具，没法修改。”'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', { op: 'clear' }, '状态显示 Default，实际工具却是 scout 的'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+WT.loops({
+  hit: ['session', 'input', 'bas'],
+  sub: { input: 'prompt() 截走 /system', bas: '返回 systemPrompt' },
+  legend: [
+    '橙框 = system-select 用到的回调：session_start、/system 命令、before_agent_start（每次 settle 1 次，返回的提示词管住整个 settle）。',
+    'llm 格里的投影不是本扩展的回调：Pi 在 transformContext 里把强制提示词换到请求开头。',
+  ],
+  scenes: SCN,
+  state: () => ({ pi: newPi(), sent: null, forced: false }),
+  onStep(st, s) {
+    const p = st.pi, op = s.patch.op;
+    if (op === 'start') sessionStart(p);
+    if (op === 'scout') pick(p, AGENTS[0]);
+    if (op === 'reset') resetDefault(p);
+    if (op === 'force') st.forced = !!p.activeAgent;
+    if (op === 'send') st.sent = request(p);
+    if (op === 'clear') st.forced = false;
+  },
+  logTag: s => s.node === 'bas' || (s.node === 'input' && s.event !== 'input') || /session_start/.test(s.event) ? '<span class="tag hit">本扩展</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    const p = st.pi;
+    const rows = st.sent ? st.sent.map(l => [' ' + l, l === '(none)' ? 'sw-wrn' : /agent\./.test(l) ? 'sw-ok' : 'dim']) : [[' （还没有请求）', 'dim']];
+    paintLines(foot1, rows);
+    WT.flash(foot1);
+    rc.textContent = `当前工具 [${p.active.join(', ')}] · defaultTools [${p.defaultTools.join(', ')}] · activeAgent ${p.activeAgent ? p.activeAgent.name : '无'} · 本次 settle 强制提示词 ${st.forced ? '有' : '无'}`;
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 命令链 + 提示词链 ───────────
+const CHIPS = {
+  notify:  ['notify（agent 数 / 提示词大小）', 110, 205, 51, 1],
+  select:  ['ctx.ui.select', 327, 95, 51, 1],
+  status:  ['setStatus("system-prompt")', 434, 175, 51, 1],
+  scan:    ['扫描 8 个目录（74–100）', 110, 160, 147, 1],
+  snap:    ['defaultTools 快照（102）', 282, 160, 147, 1],
+  choose:  ['activeAgent = agent（148）', 454, 170, 147, 1],
+  compose: ['body + 默认（164）', 636, 125, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  on:      ['pi.on ×2 · registerCommand', 222, 175, 243, 1],
+  setat:   ['pi.setActiveTools', 409, 115, 243, 1],
+  emitbas: ['emitBeforeAgentStart', 536, 140, 243, 1],
+  sess:    ['AgentSession', 110, 100, 339, 1],
+  loadout: ['setActiveToolsByName', 222, 140, 339, 1],
+  prep:    ['_prepareRun（1935）', 374, 130, 339, 1],
+  runopt:  ['_runSystemPromptOptions', 516, 155, 339, 1],
+  proj:    ['投影 → LLM', 683, 95, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/system-select.ts -e minimal.ts -e theme-cycler.ts</code>。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），第 64 行：三个闭包变量初始化。'],
+  ['on', '<span class="tag l2">L2</span> 登记 <code>session_start</code>、<code>before_agent_start</code> 两个事件和 <code>/system</code> 命令。'],
+  ['scan', '<span class="tag l3">L3</span> <code>session_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>）：按 <code>ctx.cwd</code> 和家目录扫 8 个 agents 目录，按名字去重。本仓库扫到 <code>.pi/agents</code> 下 8 个。'],
+  ['snap', '<span class="tag l3">L3</span> 第 102 行：<code>defaultTools = pi.getActiveTools()</code>，此刻是 read / bash / edit / write。'],
+  ['notify', '<span class="tag l4">L4</span> 状态写 “Default”，notify 报 agent 数和默认提示词的行数、字符数（<code>ctx.getSystemPrompt()</code>）。<br><b>启动链结束。下面是 /system。</b>'],
+  ['select', '<span class="tag l4">L4</span> 用户输入 <code>/system</code>：命令在 <code>prompt()</code> 入口被截走（同第 07 篇），<code>ctx.ui.select</code> 弹出选择框，选 scout。'],
+  ['choose', '<span class="tag l3">L3</span> 第 148 行：<code>activeAgent = scout</code>。提示词此时<b>还没换</b>。'],
+  ['setat', '<span class="tag l2">L2</span> 第 151 行：<code>pi.setActiveTools(["read","grep","find","ls"])</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L434"><code>loader.ts:434</code></a>）。'],
+  ['loadout', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1538"><code>setActiveToolsByName</code></a>：换工具清单，重建基础提示词的工具段。<br><b>下面是选完之后的一次提问。</b>'],
+  ['prep', '<span class="tag l1">L1</span> 用户提问，<code>input</code> 之后进 <code>_startRun</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1926"><code>_prepareRun</code></a>：起 run 之前先发 <code>before_agent_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>:1935</code></a>）。'],
+  ['emitbas', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1427"><code>emitBeforeAgentStart</code></a>：给每个 handler 一个 <code>systemPrompt</code> getter，它按当前选项（含新的工具清单）现渲染。'],
+  ['compose', '<span class="tag l3">L3</span> 第 164 行：<code>scout 正文 + "\\n\\n" + event.systemPrompt</code>，作为 <code>systemPrompt</code> 返回；runner 写进 <code>forceSystemPrompt</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1460"><code>runner.ts:1460</code></a>）。'],
+  ['runopt', '<span class="tag l1">L1</span> <code>_prepareRun</code> 把结果存进 <code>_runSystemPromptOptions</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1974"><code>:1974</code></a>）：本次 settle 的所有 run、turn 都用它，settle 结束清掉（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1913"><code>:1913</code></a>）。工具变化作为 system 消息记进会话。'],
+  ['proj', '<span class="tag l1">L1</span> 每个 turn，<code>transformContext</code> 里的投影（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1807"><code>agent-session.ts:1807</code></a>）丢掉记录里的 system 消息，换成一条强制提示词 + 当前工具声明（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1820"><code>:1820</code></a>），再送 LLM。'],
+  ['status', '<span class="tag l4">L4</span> 状态写 “System Prompt: Scout”（第 156 行）。装了 minimal 的话看不到，只能看 notify。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+AGENTS.forEach((a, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${a.name}（tools: ${a.tools.length ? a.tools.join(', ') : '无'}）`; $('m-agent').appendChild(o); });
+let sim = newPi(); sessionStart(sim);
+let lastSent = null, log = ['启动：session_start'];
+function drawSim() {
+  const p = sim;
+  const rows = [
+    [` 状态行（被 minimal 遮住）：${p.status}`, 'dim'],
+    [` activeAgent：${p.activeAgent ? p.activeAgent.name : 'null'}`, p.activeAgent ? 'sw-ok' : 'dim'],
+    [` defaultTools 快照：[${p.defaultTools.join(', ')}]`, p.defaultTools.join() === DEFAULT_TOOLS.join() ? 'dim' : 'sw-wrn'],
+    [` Pi 当前工具：[${p.active.join(', ')}]`, p.active.length ? 'dim' : 'sw-wrn'],
+    ['', ''],
+    [' 最近一次请求的系统提示词开头：', 'acc'],
+    ...(lastSent ? lastSent.map(l => ['   ' + l, l === '(none)' ? 'sw-wrn' : 'dim']) : [['   （还没提问）', 'dim']]),
+    ['', ''],
+    [' 操作记录：' + log.slice(-4).join(' → '), 'dim'],
+  ];
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  const notes = [];
+  if (!p.activeAgent && p.active.join() !== DEFAULT_TOOLS.join()) notes.push('状态是 Default，工具却不是默认的四个：这就是 /reload 之后的错位');
+  if (p.defaultTools.join() !== DEFAULT_TOOLS.join()) notes.push('defaultTools 快照已经被污染，Reset to Default 回不去了；只有重新启动 Pi 才行');
+  if (!p.active.length) notes.push('工具清单为空：Claude Code 写法的名字全部被 setActiveToolsByName 忽略');
+  $('m-note').textContent = notes.join(' · ');
+}
+$('m-pick').onclick = () => { const a = AGENTS[Number($('m-agent').value)]; pick(sim, a); log.push('/system ' + a.name); drawSim(); };
+$('m-reset').onclick = () => { resetDefault(sim); log.push('Reset'); drawSim(); };
+$('m-reload').onclick = () => { sessionStart(sim); log.push('/reload'); drawSim(); };
+$('m-ask').onclick = () => { lastSent = request(sim); log.push('提问'); drawSim(); };
+$('m-restart').onclick = () => { sim = newPi(); sessionStart(sim); lastSent = null; log = ['重新启动']; drawSim(); };
+drawSim();
+</script>
+</body>
+</html>
