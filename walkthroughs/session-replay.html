@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>session-replay.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 07</div>
+<h1>session-replay.ts</h1>
+<p class="subtitle">注册一个 <code>/replay</code> 命令，把当前分支上的 user / assistant / toolResult 消息列成时间线，在居中的浮层里用 ↑↓ 浏览、回车展开。216 行，订阅 <code>session_start</code>（只设主题），真正的入口是 <code>pi.registerCommand</code>。这是走读里第一个<b>命令</b>：它挂在用户输入上，却完全不进双循环。<br>运行：<code>just ext-session-replay</code>（同时加载 minimal）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。三段：第 30–123 行是浮层组件 <code>SessionReplayUI</code>，第 125–142 行把消息转成文字，第 145–211 行是命令本身：读会话分支、组装时间线、打开浮层。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+<code>/replay</code> 走的是和普通提问同一个入口 <code>session.prompt()</code>，但在第一步就被截走：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2101"><code>agent-session.ts:2101</code></a> 发现是扩展命令，直接执行 handler 然后返回，<b>不发 <code>input</code> 事件，不起 run，两层循环都不转</b>。agent 正在跑的时候输入 <code>/replay</code> 也立刻执行，和正在转的循环并行。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="idle">场景 A：空闲时 /replay，浏览、展开、关闭</option>
+    <option value="busy">场景 B：agent 正在跑时 /replay，浮层是快照</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">浮层（实时，简化）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 只设主题</td></tr>
+<tr class="hl"><td><code>/replay</code> 命令 handler</td><td>循环外（截在 <code>prompt()</code> 入口）</td><td>0（每次用户输入 /replay 1 次，与 settle 无关）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2102"><code>agent-session.ts:2102</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2180"><code>_tryExecuteExtensionCommand</code></a></td><td>✔ 读分支、开浮层</td></tr>
+<tr><td><code>input</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a></td><td>– 命令在它之前就返回了，不会触发</td></tr>
+<tr><td><code>before_agent_start</code> · <code>agent_*</code> · <code>turn_*</code> · <code>tool_*</code></td><td>外 / 内</td><td>1 / N / M / K</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>:216</code></a></td><td>–</td></tr>
+<tr class="hl"><td>浮层 <code>render(w)</code></td><td>与循环异步</td><td>每帧（浮层打开时）</td><td><a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L1399"><code>tui.ts:1399</code></a>（合成浮层）</td><td>✔ 画时间线</td></tr>
+<tr class="hl"><td>浮层 <code>handleInput(data)</code></td><td>与循环异步</td><td>每次按键（浮层有焦点时）</td><td>TUI 把键盘输入交给获得焦点的浮层（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L752"><code>tui.ts:752 showOverlay</code></a> 时取得焦点）</td><td>✔ ↑↓ / 回车 / Esc</td></tr>
+</tbody></table></div>
+<p class="small muted">命令和事件订阅是两种挂法。<code>pi.on</code> 由 Pi 在循环的固定位置调用；<code>pi.registerCommand</code> 只在用户输入 <code>/名字</code> 时被调用，它的 ctx 是 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L997"><code>createCommandContext</code></a> 造的，比事件 ctx 多了 <code>waitForIdle</code>、<code>newSession</code> 等“会话控制”方法。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–5 步是启动链：命令只是被<b>登记</b>。第 6–16 步是一次 <code>/replay</code>：从 L4 的编辑器进来，经 L1 的 <code>prompt()</code> 入口被截到 L2，L3 读会话树组装时间线，再交回 L4 开浮层。全程没有经过双循环。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、命令链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 16</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–5 步在双循环启动之前；第 6 步起是一次 /replay，同样不进双循环。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>session-replay 不在安装、控制、装配任何一段：不写提示词，<code>/replay</code> 这几个字也不会进上下文（命令在 <code>input</code> 之前就返回了，不会变成 user 消息）。它<b>读</b>的是会话树：和 LLM 看到的消息来自同一批落盘条目，但取法不同，所以浮层里的时间线和模型的上下文并不一一对应。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 330" role="img" aria-label="提示词上下文：replay 读会话树，与装配并列">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <g class="chip"><rect x="16" y="20" width="200" height="44" rx="7"/><text class="mono" x="26" y="38" font-size="11">message_end → appendMessage</text><text class="mut" x="26" y="55" font-size="10">agent-session.ts:1165 落盘</text><title>user / assistant / toolResult 在 message_end 后写进会话树；正在流式输出的那条还没落盘</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M216,42 L256,42"/>
+  <g class="chip"><rect x="258" y="20" width="200" height="44" rx="7"/><text x="268" y="38" font-size="11">SessionManager 会话树</text><text class="mut" x="268" y="55" font-size="10">message / compaction / custom …</text></g>
+
+  <path class="arrow flow" marker-end="url(#ah2)" d="M458,42 L520,42 L520,96"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M358,64 L358,96"/>
+
+  <text class="bt" x="430" y="90" font-size="12" style="fill:var(--accent)">装配（给 LLM）</text>
+  <g class="chip"><rect x="430" y="98" width="220" height="56" rx="7"/><text class="mono" x="440" y="116" font-size="11">buildSessionContext</text><text class="mut" x="440" y="132" font-size="10">compaction 之前的换成摘要</text><text class="mut" x="440" y="146" font-size="10">custom message 也进来</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M650,126 L690,126"/>
+  <g class="chip"><rect x="692" y="98" width="116" height="56" rx="7"/><text x="750" y="122" text-anchor="middle" font-size="11">transformContext</text><text x="750" y="140" text-anchor="middle" font-size="11">→ LLM</text></g>
+
+  <text class="bt" x="16" y="90" font-size="12" style="fill:var(--accent)">回放（给人看）</text>
+  <g class="chip hit"><rect x="16" y="98" width="390" height="56" rx="7"/><text class="mono" x="26" y="116" font-size="11">ctx.sessionManager.getBranch()（第 148 行）</text><text class="mut" x="26" y="132" font-size="10">根 → 当前叶子，<tspan font-weight="700">包括</tspan> compaction 之前的原始消息</text><text class="mut" x="26" y="146" font-size="10">只取 type = message 且 role ∈ user / assistant / toolResult</text><title>session-manager.ts:1469</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M210,154 L210,186"/>
+  <g class="chip hit"><rect x="16" y="188" width="390" height="56" rx="7"/><text class="mono" x="26" y="206" font-size="11">extractContent → HistoryItem[]（第 125–192 行）</text><text class="mut" x="26" y="222" font-size="10">text 拼起来；toolCall 只留名字 + 200 字参数</text><text class="mut" x="26" y="236" font-size="10">thinking、图片丢掉；空文本的条目跳过</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M210,244 L210,272"/>
+  <g class="chip"><rect x="16" y="274" width="390" height="36" rx="7"/><text x="26" y="296" font-size="11">L4 浮层：只读快照，打开后不再更新</text></g>
+
+  <text class="mut" x="430" y="200" font-size="10">两条路读的是同一棵树：</text>
+  <text class="mut" x="430" y="216" font-size="10">· 回放看得到被压缩掉的原文，LLM 只看到摘要</text>
+  <text class="mut" x="430" y="232" font-size="10">· custom 消息进 LLM 上下文，回放里没有</text>
+  <text class="mut" x="430" y="248" font-size="10">· 正在流式输出的 assistant 两边都还没有</text>
+  <text class="mut" x="430" y="264" font-size="10">· /replay 本身不进任何一边</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>条目</th><th>LLM 上下文里</th><th>/replay 时间线里</th></tr></thead>
+<tbody>
+<tr><td>user / assistant / toolResult</td><td>有（compaction 之后的）</td><td>有，含 compaction 之前的原文</td></tr>
+<tr><td>compaction 摘要</td><td>有（代替旧消息）</td><td>没有：type 不是 message</td></tr>
+<tr><td>custom message（扩展用 sendMessage 注入）</td><td>有</td><td>没有：role 是 custom，第 166–191 行不处理</td></tr>
+<tr><td>assistant 的 thinking、图片</td><td>按 provider 处理</td><td>没有：<code>extractContent</code> 只取 text 和 toolCall</td></tr>
+<tr><td>只有 thinking、没有 text 的 assistant</td><td>有</td><td>整条跳过（第 164 行 <code>if (!text) continue</code>）</td></tr>
+<tr><td><code>/replay</code> 这次输入</td><td>没有</td><td>没有</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>下面的模拟器用 JS 复刻了 <code>SessionReplayUI</code> 的选中、展开和滚动逻辑，并按 Pi 合成浮层的方式（居中、没有 <code>maxHeight</code>）放进一个固定高度的终端里。调大会话条数，用 ↑ 往上翻，看浮层怎么长高、选中项怎么跑出屏幕。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">会话条数 <input type="range" id="m-n" min="3" max="80" value="30"> <span class="counter" id="m-nv">30</span></label>
+    <label class="small">终端高度 <input type="range" id="m-h" min="16" max="60" value="30"> <span class="counter" id="m-hv">30</span></label>
+    <label class="small"><input type="checkbox" id="m-fix"> 套用修法（按真实高度只渲染一页）</label>
+  </div>
+  <div class="controls">
+    <button id="k-up">↑</button><button id="k-down">↓</button><button id="k-enter">Enter</button><button id="k-top">↑ ×20</button><button id="k-reset">重新打开 /replay</button>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：每条只画一行标题和一行预览（真实的 Text 组件超宽会折行）；展开时内容固定为 6 行；浮层超出终端时上下各裁一半，是按 <a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L1354"><code>tui.ts:1354</code></a> 的居中公式推出来的（推断），没有在真实终端里逐行比对。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr class="hl"><td>注册命令</td><td><code>{ description, handler }</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L306"><code>loader.ts:306 registerCommand</code></a> 存进 <code>extension.commands</code></td><td>–</td><td>编辑器 <code>/</code> 补全列表（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3421"><code>getCommands</code></a>）</td><td>加载时 1 次</td></tr>
+<tr class="hl"><td>分发命令</td><td>–</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L863"><code>runner.getCommand</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L997"><code>createCommandContext</code></a></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2092"><code>prompt()</code></a> 第一步：<code>/</code> 开头且是扩展命令 → 执行后 return</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L4740"><code>isExtensionCommand</code></a>：streaming / compaction 时也直接执行，不排队</td><td>用户回车时</td></tr>
+<tr><td>组装时间线</td><td>第 148–192 行：过滤、提取文字、算间隔</td><td><code>ctx.sessionManager</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>getBranch</code></a></td><td>–</td><td>命令执行时 1 次（快照）</td></tr>
+<tr><td>打开浮层</td><td><code>new SessionReplayUI(items, done)</code></td><td><code>ctx.ui.custom(factory, { overlay: true })</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2654"><code>interactive-mode.ts:2654</code></a></td><td>–</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2927"><code>showExtensionCustom</code></a> → <a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L752"><code>tui.showOverlay</code></a>：宽 80%、居中、没设 maxHeight</td><td>命令执行时</td></tr>
+<tr><td>浏览 / 展开</td><td><code>handleInput</code>：↑↓ 改 selectedIndex，Enter 切 expandedIndex</td><td>–</td><td>–</td><td>按键 → <code>tui.requestRender()</code> → 下一帧 <code>render(w)</code></td><td>每次按键</td></tr>
+<tr><td>关闭</td><td>Esc → <code>onDone</code> → <code>done(undefined)</code></td><td><code>await ctx.ui.custom</code> 返回，handler 结束</td><td><code>prompt()</code> 以 “handled” 返回，没有 run</td><td><code>overlayHandle.hide()</code>，焦点回编辑器</td><td>Esc 时</td></tr>
+<tr><td>主题</td><td><code>themeMap.ts</code>：catppuccin-mocha</td><td><code>pi.on("session_start")</code></td><td><code>settings.theme</code> 写盘</td><td><code>setTheme</code> / <code>setTitle</code></td><td>循环外</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：往上翻会让浮层越来越高，超过终端后选中项被裁掉。</b>第 80 行 <code>items.slice(this.scrollOffset)</code> 只有起点没有终点：从 scrollOffset 一直画到最后一条。刚打开时 scrollOffset 是“最后 6 条”的起点，看着正常；按 ↑ 翻过顶部后，scrollOffset 跟着减小，浮层多画一条；翻到第 0 条时<b>所有</b>条目都画出来。浮层没设 <code>maxHeight</code>（第 208 行），Pi 按居中公式放置（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L1354"><code>tui.ts:1354</code></a>），高度超过终端时上下两头都在屏幕外（推断），而选中项恰好在顶部，于是看不见了。另外第 202 行把 height 写死成 30，和终端实际高度无关。修法：<code>render</code> 里用真实行数（如 <code>tui.terminal.rows</code>）算 pageSize，第 80 行改成 <code>slice(scrollOffset, scrollOffset + pageSize)</code>。模拟器里调大条数、连按 ↑ 即可复现。</div>
+
+<div class="callout"><b>“+间隔”标在了下一条上。</b>第 159 行用相邻两条消息的 <code>timestamp</code> 相减。但 assistant 消息的 <code>timestamp</code> 是<b>请求开始</b>的时间（<a href="../../../../../vendor/pi/packages/ai/src/types.ts#L601"><code>ai/src/types.ts:601</code></a>），模型花的时间要等到下一条 toolResult 才体现出来：assistant 那条几乎总是 “+0s”，模型思考了 40 秒，显示在后面的 Tool 条目上。想看模型耗时，应读 assistant 的 <code>durationMs</code>（<a href="../../../../../vendor/pi/packages/ai/src/types.ts#L608"><code>:608</code></a>）。另外第 160 行在 <code>if (!text) continue</code> 之前就更新了 prevTime，被跳过的条目也会“吃掉”一段间隔。</div>
+
+<div class="callout"><b>浮层是快照。</b>条目在命令执行时一次读完（第 148 行），之后 <code>render</code> 只画这份数组。场景 B 里 agent 在浮层打开期间继续跑，新落盘的消息不会出现；正在流式输出的那条在执行命令时还没落盘（落盘发生在 <code>message_end</code> 之后，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1165"><code>agent-session.ts:1165</code></a>），也不在里面。要看最新的，关掉再 <code>/replay</code> 一次。</div>
+
+<div class="callout"><b>命令不经过 <code>input</code>，也就绕过了所有 input 订阅者。</b>扩展命令在 <code>prompt()</code> 第一步就被执行（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2101"><code>agent-session.ts:2101</code></a>），早于 <code>_runInputHandlers</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>:2117</code></a>）。和第 11 篇 purpose-gate 这类改写输入的扩展一起装时，<code>/replay</code> 不会被它们看到。这是 Pi 的设计：命令自己管理和 LLM 的交互（源码注释写的是 “via pi.sendMessage()”）。</div>
+
+<div class="callout"><b>小处。</b>第 5 行 import 的 <code>truncateToWidth</code>、pi-tui 的 <code>getMarkdownTheme</code>，以及第 199 行的 <code>kb</code> 参数都没用到。第 107–108 行的预览不论长短都在末尾加 “...”。第 113 行只有可见条目少于 15 条时才在条目之间加空行，所以条目多的时候排版会突然变紧。</div>
+
+<h2 id="sum">小结</h2>
+<p>session-replay 是走读里第一个命令：<code>pi.registerCommand</code> 只登记，用户输入 <code>/replay</code> 时 <code>prompt()</code> 在第一步就把它截走执行，不发 input、不起 run，双循环从头到尾没转过。它读的是会话树而不是装配后的上下文，所以能看到被压缩掉的原文，却看不到 custom 消息。下一篇 <code>cross-agent.ts</code> 也注册命令，但命令最后会发出一条用户消息，第一次让命令<b>发起</b>一次 settle。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [3, 'import { Box, Text, Markdown, Container, Spacer, matchesKey, Key, truncateToWidth, getMarkdownTheme } from "@mariozechner/pi-tui";', 'l4', '（第 3–6 行，合并成一行显示）pi-tui 的组件和按键工具，经 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L113"><code>loader.ts:113</code></a> 别名。<code>truncateToWidth</code> 和这里的 <code>getMarkdownTheme</code> 没用到。'],
+  [7, 'import { DynamicBorder, getMarkdownTheme as getPiMdTheme } from "@mariozechner/pi-coding-agent";', 'l4', 'Pi 自己的边框组件和 Markdown 主题（跟随当前主题）。'],
+  [30, 'class SessionReplayUI {', 'l4', '浮层组件。Pi 只要求它有 <code>render(width)</code>，有焦点时再调 <code>handleInput</code>；外面第 201–205 行包了一层适配。'],
+  [40, '        this.selectedIndex = Math.max(0, items.length - 1);', 'l3', '打开时选中最后一条（最新）。'],
+  [41, '        this.ensureVisible(20); // rough height estimate', 'l3', '构造时按高度 20 估算：pageSize = 6，scrollOffset = 最后 6 条的起点。'],
+  [44, '    handleInput(data: string, tui: any): void {', 'hit', '浮层有焦点时，TUI 把每次按键交给它。与循环异步。'],
+  [50, '            this.expandedIndex = this.expandedIndex === this.selectedIndex ? null : this.selectedIndex;', 'l3', '回车展开 / 收起当前条；同时只展开一条。'],
+  [52, '            this.onDone();', 'l3', 'Esc → <code>done(undefined)</code>（第 200 行），<code>await ctx.ui.custom</code> 返回。'],
+  [55, '        tui.requestRender();', 'l4', '按键后自己请求重绘（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L1027"><code>tui.ts:1027</code></a>）。'],
+  [60, '        const pageSize = Math.floor(height / 3); // Approx items per page', 'l3', '假设每条占 3 行（标题、预览、空行）。'],
+  [61, '        if (this.selectedIndex < this.scrollOffset) {', 'l3', '选中项在窗口上方：窗口起点跟到选中项。'],
+  [68, '    render(width: number, height: number, theme: any): string[] {', 'hit', '每帧调用，与循环异步。height 由第 202 行传入，写死为 30。'],
+  [80, '        const visibleItems = this.items.slice(this.scrollOffset);', 'l3', '⚠ 只有起点没有终点：从 scrollOffset 画到最后一条。往上翻，浮层就越来越高。'],
+  [87, '            const cardBox = new Box(1, 0, (s) => isSelected ? theme.bg("selectedBg", s) : s);', 'l4', '选中项整块加背景色。'],
+  [104, '                cardBox.addChild(new Markdown(item.content, 2, 0, mdTheme));', 'l4', '展开时按 Markdown 渲染全文：一条很长的 toolResult（比如 read 了 2000 行）会让浮层一下子变得很高。'],
+  [107, '                const preview = item.content.replace(/\\n/g, \' \').substring(0, width - 10);', 'l3', '收起时只显示一行预览，末尾固定加 “...”。'],
+  [113, '            if (visibleItems.length < 15) container.addChild(new Spacer(1));', 'l4', '条目多于 15 条时省掉空行，pageSize 的“每条 3 行”假设也就不成立了。'],
+  [121, '        return container.render(width);', 'l4', '把整棵小组件树渲染成行数组，交给 TUI 合成到屏幕上。'],
+  [125, 'function extractContent(entry: any): string {', 'l3', '把一条消息转成纯文字：text 拼接，toolCall 变成 “Tool: name(参数前 200 字)”，其余（thinking、图片）丢掉。'],
+  [145, '    pi.registerCommand("replay", {', 'hit', '第一次出现的接口。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L306"><code>loader.ts:306</code></a> 只把它存进 <code>extension.commands</code>，加载时不执行任何东西。'],
+  [147, '        handler: async (args, ctx) => {', 'hit', '用户输入 <code>/replay</code> 时，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2193"><code>agent-session.ts:2193</code></a> 调用。ctx 是命令 ctx（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L997"><code>createCommandContext</code></a>）。<b>不在任何循环里。</b>'],
+  [148, '            const branch = ctx.sessionManager.getBranch();', 'l1', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>getBranch</code></a>：根到当前叶子，含 compaction 之前的条目。只读一次：浮层是快照。'],
+  [154, '                if (entry.type !== "message") continue;', 'l3', 'compaction、custom、label 等条目一律跳过。'],
+  [158, '                const ts = msg.timestamp ? new Date(msg.timestamp) : new Date();', 'l3', 'assistant 的 timestamp 是请求开始时间（<a href="../../../../../vendor/pi/packages/ai/src/types.ts#L601"><code>ai/src/types.ts:601</code></a>），不是回复完成时间。'],
+  [160, '                prevTime = ts;', 'l3', '在下面 <code>if (!text) continue</code> 之前更新：被跳过的条目也会改变下一条的“+间隔”。'],
+  [164, '                if (!text) continue;', 'l3', '只有 thinking 的 assistant、空结果的工具都会被跳过。'],
+  [183, '                    const toolName = (msg as any).toolName || "tool";', 'l3', 'toolResult 消息自带 toolName。'],
+  [195, '                ctx.ui.notify("No session history found.", "warning");', 'l4', '新会话里执行 /replay 时的提示。'],
+  [199, '            await ctx.ui.custom((tui, theme, kb, done) => {', 'l2', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2927"><code>showExtensionCustom</code></a>：调这个工厂得到组件，<code>overlay: true</code> 时用 <code>tui.showOverlay</code> 显示。返回的 Promise 直到 <code>done</code> 被调用才 resolve。'],
+  [202, '                    render: (w) => component.render(w, 30, theme),', 'l4', '⚠ 高度写死 30，与终端实际行数无关。'],
+  [208, '                overlayOptions: { width: "80%", anchor: "center" },', 'l4', '宽 80%、居中；没给 <code>maxHeight</code>，浮层有多少行就画多少行（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L1402"><code>tui.ts:1402</code></a> 只在设了 maxHeight 时才截断）。'],
+  [213, '    pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外，只设主题和标题。'],
+];
+WT.source(SRC);
+
+// ─────────── SessionReplayUI 复刻 ───────────
+// 每条：标题 1 行 + 预览 1 行（展开时 6 行内容）+ 可见条目 < 15 时 1 行空行
+function makeItems(n) {
+  const kinds = ['user', 'assistant', 'tool', 'tool', 'assistant'];
+  const out = []; let t = 10 * 3600 + 2 * 60;
+  for (let i = 0; i < n; i++) {
+    const k = i === 0 ? 'user' : kinds[i % kinds.length];
+    t += k === 'tool' ? 38 : k === 'assistant' ? 0 : 5;
+    const hh = String(Math.floor(t / 3600)).padStart(2, '0'), mm = String(Math.floor(t / 60) % 60).padStart(2, '0'), ss = String(t % 60).padStart(2, '0');
+    out.push({ k, title: k === 'user' ? 'User Prompt' : k === 'assistant' ? 'Assistant' : 'Tool: read', time: `${hh}:${mm}:${ss}`, idx: i });
+  }
+  return out;
+}
+function newUI(n) {
+  const ui = { items: makeItems(n), sel: Math.max(0, n - 1), exp: null, off: 0 };
+  ensureVisible(ui, 20);
+  return ui;
+}
+function ensureVisible(ui, height) { // 第 58–66 行
+  const page = Math.floor(height / 3);
+  if (ui.sel < ui.off) ui.off = ui.sel;
+  else if (ui.sel >= ui.off + page) ui.off = ui.sel - page + 1;
+}
+function key(ui, k) { // 第 44–56 行
+  if (k === 'up') ui.sel = Math.max(0, ui.sel - 1);
+  else if (k === 'down') ui.sel = Math.min(ui.items.length - 1, ui.sel + 1);
+  else if (k === 'enter') ui.exp = ui.exp === ui.sel ? null : ui.sel;
+}
+// 返回 [行文字, 类名, 是否选中]；fixed 时按真实高度只画一页
+function renderUI(ui, termH, fixed) { // 第 68–122 行
+  const h = fixed ? termH : 30;
+  ensureVisible(ui, h);
+  const lines = [['─'.repeat(56), 'acc'], [` SESSION REPLAY | ${ui.items.length} entries`, 'acc'], ['', '']];
+  let vis = ui.items.slice(ui.off);
+  if (fixed) vis = vis.slice(0, Math.max(1, Math.floor((termH - 7) / 3)));
+  vis.forEach(it => {
+    const s = it.idx === ui.sel;
+    const icon = it.k === 'user' ? '👤' : it.k === 'assistant' ? '🤖' : '🛠';
+    lines.push([`${s ? '▶' : ' '}${icon} ${it.title} [${it.time}] #${it.idx}`, s ? 'sw-wrn' : '', s]);
+    if (it.idx === ui.exp) for (let j = 0; j < 6; j++) lines.push([`    （展开内容第 ${j + 1} 行）`, 'dim', s]);
+    else lines.push(['    预览 …...', 'dim', s]);
+    if (vis.length < 15) lines.push(['', '']);
+  });
+  lines.push(['', ''], [' ↑/↓ Navigate • Enter Expand • Esc Close', 'dim'], ['─'.repeat(56), 'acc']);
+  return lines;
+}
+// 居中放进 termH 行的终端：row = floor((termH - H) / 2)（tui.ts:1354）；超出部分裁掉（推断）
+function place(lines, termH) {
+  const H = lines.length, row = Math.floor((termH - H) / 2);
+  const top = Math.max(0, -row), shown = lines.slice(top, top + termH);
+  return { H, row, top, bottom: Math.max(0, H - top - termH), shown, selVisible: shown.some(l => l[2]) || !lines.some(l => l[2]) };
+}
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0] || ' '; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+
+// ─────────── 双循环动画 ───────────
+// 状态：open（浮层开着）、ui（SessionReplayUI 状态）、n（快照条数）、live（会话实际条数）
+// 补丁 { open, n, live } 直接合并；{ key } 由 onStep 交给 handleInput；{ snap } 打开浮层并按 n 建快照
+const SCN = {
+  idle: [
+    ['session', 'session_start', '', {}, '设主题 catppuccin-mocha；命令早在加载时已登记'],
+    ['input', 'prompt("/replay")', '', { live: 12, n: 12, snap: true, open: true }, 'agent-session.ts:2101：是扩展命令 → 执行 handler，读 getBranch，打开浮层。不发 input、不起 run'],
+    ['input', 'handleInput ↑', '', { key: 'up' }, '与循环异步：选中上一条，requestRender'],
+    ['input', 'handleInput ↑', '', { key: 'up' }, ''],
+    ['input', 'handleInput Enter', '', { key: 'enter' }, '展开选中项，Markdown 渲染全文'],
+    ['input', 'handleInput Enter', '', { key: 'enter' }, '收起'],
+    ['input', 'handleInput Esc', '', { open: false }, 'done(undefined) → 浮层隐藏 → handler 返回 → prompt() 以 handled 结束'],
+  ],
+  busy: [
+    ['session', 'session_start', '', {}, ''],
+    ['input', 'input', '', { live: 10 }, '用户提问：真正进入循环的那一次'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_update ×N', 'inner', {}, 'assistant 正在流式输出，还没落盘'],
+    ['input', 'prompt("/replay", steer)', '', { n: 10, snap: true, open: true }, 'interactive-mode.ts:3335：streaming 时走 prompt()，命令照样立即执行。快照里没有正在输出的这条'],
+    ['msg', 'message_end (assistant)', 'inner', { live: 11 }, '落盘了，但浮层不会更新'],
+    ['tools', 'tool_execution_end', 'inner', { live: 12 }, 'run 内循环在浮层后面照常转'],
+    ['input', 'handleInput ↑', '', { key: 'up' }, '键盘交给浮层；编辑器暂时收不到'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', { live: 13 }, ''],
+    ['input', 'handleInput Esc', '', { open: false }, '关闭：浮层停在 10 条，会话已经 13 条'],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '这次 settle 和 /replay 毫无关系'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+WT.loops({
+  hit: ['session', 'input'],
+  sub: { input: 'prompt() 截走 /replay' },
+  legend: [
+    '橙框 = session-replay 用到的位置。input 格换成了 “prompt() 截走 /replay”：命令在 input 事件之前就执行并返回，不进双循环。',
+    '浮层的 render() / handleInput() 不在图里：浮层打开期间每帧、每次按键调用，与循环异步。',
+  ],
+  scenes: SCN,
+  state: () => ({ open: false, ui: null, n: 0, live: 0 }),
+  onStep(st, s) {
+    if (s.patch.snap) st.ui = newUI(st.n);
+    if (s.patch.key && st.ui) key(st.ui, s.patch.key);
+  },
+  logTag: s => s.node === 'input' && s.event !== 'input' ? '<span class="tag hit">本扩展</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    if (!st.open || !st.ui) { foot1.textContent = st.ui ? '（浮层已关闭）' : '（浮层未打开）'; }
+    else { const p = place(renderUI(st.ui, 30, false), 30); paintLines(foot1, p.shown.slice(0, 16)); }
+    WT.flash(foot1);
+    rc.textContent = st.ui ? `快照 ${st.n} 条 · 会话现在 ${st.live} 条` + (st.live > st.n ? '（浮层看不到新增的）' : '') : '';
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 命令链 ───────────
+const CHIPS = {
+  editor:    ['editor 回车 → isExtensionCommand', 110, 200, 51, 1],
+  custom:    ['showExtensionCustom', 322, 130, 51, 1],
+  overlay:   ['tui.showOverlay（80% · center）', 464, 195, 51, 1],
+  frame:     ['render / handleInput', 671, 135, 51, 1],
+  tmap:      ['applyExtensionDefaults（themeMap）', 110, 240, 147, 1],
+  items:     ['getBranch → HistoryItem[]（148–192）', 362, 225, 147, 1],
+  ui:        ['SessionReplayUI（30–123）', 599, 165, 147, 1],
+  loader:    ['loader · jiti', 110, 100, 243, 1],
+  reg:       ['pi.registerCommand', 222, 125, 243, 1],
+  on:        ['pi.on', 359, 55, 243, 1],
+  getcmd:    ['runner.getCommand', 426, 118, 243, 1],
+  cmdctx:    ['createCommandContext', 556, 135, 243, 1],
+  ctxcustom: ['ctx.ui.custom', 703, 95, 243, 1],
+  sess:      ['AgentSession', 110, 100, 339, 1],
+  prompt:    ['session.prompt（2092）', 222, 145, 339, 1],
+  tryexec:   ['_tryExecuteExtensionCommand', 379, 180, 339, 1],
+  sm:        ['sessionManager.getBranch', 571, 160, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/session-replay.ts -e extensions/minimal.ts</code> 创建 AgentSession。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），也就是第 144 行。'],
+  ['reg', '<span class="tag l2">L2</span> 第 145 行 <code>pi.registerCommand("replay", …)</code>：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L306"><code>loader.ts:306</code></a> 存进 <code>extension.commands</code>，handler 不执行。编辑器的 <code>/</code> 补全从这里取到 replay。'],
+  ['on', '<span class="tag l2">L2</span> 第 213 行登记 <code>session_start</code>；<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 发出时调用它。'],
+  ['tmap', '<span class="tag l3">L3</span> <code>applyExtensionDefaults</code>：主题 catppuccin-mocha，标题 “π - session-replay”。<br><b>启动链到此结束。下面是一次 /replay。</b>'],
+  ['editor', '<span class="tag l4">L4</span> 用户输入 <code>/replay</code> 回车。空闲时走普通提交；agent 在跑时走 <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L3335"><code>interactive-mode.ts:3335</code></a> 的 streaming 分支，同样调 <code>session.prompt()</code>。'],
+  ['prompt', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2092"><code>prompt()</code></a> 第一件事：以 <code>/</code> 开头就先试扩展命令（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2101"><code>:2101</code></a>），注释写明 “execute immediately, even during streaming”。'],
+  ['tryexec', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2180"><code>_tryExecuteExtensionCommand</code></a>：拆出命令名 replay 和参数。'],
+  ['getcmd', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L863"><code>runner.getCommand("replay")</code></a> 找到登记的命令。'],
+  ['cmdctx', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L997"><code>createCommandContext</code></a>：事件 ctx 的 getter 加上 <code>waitForIdle</code>、<code>newSession</code> 等会话控制方法。然后 <code>await command.handler(args, ctx)</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2193"><code>:2193</code></a>）。'],
+  ['sm', '<span class="tag l1">L1</span> 第 148 行 <code>ctx.sessionManager.getBranch()</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>session-manager.ts:1469</code></a>）：读出根到叶子的所有条目。'],
+  ['items', '<span class="tag l3">L3</span> 第 153–192 行：只留 user / assistant / toolResult，提取文字，算相邻间隔，得到 HistoryItem 数组（快照）。'],
+  ['ctxcustom', '<span class="tag l2">L2</span> 第 199 行 <code>ctx.ui.custom(factory, { overlay: true, … })</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2654"><code>interactive-mode.ts:2654</code></a>。'],
+  ['custom', '<span class="tag l4">L4</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2927"><code>showExtensionCustom</code></a> 调工厂，拿到组件，返回一个等 <code>done</code> 的 Promise。'],
+  ['overlay', '<span class="tag l4">L4</span> <a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L752"><code>tui.showOverlay</code></a>：压入浮层栈并取得焦点；之后每帧在 <a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L1399"><code>tui.ts:1399</code></a> 调组件的 render，居中合成到屏幕上。'],
+  ['ui', '<span class="tag l3">L3</span> 按键进 <code>handleInput</code>，改选中 / 展开，请求重绘；Esc 调 <code>done</code>：浮层隐藏，handler 返回，<code>prompt()</code> 以 “handled” 结束。整条链没有碰到 <code>_startRun</code>。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+let sim = newUI(30);
+function drawSim() {
+  const n = Number($('m-n').value), H = Number($('m-h').value), fixed = $('m-fix').checked;
+  $('m-nv').textContent = n; $('m-hv').textContent = H;
+  if (sim.items.length !== n) sim = newUI(n);
+  const lines = renderUI(sim, H, fixed);
+  const p = place(lines, H);
+  const rows = [];
+  if (p.top) rows.push([`┄┄ 屏幕上方裁掉 ${p.top} 行 ┄┄`, 'sw-wrn']);
+  rows.push(...p.shown);
+  if (p.bottom) rows.push([`┄┄ 屏幕下方裁掉 ${p.bottom} 行 ┄┄`, 'sw-wrn']);
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  const notes = [`浮层 ${p.H} 行 / 终端 ${H} 行`, `scrollOffset = ${sim.off}，渲染 ${fixed ? '一页' : `第 ${sim.off}–${n - 1} 条（共 ${n - sim.off} 条）`}`];
+  if (!p.selVisible) notes.push(`选中的 #${sim.sel} 在屏幕外`);
+  $('m-note').textContent = notes.join(' · ');
+}
+$('k-up').onclick = () => { key(sim, 'up'); drawSim(); };
+$('k-down').onclick = () => { key(sim, 'down'); drawSim(); };
+$('k-enter').onclick = () => { key(sim, 'enter'); drawSim(); };
+$('k-top').onclick = () => { for (let i = 0; i < 20; i++) key(sim, 'up'); drawSim(); };
+$('k-reset').onclick = () => { sim = newUI(Number($('m-n').value)); drawSim(); };
+['m-n', 'm-h', 'm-fix'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>
