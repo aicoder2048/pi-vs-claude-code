@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>coms.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 17</div>
+<h1>coms.ts</h1>
+<p class="subtitle">同一台机器上的几个 Pi 会话互相发消息：每个会话在 <code>~/.pi/coms/sockets/</code> 下监听一个 unix socket，在 <code>~/.pi/coms/projects/&lt;项目&gt;/agents/</code> 下登记自己；模型用 <code>coms_send</code> 给同伴发提示，用 <code>coms_await</code> / <code>coms_get</code> 取回答。1598 行，订阅 <code>session_start</code>、<code>agent_end</code>、<code>session_shutdown</code>，注册 4 个工具、1 个命令、5 个命令行参数。第 16 篇把“循环外的结果”送回自己；这一篇把<b>另一个 Pi 进程</b>的提示送进来，再在 <code>agent_end</code> 把回答送回去。<br>运行：<code>just local-coms --cname dev</code>（同时加载 minimal 和 theme-cycler；开两个终端各起一个）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。1598 行里大半是注册表读写、socket 收发、网格渲染。挂在 Pi 上的是：5 个 <code>registerFlag</code>（第 536–560 行），socket 收到提示时的 <code>sendMessage</code>（第 605–662 行），4 个工具，<code>agent_end</code> 回传（第 1480–1550 行），<code>session_shutdown</code> 清理（第 1570–1595 行）。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+一次对话涉及<b>两个</b> Pi 进程、各自的双循环。发送方 A：<code>coms_send</code> 在工具阶段把信封写进 B 的 socket，等到 ack 就返回；<code>coms_await</code> 在工具阶段一直等回答。接收方 B：socket 回调在循环外收到信封，用 <code>sendMessage</code>（同第 16 篇）并入当前 run 或起新 settle；B 的 <code>agent_end</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a>，外循环每个 run 结束时）把最后一段回答写回 A 的 socket。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="send">场景 A（发送方 A 的视角）：coms_send → coms_await 等 B 回答</option>
+    <option value="recv">场景 B（接收方 B 的视角）：空闲时收到提示 → 新 settle → agent_end 回传</option>
+    <option value="mix">场景 C（接收方 B）：两条提示挤在一起，回答对错了人</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">两个进程的状态（实时，简化）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>registerFlag</code> ×5</td><td>循环外，加载时</td><td>0</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L334"><code>loader.ts:334</code></a>；值由 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session-services.ts#L99"><code>agent-session-services.ts:99</code></a> 填入</td><td>✔ --cname / --purpose / --project / --color / --explicit</td></tr>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 绑 socket、写注册表、起定时器、挂网格</td></tr>
+<tr class="hl"><td>socket 连接回调</td><td>与循环异步</td><td>每个入站信封 1 次</td><td>Node <code>net.Server</code></td><td>✔ prompt → sendMessage；response → 唤醒等待；ping → 回名片</td></tr>
+<tr class="hl"><td><code>coms_send</code> · <code>coms_await</code> · <code>coms_get</code> · <code>coms_list</code></td><td><span class="tag inner">内</span> 工具阶段</td><td>调用次数</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a></td><td>✔ 发信、阻塞等待、轮询、列出同伴</td></tr>
+<tr class="hl"><td><code>agent_end</code></td><td><span class="tag outer">外</span> 每 run 结束</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a></td><td>✔ 有未回复的入站就回传</td></tr>
+<tr class="hl"><td><code>session_shutdown</code></td><td>循环外</td><td>0（/reload、换会话、退出时 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3723"><code>agent-session.ts:3723</code></a></td><td>✔ 关 socket、删注册文件、停定时器</td></tr>
+<tr class="hl"><td>ping / keepalive 定时器</td><td>与循环异步</td><td>每 10 秒 / 30 秒</td><td><code>setInterval</code></td><td>✔ 刷新同伴网格、续写注册表</td></tr>
+</tbody></table></div>
+<p class="small muted">入站提示走的是 <code>sendCustomMessage</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>agent-session.ts:2357</code></a>）：B 在跑 → <code>agent.followUp</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2374"><code>:2374</code></a>），run 将要结束时取走（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L311"><code>agent-loop.ts:311</code></a>）；B 空闲 → <code>_startRun</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2383"><code>:2383</code></a>）。和第 16 篇完全相同，只是消息来自另一个进程。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–6 步是启动链：命令行参数、socket、注册表。第 7–17 步是一次往返：A 的工具阶段（L1）→ A 的扩展写 socket（L3）→ B 的 socket 回调（L3）→ B 的 sendMessage（L2）→ B 的双循环（L1）→ B 的 agent_end（L2/L3）→ A 的 socket 回调唤醒 A 的 <code>coms_await</code>（L1）。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、跨进程往返链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 17</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–6 步在循环外；第 7 步起是 A 问、B 答的一次往返，跨两个进程。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>coms 不改系统提示词，但让<b>别的进程</b>往自己的上下文里写东西。B 收到的提示以 custom 消息进入 B 的上下文，开头带一行 <code>[from A @ /path]</code>，此外和用户消息没有区别：B 会照着做，用的是 B 自己的全部工具。B 的回答不是专门写给 A 的，而是 <code>agent_end</code> 时<b>分支上最后一条 assistant 消息</b>的文字。A 那边，回答作为 <code>coms_await</code> 的工具结果进入 A 的上下文。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 330" role="img" aria-label="提示词上下文：两个进程互写上下文">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">进程 A（发送方）</text>
+  <text class="bt" x="440" y="24" font-size="13" style="fill:var(--accent)">进程 B（接收方）</text>
+  <g class="chip hit"><rect x="16" y="38" width="360" height="44" rx="7"/><text class="mono" x="26" y="56" font-size="11">assistant：coms_send(target: "B", prompt)</text><text class="mut" x="26" y="72" font-size="10">toolResult：msg_id、hops（B ack 之后立即返回）</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M376,60 L436,60"/>
+  <text class="mut" x="384" y="52" font-size="9">信封 JSON</text>
+  <g class="chip hit"><rect x="438" y="38" width="370" height="56" rx="7"/><text class="mono" x="448" y="56" font-size="11">custom 消息 coms-inbound（display）</text><text class="mut" x="448" y="72" font-size="10">“[from A @ /repo]\n\n” + prompt</text><text class="mut" x="448" y="86" font-size="10">并入当前 run 或起新 settle；B 用自己的工具照做</text></g>
+
+  <g class="chip"><rect x="438" y="110" width="370" height="44" rx="7"/><text x="448" y="128" font-size="11">B 的模型回答（可能跨多个 turn）</text><text class="mut" x="448" y="144" font-size="10">中间的工具调用、思考都留在 B 的上下文里</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M623,154 L623,174"/>
+  <g class="chip hit"><rect x="438" y="176" width="370" height="56" rx="7"/><text class="mono" x="448" y="194" font-size="11">agent_end：getBranch() 最后一条 assistant 的文字</text><text class="mut" x="448" y="210" font-size="10">配给“最近一条还没回复的入站”</text><text class="mut" x="448" y="224" font-size="10">有 response_schema 时 JSON.parse，失败就回 error</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M438,204 L378,204"/>
+  <g class="chip hit"><rect x="16" y="176" width="360" height="56" rx="7"/><text class="mono" x="26" y="194" font-size="11">coms_await → toolResult = B 的回答</text><text class="mut" x="26" y="210" font-size="10">（或 coms_get 轮询到 complete）</text><text class="mut" x="26" y="224" font-size="10">A 下一个 turn 读到它</text></g>
+
+  <g class="chip"><rect x="16" y="96" width="360" height="58" rx="7"/><text x="26" y="114" font-size="11">两边都写 coms-log（appendEntry）</text><text class="mut" x="26" y="130" font-size="10">boot / inbound_prompt / outbound_prompt /</text><text class="mut" x="26" y="144" font-size="10">outbound_response：只进会话文件，不进上下文</text></g>
+  <text class="mut" x="16" y="262" font-size="10">信任边界：任何能写 B 的 socket 的本机进程（同一用户；~/.pi/coms 设为 0700）都能让 B 执行一段提示，B 只能从 “[from …]” 前缀分辨来源。</text>
+  <text class="mut" x="16" y="278" font-size="10">hops：A 在处理入站时再 coms_send，hops +1；B 收到 hops ≥ 5 的信封直接 nack，防止 A↔B 无限互相发。</text>
+  <text class="mut" x="16" y="294" font-size="10">B 的回答是“它最后说的话”，不一定只回答了 A 的问题：B 的用户这时也在和 B 说话的话，回答会混在一起。</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>东西</th><th>进谁的上下文</th><th>以什么身份</th><th>记进会话吗</th></tr></thead>
+<tbody>
+<tr class="hl"><td>同伴发来的提示</td><td>B</td><td>custom 消息（带 [from …] 前缀）</td><td>记</td></tr>
+<tr class="hl"><td>B 的回答</td><td>A</td><td><code>coms_await</code> / <code>coms_get</code> 的工具结果</td><td>记（A 的会话）</td></tr>
+<tr><td>msg_id、hops</td><td>A</td><td><code>coms_send</code> 的工具结果</td><td>记</td></tr>
+<tr><td>同伴名单、上下文占用</td><td>A（调用 coms_list 时）</td><td>工具结果</td><td>记</td></tr>
+<tr><td>coms-log 审计</td><td>–</td><td><code>appendEntry</code></td><td>只在会话文件里</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器分两半。上半部分复刻接收方的入站队列和 <code>agent_end</code> 的配对规则（第 605–662、1480–1550 行）：按顺序点事件，看每次 agent_end 把哪段文字回给了谁。下半部分复刻 Pi 的命令行解析（<a href="../../../../../vendor/pi/packages/coding-agent/src/cli/args.ts#L249"><code>cli/args.ts:249</code></a> 起）和扩展参数的取值（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session-services.ts#L99"><code>agent-session-services.ts:99</code></a> 起），看本扩展的 5 个参数怎么被读出来。</p>
+<div class="card">
+  <div class="controls" id="m-events"></div>
+  <div class="term" id="m-out"></div>
+  <div class="controls" style="margin-top:10px">
+    <span class="small">pi -e extensions/coms.ts</span>
+    <input id="m-argv" type="text" value='--cname dev --explicit "fix the login bug"' style="flex:1;min-width:260px;font-family:var(--mono)">
+  </div>
+  <div class="controls" id="m-argv-presets"></div>
+  <div class="term" id="m-argv-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：入站模拟里，“B 回答”的文字是按事件写好的示意；命令行只模拟以 <code>--</code> 开头的未知参数和位置参数，引号按 shell 规则去掉。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr class="hl"><td>身份</td><td>名字 / 目的 / 颜色：参数 &gt; agent 文件 frontmatter &gt; 自动生成（第 776–802 行）</td><td><code>pi.registerFlag</code> / <code>pi.getFlag</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L377"><code>loader.ts:377</code></a>）</td><td>CLI 把未知参数收进 <code>unknownFlags</code></td><td>状态 “📡 dev@default”</td><td>session_start</td></tr>
+<tr><td>发现</td><td>注册表文件 + 每 10 秒 ping（第 886 行）</td><td>–</td><td>unix socket / named pipe</td><td>同伴网格：名字、模型、上下文占用、队列</td><td>每 10 秒</td></tr>
+<tr class="hl"><td>发信</td><td>信封 + hops（第 1288 行）</td><td><code>coms_send</code></td><td>工具阶段等 ack</td><td>renderResult：→ B msg_id</td><td><span class="tag inner">内</span></td></tr>
+<tr class="hl"><td>收信</td><td><code>handlePrompt</code>：hops 检查、入队</td><td><code>pi.sendMessage(…, { deliverAs: "followUp", triggerTurn: true })</code></td><td>follow-up 或新 settle</td><td>聊天区 coms-inbound 消息</td><td>socket 回调（异步）</td></tr>
+<tr class="hl"><td>回传</td><td>最近未回复的入站 + 最后一条 assistant 文字</td><td><code>pi.on("agent_end")</code></td><td><code>getBranch</code></td><td>–</td><td><span class="tag outer">外</span> 每 run 结束</td></tr>
+<tr><td>取回答</td><td>pending Promise（第 1312–1333 行）</td><td><code>coms_await</code>（阻塞）/ <code>coms_get</code>（轮询）</td><td>工具阶段</td><td>✓ response received</td><td><span class="tag inner">内</span></td></tr>
+<tr><td>清理</td><td>关 socket、删注册文件、停定时器</td><td><code>pi.on("session_shutdown")</code> + SIGINT / SIGTERM</td><td>–</td><td>摘掉网格</td><td>会话结束</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：回答按“最近一条未回复的入站”配对，挤在一起时会回错人。</b><code>agent_end</code>（第 1481 行）取的是队列里<b>最后一条</b>还没回复的入站，回的是分支上<b>最后一条</b> assistant 的文字。两条提示 P1（来自 A）、P2（来自 C）先后到达 B 时，它们作为 follow-up 在同一个 run 里被处理，run 结束只触发一次 agent_end：P2 收到 B 对两个问题的合并回答，P1 留在队列里。等 B 的用户下次提问、B 回答完，下一次 agent_end 会把<b>这段与 A 无关的回答</b>发给 A。另外，B 被 Esc 中止时也会触发 agent_end，这时回出去的是中止前的最后一段文字。修法：入站消息里已经带了 <code>msg_id</code>（第 635 行的 details），应在 agent_end 时检查本 run 的消息里实际处理了哪些 <code>coms-inbound</code>，逐条配对；或者给每条入站单独起 run。模拟器上半部分可以复现。</div>
+
+<div class="callout warn"><b>Bug：<code>coms_await</code> 按 Esc 停不下来，最长等 30 分钟。</b>第 1434 行的 <code>execute(_callId, params)</code> 根本没接 signal 参数，<code>Promise.race</code> 里只有回答和超时（默认 <code>PI_COMS_TIMEOUT_MS</code> = 30 分钟）。和第 13–15 篇一样，Pi 的工具阶段就是 <code>await tool.execute</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a>），对方进程挂了或忘了回答，A 只能干等到超时。修法：把 signal 加进 race，abort 时立即返回。</div>
+
+<div class="callout"><b>Pi 的命令行解析不知道扩展参数的类型。</b>CLI 解析发生在扩展加载之前，<a href="../../../../../vendor/pi/packages/coding-agent/src/cli/args.ts#L249"><code>args.ts:249–261</code></a> 对不认识的 <code>--xxx</code> 一律“如果下一个参数不以 - 开头，就当成它的值”。于是 <code>pi -e coms.ts --explicit "fix the login bug"</code> 里，“fix the login bug” 被当成 <code>--explicit</code> 的值吃掉；之后 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session-services.ts#L108"><code>agent-session-services.ts:108</code></a> 发现它是布尔参数，直接设成 true，那段文字就丢了，不会作为初始提问。布尔参数要写成 <code>--explicit=true</code>，或者放在最后。这是 Pi 的行为，不是本扩展写错；本扩展用 <code>--cname</code> 而不是 <code>--name</code>（第 537 行的说明），也是为了避开 Pi 自己的参数。模拟器下半部分可以试。</div>
+
+<div class="callout"><b>本扩展正确处理了会话结束。</b>和第 16 篇对比：这里订阅了 <code>session_shutdown</code>（第 1595 行），在 Pi 让旧扩展失效之前关掉 socket、删掉注册文件、停掉定时器，所以 /reload 之后不会留下孤儿。另外它还在 <code>process</code> 上注册了 SIGINT / SIGTERM 处理（第 1596–1597 行）：每次 /reload 工厂重跑都会再加一对监听，旧闭包也因此不会被回收（推断：/reload 十几次后 Node 会给出 MaxListeners 警告）。</div>
+
+<div class="callout"><b>信任边界和 hops。</b>入站提示进的是 B 的主对话，B 用自己的全部工具（包括 bash）执行它，能和 B 对话的是“同一用户下任何能写这个 socket 的进程”。第 813 行把 <code>~/.pi/coms</code> 设成 0700，挡住了其他用户，但没有更细的鉴权。hops 用来防止 A↔B 无限互发（≥ 5 就 nack），它取的是“当前入站”的 hops + 1（第 1288 行）；B 的用户自己发起的 <code>coms_send</code>，如果恰好有入站还没回复，也会继承那条入站的 hops。<code>response_schema</code> 要求回答能直接 <code>JSON.parse</code>（第 1504 行），模型习惯把 JSON 包在 <code>```json</code> 代码块里，会被判为 “response not valid JSON”。</div>
+
+<h2 id="sum">小结</h2>
+<p>coms 把第 16 篇“从循环外送消息进来”的手法推广到了进程之间：socket 回调在循环外收信，<code>sendMessage</code> + <code>triggerTurn</code> 让接收方的外循环转起来，<code>agent_end</code> 把这一轮的最后一句话写回发送方，发送方的 <code>coms_await</code> 在工具阶段等着它。难点都在“这一轮回答的是谁的问题”：<code>agent_end</code> 只知道一个 run 结束了，不知道 run 里处理了哪些请求。下一篇 <code>coms-net.ts</code> 把同样的协议搬到 HTTP/SSE 上，让不同机器上的 Pi 也能互相发消息。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [5, ' * ~/.pi/coms/projects/<project>/agents/<name>.json.', 'l3', '发现靠文件：每个会话在项目目录下写一个 JSON，同伴读目录就能找到彼此。'],
+  [31, 'const MAX_HOPS = Number(process.env.PI_COMS_MAX_HOPS) || 5;', 'l3', '一条消息最多被转发 5 次，防止 A↔B 无限互发。'],
+  [32, 'const TIMEOUT_MS = Number(process.env.PI_COMS_TIMEOUT_MS) || 1_800_000;', 'l3', '等回答的默认超时：30 分钟。'],
+  [531, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调用。'],
+  [536, '	pi.registerFlag("cname", {', 'hit', '第一次出现的接口：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L334"><code>loader.ts:334</code></a> 登记一个命令行参数。不叫 --name，是为了避开 Pi 自己的 --name。'],
+  [556, '	pi.registerFlag("explicit", {', 'l2', '布尔参数。Pi 解析命令行时还不知道它是布尔的，后面紧跟的普通参数会被当成它的值吃掉（见 ③）。'],
+  [605, '	function handlePrompt(socket: net.Socket, env: PromptEnvelope): void {', 'l3', 'socket 收到 prompt 信封：与循环异步，可能发生在 B 空闲、正在跑、甚至在等用户输入时。'],
+  [607, '		if (typeof env.hops !== "number" || env.hops >= MAX_HOPS) {', 'l3', 'hops 到上限就拒收。'],
+  [625, '		currentInbound = inbound;', 'l3', '记下“当前入站”：B 处理它时再 coms_send，hops 就在它的基础上 +1。'],
+  [629, '			pi.sendMessage(', 'hit', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>sendCustomMessage</code></a>：别的进程的提示进入 B 的上下文。'],
+  [640, '				{ deliverAs: "followUp", triggerTurn: true },', 'hit', 'B 在跑 → follow-up（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L311"><code>agent-loop.ts:311</code></a>）；B 空闲 → 新 settle（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2383"><code>agent-session.ts:2383</code></a>）。同第 16 篇。'],
+  [651, '		ackOk(socket, env.msg_id);', 'l3', '先入队、再 ack：A 的 coms_send 收到 ack 才返回。'],
+  [664, '	function handleResponse(socket: net.Socket, env: ResponseEnvelope): void {', 'l3', 'A 这边：收到 B 的回答，resolve 对应的 pending Promise，唤醒 coms_await。'],
+  [720, '	function connHandler(socket: net.Socket): void {', 'l3', '每个连接只读一行 JSON（最多 64 KB），按 type 分发。'],
+  [771, '	pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外：读参数、定名字、建目录、绑 socket、写注册表、起定时器。'],
+  [776, '		const flags = readCliFlags(pi);', 'l2', '<code>pi.getFlag</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L377"><code>loader.ts:377</code></a>）读回命令行参数。'],
+  [813, '				try { fs.chmodSync(COMS_DIR, 0o700); } catch { /* best-effort */ }', 'l3', '只允许当前用户访问 socket 目录：同一用户的任何进程仍然都能发。'],
+  [822, '			server = await bindEndpoint(endpoint, connHandler);', 'l3', '监听自己的 socket：从此别的进程可以随时往里写。'],
+  [886, '		pingTimer = setInterval(() => { refreshPool().catch(() => {}); }, PING_INTERVAL_MS);', 'l3', '每 10 秒 ping 一遍同伴，刷新网格。'],
+  [1267, '	pi.registerTool({', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>：coms_send。'],
+  [1288, '			const hops = currentInbound ? currentInbound.hops + 1 : 0;', 'l3', '继承“当前入站”的 hops：哪怕这次发信其实是 B 的用户发起的。'],
+  [1308, '			await sendEnvelope(target.endpoint, env);', 'l3', '<span class="tag inner">run 内循环</span>工具阶段：写信封，等 B ack。B 不在就抛错。'],
+  [1425, '	pi.registerTool({', 'hit', 'coms_await：阻塞等回答。'],
+  [1434, '		async execute(_callId, params) {', 'hit', '⚠ 没有接 signal：Esc 停不下这个等待。'],
+  [1451, '			const winner = await Promise.race([entry.promise, timed]);', 'l3', '回答和超时谁先到算谁的，没有中止这一项。'],
+  [1480, '	pi.on("agent_end", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a>：<span class="tag outer">settle 外循环</span>，每个 run 结束 1 次。不看 event，任何 run 结束都会尝试回传。'],
+  [1481, '		const inbound = [...inboundQueue.values()].reverse().find((i) => !i.fulfilled);', 'l3', '⚠ 取最后一条未回复的入站：多条挤在一起时，较早的那条会在以后某次无关的 agent_end 被“回答”。'],
+  [1486, '		for (const entry of ctx.sessionManager.getBranch()) {', 'l1', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>getBranch</code></a>：找分支上最后一条 assistant 消息的文字，作为回答。'],
+  [1504, '				payload = JSON.parse(lastAssistantText);', 'l3', '要求结构化回答时，整段文字必须是纯 JSON；包在代码块里就失败。'],
+  [1523, '			await sendEnvelope(inbound.sender_endpoint, respEnv);', 'l3', '回答写回 A 的 socket，A 的 handleResponse 唤醒 coms_await。'],
+  [1595, '	pi.on("session_shutdown", async () => { await cleanShutdown(); });', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3723"><code>agent-session.ts:3723</code></a>：在旧扩展失效之前清理。第 16 篇缺的正是这一行。'],
+  [1596, '	process.on("SIGINT", () => { void cleanShutdown(); });', 'l3', '直接挂在 process 上：每次 /reload 都会再加一个监听。'],
+];
+WT.source(SRC);
+
+// ─────────── 入站配对复刻（第 605–662、1480–1550 行） ───────────
+function newRecv() { return { queue: [], lastText: '（B 还没说过话）', log: [] }; }
+const EVENTS = [
+  ['A 发来 P1：“auth 用的什么库？”', r => { r.queue.push({ id: 'P1', from: 'A', fulfilled: false }); r.log.push(['入队 P1（来自 A），sendMessage followUp + triggerTurn', 'dim']); }],
+  ['C 发来 P2：“测试怎么跑？”', r => { r.queue.push({ id: 'P2', from: 'C', fulfilled: false }); r.log.push(['入队 P2（来自 C）', 'dim']); }],
+  ['B 一次 run 处理完队列', r => { r.lastText = 'auth 用 passport；测试用 bun test。'; agentEnd(r, 'B 一次 run 处理了当时排着的提示'); }],
+  ['B 的用户提问，B 回答', r => { r.lastText = '（回答 B 自己的用户）README 已更新。'; agentEnd(r, 'B 的用户发起的 run'); }],
+  ['B 被 Esc 中止', r => { agentEnd(r, '中止也会触发 agent_end'); }],
+];
+function agentEnd(r, why) {
+  const inbound = [...r.queue].reverse().find(i => !i.fulfilled); // 第 1481 行
+  if (!inbound) { r.log.push([`agent_end（${why}）：没有未回复的入站，不回传`, 'dim']); return; }
+  inbound.fulfilled = true;
+  r.queue = r.queue.filter(i => i !== inbound);
+  const wrong = /自己的用户|README/.test(r.lastText) || /中止/.test(why);
+  r.log.push([`agent_end（${why}）→ 回给 ${inbound.from}（${inbound.id}）：“${r.lastText}”`, wrong ? 'sw-wrn' : 'sw-ok']);
+}
+
+// ─────────── 双循环动画 ───────────
+// 状态：a / b 两个进程的状态文字；补丁 { a, b } 直接合并
+const SCN = {
+  send: [
+    ['session', 'session_start（A）', '', { a: '📡 lead@default · 绑定 socket', b: '📡 dev@default（另一个终端）' }, '读参数、绑 socket、写注册表、每 10 秒 ping'],
+    ['input', 'input', '', {}, '用户：问问 dev 测试怎么跑，再决定要不要加 CI'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：coms_send(target: "dev", prompt: "测试怎么跑？")'],
+    ['tools', 'coms_send → 写 socket，等 ack', 'inner', { a: '已发送 msg_id 01J… hops 0', b: '收到信封 → 入队 → sendMessage' }, 'B ack 后立即返回 msg_id'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：coms_await(msg_id)'],
+    ['tools', 'coms_await：工具阶段阻塞', 'inner', { a: '⏳ 等待 dev 的回答…', b: '新 settle：dev 在读 package.json' }, 'A 的 run 停在 agent-loop.ts:842'],
+    ['tools', 'B：agent_end → 回传', '', { b: 'agent_end：回传最后一段文字' }, '外部：B 进程的外循环'],
+    ['tools', 'A：handleResponse → resolve', 'inner', { a: '✓ 收到回答：bun test' }, 'socket 回调唤醒 coms_await'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 3', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“dev 说用 bun test，我来加 CI 配置……”'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, 'A 的 agent_end：没有入站，不回传'],
+    ['settled', 'agent_settled', 'outer', {}, ''],
+  ],
+  recv: [
+    ['session', 'session_start（B）', '', { a: '📡 lead@default', b: '📡 dev@default · 空闲' }, ''],
+    ['session', 'socket：收到 prompt 信封', '', { b: 'handlePrompt：hops 0 < 5，入队，ack' }, '与循环异步'],
+    ['session', 'sendMessage(followUp, triggerTurn)', '', { b: 'B 空闲 → _startRun' }, 'agent-session.ts:2383：新 settle'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1：输入是 coms-inbound 消息', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：read package.json（B 用自己的工具）'],
+    ['tools', 'tool_execution_end', 'inner', {}, ''],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“用 bun test，配置在 bunfig.toml。”'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end → 回传', 'outer', { b: '回传给 lead：“用 bun test，配置在 bunfig.toml。”', a: '✓ 收到回答' }, '最近的未回复入站 + 最后一条 assistant 文字'],
+    ['settled', 'agent_settled', 'outer', {}, 'B 的这次 settle 没有用户参与'],
+  ],
+  mix: [
+    ['session', 'session_start（B）', '', { a: '📡 lead / 📡 qa', b: '📡 dev · 空闲' }, ''],
+    ['session', '收到 P1（来自 lead）', '', { b: '队列：P1' }, 'sendMessage → 起新 settle'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['session', '收到 P2（来自 qa）', '', { b: '队列：P1, P2' }, 'B 在跑 → follow-up'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '回答 P1'],
+    ['tend', 'turn_end', 'inner', {}, '取 follow-up：P2'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '回答 P2（最后一条 assistant 只含 P2 的答案）'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end → 回传 P2', 'outer', { b: '回给 qa ✓；P1 还在队列里', a: 'lead 还在等…' }, '只触发一次 agent_end：只回了最近的 P2'],
+    ['settled', 'agent_settled', 'outer', {}, ''],
+    ['input', 'B 的用户提问', '', {}, '用户：更新一下 README'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“README 已更新。”'],
+    ['aend', 'agent_end → 回传 P1', 'outer', { b: '回给 lead：“README 已更新。” ✗', a: 'lead 收到一段与问题无关的回答' }, '较早的 P1 在一次无关的 agent_end 被“回答”'],
+    ['settled', 'agent_settled', 'outer', {}, ''],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+WT.loops({
+  hit: ['session', 'tools', 'aend'],
+  sub: { session: 'session_start / socket 回调', tools: 'coms_send / coms_await', aend: 'agent_end → 回传' },
+  legend: [
+    '橙框 = coms 用到的位置：session_start 绑 socket，socket 回调收信并 sendMessage，tools 格里的 coms_* 工具，agent_end 回传。',
+    '图只画一个进程；“外部”步骤发生在另一个 Pi 进程里，两边靠 unix socket 上的一行 JSON 相连。',
+  ],
+  scenes: SCN,
+  state: () => ({ a: '', b: '' }),
+  logTag: s => /socket|sendMessage|coms_|agent_end|handle|session_start|收到/.test(s.event) && !/^B：/.test(s.event) ? '<span class="tag hit">本扩展</span>' : /^B：/.test(s.event) ? '<span class="tag off">外部</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    paintLines(foot1, [[' 进程 A  ' + (st.a || '—'), 'sw-acc'], [' 进程 B  ' + (st.b || '—'), 'sw-ok']]);
+    WT.flash(foot1);
+    rc.textContent = '';
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 跨进程往返 ───────────
+const CHIPS = {
+  grid:    ['同伴网格 + 状态', 110, 115, 51, 1],
+  inmsg:   ['B：coms-inbound 消息', 237, 140, 51, 1],
+  awaitui: ['A：✓ response received', 389, 155, 51, 1],
+  ident:   ['身份 / 注册表 / socket', 110, 160, 147, 1],
+  send:    ['A：写信封（1293–1308）', 282, 165, 147, 1],
+  recv:    ['B：handlePrompt（605–662）', 459, 175, 147, 1],
+  reply:   ['B：配对 + 回传（1480–1550）', 646, 160, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  flags:   ['registerFlag ×5 / getFlag', 222, 165, 243, 1],
+  sendmsg: ['B：pi.sendMessage', 399, 125, 243, 1],
+  aend:    ['B：pi.on("agent_end")', 536, 140, 243, 1],
+  cli:     ['CLI unknownFlags', 110, 115, 339, 1],
+  atool:   ['A：工具阶段（await）', 237, 145, 339, 1],
+  bloop:   ['B：follow-up / 新 settle', 394, 160, 339, 1],
+  bbranch: ['B：getBranch', 566, 95, 339, 1],
+  aresolve:['A：handleResponse', 673, 130, 339, 1],
+};
+const BOOT = [
+  ['cli', '<span class="tag l1">L1</span> <code>pi -e coms.ts --cname dev</code>：CLI 解析时不认识 <code>--cname</code>，收进 <code>unknownFlags</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/cli/args.ts#L249"><code>args.ts:249</code></a>）。'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），第 531 行。'],
+  ['flags', '<span class="tag l2">L2</span> 5 个 <code>registerFlag</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L334"><code>loader.ts:334</code></a>）；加载完后 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session-services.ts#L99"><code>agent-session-services.ts:99</code></a> 把 unknownFlags 对上号、填值，对不上的报错。'],
+  ['ident', '<span class="tag l3">L3</span> <code>session_start</code>：读参数和 agent 文件 frontmatter，定名字（重名自动加后缀），建 <code>~/.pi/coms</code>（0700），绑 socket，写注册表。'],
+  ['grid', '<span class="tag l4">L4</span> 状态 “📡 dev@default”，挂同伴网格；起 ping（10 秒）和 keepalive（30 秒）定时器。'],
+  ['flags', '<span class="tag l2">L2</span> 同时登记 4 个工具、<code>/coms</code> 命令和 3 个事件。<br><b>启动链结束。下面是 A 问 B 的一次往返。</b>'],
+  ['atool', '<span class="tag l1">L1</span> A 的模型调用 coms_send：工具阶段（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a>）。'],
+  ['send', '<span class="tag l3">L3</span> A：按名字在注册表里找 B，拼信封（hops = 当前入站 + 1 或 0），写 B 的 socket，等 ack；返回 msg_id。'],
+  ['recv', '<span class="tag l3">L3</span> B 的 socket 回调（与 B 的循环无关）：检查 hops、入队、记“当前入站”。'],
+  ['sendmsg', '<span class="tag l2">L2</span> B：<code>pi.sendMessage(…, { deliverAs: "followUp", triggerTurn: true })</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>sendCustomMessage</code></a>；然后 ack 给 A。'],
+  ['bloop', '<span class="tag l1">L1</span> B 在跑 → follow-up，run 将要结束时取走（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L311"><code>agent-loop.ts:311</code></a>）；B 空闲 → <code>_startRun</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2383"><code>agent-session.ts:2383</code></a>）。'],
+  ['inmsg', '<span class="tag l4">L4</span> B 的聊天区出现 “[from lead @ /repo] 测试怎么跑？”，B 的模型照着做。'],
+  ['atool', '<span class="tag l1">L1</span> 与此同时，A 的模型调用 coms_await：A 的工具阶段阻塞在 pending Promise 上。'],
+  ['aend', '<span class="tag l2">L2</span> B 的 run 结束，<code>agent_end</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a>）调到第 1480 行。'],
+  ['bbranch', '<span class="tag l1">L1</span> B：沿 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>getBranch</code></a> 找最后一条 assistant 消息的文字。'],
+  ['reply', '<span class="tag l3">L3</span> B：配给最近一条未回复的入站，拼 response 信封，写回 A 的 socket，从队列里删掉。'],
+  ['aresolve', '<span class="tag l1">L1</span> A 的 socket 回调 <code>handleResponse</code> resolve pending Promise，<code>coms_await</code> 返回：回答成为 A 的工具结果，A 下一个 turn 读到它。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器：入站配对 ───────────
+const $ = id => document.getElementById(id);
+let recv = newRecv();
+function drawRecv() {
+  const rows = [[` B 的入站队列：${recv.queue.length ? recv.queue.map(i => i.id + '（' + i.from + '）').join(', ') : '空'}`, 'acc'], ...recv.log.slice(-6).map(([t, c]) => ['  ' + t, c])];
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+}
+EVENTS.forEach(([label, fn]) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => { fn(recv); drawRecv(); }; $('m-events').appendChild(b); });
+const rb = document.createElement('button'); rb.textContent = '清空'; rb.onclick = () => { recv = newRecv(); drawRecv(); }; $('m-events').appendChild(rb);
+drawRecv();
+
+// ─────────── 模拟器：命令行解析（args.ts:249–261 + agent-session-services.ts:99–115） ───────────
+const FLAGS = { cname: 'string', purpose: 'string', project: 'string', color: 'string', explicit: 'boolean' };
+function shellSplit(s) { const out = []; s.replace(/"([^"]*)"|'([^']*)'|(\S+)/g, (_, a, b, c) => { out.push(a ?? b ?? c); return ''; }); return out; }
+function parseArgv(args) {
+  const unknown = new Map(), messages = [], piOwn = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--name' || arg === '-n') { piOwn.push(`--name ${args[++i]}`); continue; } // Pi 自己的参数（args.ts:126）
+    if (arg.startsWith('--')) {
+      const eq = arg.indexOf('=');
+      if (eq !== -1) unknown.set(arg.slice(2, eq), arg.slice(eq + 1));
+      else { const next = args[i + 1]; if (next !== undefined && !next.startsWith('-') && !next.startsWith('@')) { unknown.set(arg.slice(2), next); i++; } else unknown.set(arg.slice(2), true); }
+    } else messages.push(arg);
+  }
+  const values = {}, errors = [];
+  for (const [name, value] of unknown) {
+    if (!FLAGS[name]) { errors.push(name); continue; }
+    values[name] = FLAGS[name] === 'boolean' ? true : (typeof value === 'string' ? value : undefined);
+  }
+  return { unknown, messages, values, errors, piOwn };
+}
+[
+  ['--cname dev --explicit "fix the login bug"', '布尔参数吞掉提问'],
+  ['--cname dev "fix the login bug" --explicit', '布尔参数放最后'],
+  ['--explicit=true --project web "fix it"', '用 = 写法'],
+  ['--name dev "hi"', '用了 --name'],
+].forEach(([a, tag]) => { const b = document.createElement('button'); b.textContent = tag; b.onclick = () => { $('m-argv').value = a; drawArgv(); }; $('m-argv-presets').appendChild(b); });
+function drawArgv() {
+  const r = parseArgv(shellSplit($('m-argv').value));
+  const rows = [[' unknownFlags：' + [...r.unknown].map(([k, v]) => `--${k}=${JSON.stringify(v)}`).join('  '), 'dim']];
+  Object.entries(r.values).forEach(([k, v]) => rows.push([`  getFlag("${k}") → ${JSON.stringify(v)}`, 'sw-ok']));
+  if (r.errors.length) rows.push([`  不是任何扩展登记的参数：--${r.errors.join(', --')}（启动时报错）`, 'sw-wrn']);
+  if (r.piOwn.length) rows.push([`  Pi 自己认领：${r.piOwn.join(' ')}（会话名，不是 coms 的名字）`, 'dim']);
+  rows.push([' 初始提问：' + (r.messages.length ? r.messages.map(m => JSON.stringify(m)).join(' ') : '（无）'), r.messages.length ? 'sw-acc' : 'sw-wrn']);
+  const swallowed = [...r.unknown].some(([k, v]) => FLAGS[k] === 'boolean' && typeof v === 'string' && v !== 'true');
+  paintLines($('m-argv-out'), rows);
+  WT.flash($('m-argv-out'));
+  $('m-note').textContent = swallowed ? '布尔参数后面的提问被当成参数值吃掉，又被置为 true：初始提问丢失' : (r.piOwn.length && !r.values.cname ? '--name 被 Pi 认领为会话名，coms 的名字仍是自动生成的 agent-xxxxxx：要用 --cname' : '');
+}
+$('m-argv').addEventListener('input', drawArgv);
+drawArgv();
+</script>
+</body>
+</html>

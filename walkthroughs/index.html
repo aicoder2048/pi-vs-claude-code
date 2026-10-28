@@ -61,7 +61,7 @@
   <a class="ext" href="agent-chain.html"><span class="idx">14</span><span><span class="name">agent-chain.ts</span><br><span class="desc">YAML 流水线 · 797 行 · run_chain 在工具阶段串行起 N 个子 pi 进程，$INPUT 字符串替换串数据；替换值被当模板、Esc 停不下后续步骤</span></span><span class="st tag hit">已完成</span></a>
   <a class="ext" href="pi-pi.html"><span class="idx">15</span><span><span class="name">pi-pi.ts</span><br><span class="desc">元 agent · 633 行 · query_experts 在一个工具调用里用 Promise.allSettled 并行起 N 个无会话的子 pi；系统提示词来自模板文件，读不到时只剩一句报错</span></span><span class="st tag hit">已完成</span></a>
   <a class="ext" href="subagent-widget.html"><span class="idx">16</span><span><span class="name">subagent-widget.ts</span><br><span class="desc">后台子代理 · 593 行 · 工具立即返回，子进程在循环外跑，结束时 sendMessage + triggerTurn：主 agent 在跑就并入当前 run，空闲就起新 settle；/reload 后旧子代理成孤儿</span></span><span class="st tag hit">已完成</span></a>
-  <div class="ext todo"><span class="idx">17</span><span><span class="name">coms.ts</span><br><span class="desc">跨会话消息：4 个工具 + 参数 + agent_end · 1598 行 · ① 3 ② 2 ③ 17</span></span><span class="st tag off">待写</span></div>
+  <a class="ext" href="coms.html"><span class="idx">17</span><span><span class="name">coms.ts</span><br><span class="desc">本机 Pi 之间互发消息 · 1598 行 · socket 回调里 sendMessage 唤醒对方，agent_end 把最后一段话回传；第一次 registerFlag；回答按“最近未回复”配对会回错人</span></span><span class="st tag hit">已完成</span></a>
   <div class="ext todo"><span class="idx">18</span><span><span class="name">coms-net.ts</span><br><span class="desc">跨机器消息：在 coms 之上加网络 · 1639 行 · ① 3 ② 2 ③ 19</span></span><span class="st tag off">待写</span></div>
 </div>
 <p class="muted">themeMap.ts 是共享工具模块，不单独成篇，会在用到它的扩展里顺带讲。源码对照 Pi 1.4.0。</p>
