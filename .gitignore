@@ -14,3 +14,5 @@ __pycache__/
 .playwright-cli/
 
 tmp/
+HANDOFF.md
+.claude/skills/ext-walkthrough-workspace/

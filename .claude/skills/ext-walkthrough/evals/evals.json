@@ -1,0 +1,11 @@
+{
+  "skill_name": "ext-walkthrough",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "走读 pure-focus.ts，按 minimal 那篇的标准做第 02 篇",
+      "expected_output": "walkthroughs/pure-focus.html：六节结构、双循环 SVG 标出 session_start 与 render、四层步进、提示词一节说明它不碰提示词、模拟器复刻 render 返回空数组；源码链接指向 vendor/pi TS；登记进 shell.js 与 index.html；check.py 通过",
+      "files": []
+    }
+  ]
+}

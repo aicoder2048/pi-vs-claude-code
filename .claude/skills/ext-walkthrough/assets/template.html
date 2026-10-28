@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{EXT}}.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<!-- 页面只写 <main> 和数据。顶栏、左右目录、主题切换由 shell.js 生成；源码面板、双循环图和动画、四层步进由 walkthrough.js 生成。
+     每个 {{…}} 都要替换。下面带 id 的元素是 walkthrough.js 要找的挂载点，id 不要改。 -->
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · {{NN}}</div>
+<h1>{{EXT}}.ts</h1>
+<p class="subtitle">{{一句话：它做什么，多少行，订阅了哪些回调}}<br>运行：<code>just {{JUST_RECIPE}}</code></p>
+</header>
+
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+{{一两句：本扩展的回调挂在哪层循环}}</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：{{…}}</option><!-- value = SCN 的 key -->
+    <option value="{{KEY}}">场景 B：{{…}}</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<!-- 预览区：本扩展的可见效果，id 自己定，由 preview() / idle() 写入 -->
+<div class="small muted">{{预览标题}}</div><div class="term" id="foot1"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<!-- 回调对照表：回调 / 循环位置 / 每次 settle 次数 / 发出位置（TS 源码链接）/ 本扩展是否用到；用到的行加 class="hl" -->
+
+<h2 id="d1">① 四层结构</h2>
+<p>{{一句话：从启动到运行共 N 步}}</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / {{N}}</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。{{一句提示}}</span></div>
+
+<h2 id="d2">② 提示词上下文</h2>
+<p>{{本扩展在“安装 / 控制 / 装配”里碰到哪一段；没碰到就说清它读的是哪一段}}</p>
+<!-- 从 minimal.html 复制：安装 → 控制 → 装配 的流向 SVG（这张图每篇内容不同，所以留在页面里）；把本扩展用到的钩子 chip 加上 hit。
+     配一张表：入口 / 哪层循环 / 改了什么 / 会不会写回历史。 -->
+
+<h2 id="d3">③ 业务穿透</h2>
+<!-- 交互模拟器：核心逻辑有内容就原样复刻（参照 minimal.html 的 minimalRender + drawSim）；太薄就模拟它和周围的互动：叠加谁赢、装与不装的对照（参照 pure-focus.html）。 -->
+<!-- Feature 表：Feature / L3 / L2 / L1 / L4 / 刷新时机（哪个循环）。 -->
+<!-- 扩展 bug / 叠加问题写 <div class="callout warn">…</div>；工作区临时状态不写进页面，只在汇报里讲。 -->
+
+<h2 id="sum">小结</h2>
+<p>{{两三句：这个扩展的模式}} 下一篇 <code>{{NEXT}}.ts</code>。</p>
+</main>
+
+<script>
+// ─────────── 源码 ───────────
+// [行号, 代码, 'l1'|'l2'|'l3'|'l4'|'hit', 解释 HTML]；源码链接写完整 href 字面量
+const SRC = [
+  [13, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 加载时调用 1 次。'],
+];
+WT.source(SRC);
+
+// ─────────── 扩展复刻（预览和模拟器共用） ───────────
+// function xxxRender(...) { ... }
+
+// ─────────── 双循环动画 ───────────
+// [节点, 事件, 'outer'|'inner'|'', 状态补丁, 说明, run+, turn+]；补丁没变化写 {}
+const SCN = {
+  normal: [
+    ['session', 'session_start', '', { on: true }, '{{…}}'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+  ],
+};
+const foot1 = document.getElementById('foot1');
+WT.loops({
+  hit: ['session'],                       // 本扩展订阅的节点
+  // sub: { session: '启动 / reload · 循环外' },  // 改节点副标题（可省）
+  legend: '橙框 = {{EXT}} 用到的回调。{{不在图里的回调说明}}',
+  scenes: SCN,
+  state: () => ({ on: false }),           // 本页的状态对象
+  // onStep(st, s) { ... },               // 补丁表达不了的更新（可省）
+  preview(st, s) { foot1.textContent = JSON.stringify(st); WT.flash(foot1); },
+  idle() { foot1.textContent = '（还没启动）'; },
+});
+
+// ─────────── 四层启动链 ───────────
+// [文字, x, 宽, 层中心 y（L4=51 L3=147 L2=243 L1=339）, 是否用到]
+const CHIPS = {
+  sess: ['AgentSession', 165, 110, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/{{EXT}}.ts</code> 创建 AgentSession。<b>还没有任何循环。</b>'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT });
+
+// ─────────── 模拟器（扩展专属，自己写） ───────────
+</script>
+</body>
+</html>
