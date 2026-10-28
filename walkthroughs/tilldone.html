@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tilldone.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 12</div>
+<h1>tilldone.ts</h1>
+<p class="subtitle">给 agent 套上任务纪律：先用 <code>tilldone</code> 工具列出任务、把一项切到“进行中”，其他工具才放行；run 结束时还有没做完的任务，就自动催一次，让 agent 接着干。726 行，订阅 <code>session_start</code>、<code>session_tree</code>、<code>tool_call</code>、<code>agent_end</code>、<code>input</code> 等 7 个事件，注册 1 个工具、1 个命令。这一篇第一次<b>注册工具</b>，也第一次从 <code>agent_end</code> 让 <b>settle 外循环再转一圈</b>。<br>运行：<code>just ext-tilldone</code>（同时加载 theme-cycler）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。726 行里一大半是渲染（浮层、页脚、工具结果）。挂在 Pi 上的只有四件事：<code>tool_call</code> 门（第 335–361 行）、<code>agent_end</code> 催办（第 365–383 行）、<code>tilldone</code> 工具（第 392–709 行），以及从会话分支重建状态（第 302–331 行）。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+tilldone 两层循环都挂了：<b>run 内循环</b>里，<code>tool_call</code> 拦住没按规矩来的工具，<code>tilldone</code> 工具本身也在这里执行；<b>settle 外循环</b>里，<code>agent_end</code> 发一条带 <code>triggerTurn</code> 的消息。<code>_handlePostAgentRun</code> 看到 agent_end 之后排进来的消息，就让外循环再起一个 run（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2012"><code>agent-session.ts:2012</code></a> 的注释正是这么写的）。这是走读里第一次真正看到外循环转第二圈。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：被门拦 → 建任务 → 干活 → 没做完被催 → 第 2 个 run</option>
+    <option value="batch">场景 B：同一条回复里 toggle + read 并行，read 被拦</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">tilldone 的页脚 + widget（实时）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume、fork 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 从分支重建状态</td></tr>
+<tr class="hl"><td><code>session_tree</code></td><td>循环外</td><td>0（/tree 导航时 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L4202"><code>agent-session.ts:4202</code></a></td><td>✔ 重建状态</td></tr>
+<tr><td><code>session_switch</code> · <code>session_fork</code></td><td>–</td><td>0</td><td>1.4.0 里没有这两个事件（会话事件见 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L862"><code>types.ts:862</code></a>）</td><td>订阅了，但永远不触发</td></tr>
+<tr class="hl"><td><code>input</code></td><td><span class="tag outer">外</span> 最前面</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a></td><td>✔ 重置“已催过”</td></tr>
+<tr><td><code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a></td><td>–（工具描述就是它的提示词）</td></tr>
+<tr class="hl"><td><code>tool_call</code>（可拦截）</td><td><span class="tag inner">内</span> 每个工具，执行前</td><td>K</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>agent-loop.ts:739</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a></td><td>✔ 门：没任务 / 没在进行中 → block</td></tr>
+<tr class="hl"><td><code>tilldone</code> 工具 <code>execute</code></td><td><span class="tag inner">内</span> 工具阶段</td><td>模型调用它的次数</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L831"><code>agent-loop.ts:831</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a></td><td>✔ 改任务、返回 details</td></tr>
+<tr class="hl"><td><code>agent_end</code></td><td><span class="tag outer">外</span> 每 run 结束</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a></td><td>✔ 没做完 → sendMessage 催办（每次提问最多 1 次）</td></tr>
+<tr><td><code>agent_before_settle</code> · <code>agent_settled</code></td><td><span class="tag outer">外</span> 出口</td><td>≤ N · 1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2017"><code>agent-session.ts:2017</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1084"><code>:1084</code></a></td><td>–</td></tr>
+<tr class="hl"><td>页脚 / widget <code>render</code></td><td>与循环异步</td><td>每帧</td><td><a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔ 进度、当前任务</td></tr>
+</tbody></table></div>
+<p class="small muted">催办为什么会起新 run：agent_end 时 run 还算“在跑”（<code>isStreaming</code> 就是 <code>_isAgentRunActive</code>，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1479"><code>agent-session.ts:1479</code></a>），<code>sendCustomMessage</code> 把消息作为 steer 排进队列（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2376"><code>:2376</code></a>）。但 run 内循环在发 agent_end 之前已经把队列读空了，所以这条消息只能等 <code>_handlePostAgentRun</code> 发现 <code>hasQueuedMessages()</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2014"><code>:2014</code></a>），由外循环 <code>agent.continue()</code> 起下一个 run（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1903"><code>:1903</code></a>）。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–5 步是启动链：注册工具和 7 个事件，从会话分支重建任务。第 6–12 步在 run 内循环里：一次被门拦下的调用，和一次 <code>tilldone</code> 工具调用（结果连同 <code>details</code> 落盘）。第 13–16 步在 settle 外循环：agent_end 催办，外循环再起一个 run。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、内循环链、外循环续跑链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 16</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–5 步在循环外；第 6–12 步在 run 内循环；第 13–16 步在 settle 外循环。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>tilldone 不改系统提示词，却从三个方向往上下文里放东西。<b>安装</b>：注册的工具带着一段描述（“You MUST add tasks before using any other tools…”），Pi 把它写进系统提示词的工具段和工具声明。<b>控制</b>：<code>tool_call</code> 的 block reason 成为 toolResult（没有 abort，同第 06 篇）；<code>agent_end</code> 注入一条 custom 消息。<b>状态</b>：任务清单不存文件，而是存在每次 <code>tilldone</code> 工具结果的 <code>details</code> 里，跟着会话树走。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 360" role="img" aria-label="提示词上下文：工具描述、block reason、催办消息、details">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">安装 · 谁放进来</text>
+  <text class="bt" x="290" y="24" font-size="13" style="fill:var(--accent)">控制 · 谁能改</text>
+  <text class="bt" x="572" y="24" font-size="13" style="fill:var(--accent)">装配 · 怎么拼</text>
+
+  <g class="chip hit"><rect x="16" y="40" width="250" height="56" rx="7"/><text class="mono" x="26" y="58" font-size="11">pi.registerTool("tilldone")</text><text class="mut" x="26" y="74" font-size="10">description：You MUST add tasks before…</text><text class="mut" x="26" y="88" font-size="10">parameters：action / text / texts / id</text><title>loader.ts:292；进 system 消息的工具声明</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M266,68 L570,68"/>
+  <g class="chip"><rect x="572" y="40" width="236" height="56" rx="7"/><text x="582" y="58" font-size="11">system 消息：工具段 + 声明</text><text class="mut" x="582" y="74" font-size="10">每个请求都带，模型据此调用</text><text class="mut" x="582" y="88" font-size="10">tilldone 工具</text></g>
+
+  <g class="chip hit"><rect x="290" y="112" width="250" height="44" rx="7"/><text class="mono" x="300" y="130" font-size="11">tool_call → block + reason</text><text class="mut" x="300" y="146" font-size="10">“🚫 No TillDone tasks defined…”</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M540,134 L570,134"/>
+  <g class="chip"><rect x="572" y="112" width="236" height="44" rx="7"/><text x="582" y="130" font-size="11">toolResult（isError）</text><text class="mut" x="582" y="146" font-size="10">下一个 turn 模型读到，照着做</text></g>
+
+  <g class="chip hit"><rect x="290" y="170" width="250" height="44" rx="7"/><text class="mono" x="300" y="188" font-size="11">agent_end → sendMessage</text><text class="mut" x="300" y="204" font-size="10">customType: tilldone-nudge，triggerTurn</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M540,192 L570,192"/>
+  <g class="chip"><rect x="572" y="170" width="236" height="44" rx="7"/><text x="582" y="188" font-size="11">custom 消息 → 新 run 的输入</text><text class="mut" x="582" y="204" font-size="10">落盘，之后每个 turn 都在上下文里</text></g>
+
+  <g class="chip hit"><rect x="16" y="240" width="250" height="56" rx="7"/><text class="mono" x="26" y="258" font-size="11">tilldone 结果的 details</text><text class="mut" x="26" y="274" font-size="10">{ tasks, nextId, listTitle, … }</text><text class="mut" x="26" y="288" font-size="10">每次调用都存一份完整快照</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M266,268 L288,268"/>
+  <g class="chip"><rect x="290" y="240" width="250" height="56" rx="7"/><text x="300" y="258" font-size="11">会话树上的 toolResult 条目</text><text class="mut" x="300" y="274" font-size="10">details 不发给 LLM，只给扩展和 UI</text><text class="mut" x="300" y="288" font-size="10">/tree 换分支 → 读最后一份快照</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M415,240 L415,222 L160,222 L160,104" style="opacity:.5"/>
+  <text class="mut" x="20" y="320" font-size="10">LLM 看到的是 toolResult 的 content（“Added task #1: …”），看不到 details；任务状态对模型来说只能靠 list 动作或催办消息里的清单。</text>
+  <text class="mut" x="20" y="336" font-size="10">session_start / session_tree 时，reconstructState 沿 getBranch() 找最后一个 tilldone 结果的 details，恢复内存里的 tasks。</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>进上下文的东西</th><th>段</th><th>谁写</th><th>什么时候</th><th>记进会话吗</th></tr></thead>
+<tbody>
+<tr><td>tilldone 工具描述 / 参数</td><td>安装</td><td><code>pi.registerTool</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>）</td><td>加载时；每个请求都带</td><td>工具清单变化记为 system 消息</td></tr>
+<tr class="hl"><td>block reason</td><td>控制</td><td><code>tool_call</code> 返回值</td><td>每次被拦</td><td>记：isError 的 toolResult</td></tr>
+<tr class="hl"><td>催办消息</td><td>控制</td><td><code>pi.sendMessage(…, { triggerTurn: true })</code></td><td>agent_end，每次提问最多 1 次</td><td>记：custom 消息</td></tr>
+<tr><td>details 快照</td><td>–（不给 LLM）</td><td>工具 <code>execute</code> 的返回值</td><td>每次调用 tilldone</td><td>记：在 toolResult 条目里</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器原样复刻了扩展的状态逻辑（第 160–323 行和工具的 add / toggle / remove / clear 分支），包括 <code>makeDetails</code> 只浅拷贝数组这一点。左边点工具动作，每次都会像真实会话一样“落盘”一条带 details 的结果；右边用 <code>tool_call</code> 门测试别的工具，或者 “/tree” 回到某一条结果，对比<b>内存里重建</b>的状态和<b>磁盘上那一刻</b>写下的状态。</p>
+<div class="card">
+  <div class="controls">
+    <button id="a-new">new-list "Auth refactor"</button>
+    <button id="a-add">add 3 tasks</button>
+    <label class="small">#<input id="a-id" type="number" value="1" min="1" style="width:56px"></label>
+    <button id="a-toggle">toggle #id</button>
+    <button id="a-update">update #id</button>
+    <button id="a-remove">remove #id</button>
+    <button id="a-clear">clear</button>
+  </div>
+  <div class="controls">
+    <label class="small">tool_call 门：<select id="g-tool"><option>read</option><option>edit</option><option>bash</option><option>tilldone</option></select></label>
+    <label class="small">/tree 回到第 <select id="t-idx"></select> 条 tilldone 结果之后</label>
+    <button id="t-go">导航</button>
+    <button id="a-reset">重新开始</button>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：clear / new-list 的确认框一律当作“同意”；/tree 只模拟“回到某条结果之后”，不模拟分支摘要；磁盘快照用 <code>JSON.stringify</code> 在“落盘”那一刻取，对应 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1187"><code>session-manager.ts:1187</code></a> 的追加写入。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr class="hl"><td>门</td><td>没任务 / 全做完 / 没在进行中 → block（第 335–361 行）</td><td><code>pi.on("tool_call")</code></td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L755"><code>agent-loop.ts:755</code></a>：reason → toolResult；并行时先逐个 prepare（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L614"><code>:614</code></a>），再一起执行（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L656"><code>:656</code></a>）</td><td>工具结果组件显示 🚫</td><td><span class="tag inner">内</span> 每个非 tilldone 工具</td></tr>
+<tr class="hl"><td>tilldone 工具</td><td>7 个动作，单一进行中（第 502–511 行）</td><td><code>pi.registerTool</code>；execute 拿到 ctx</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a> 调 execute；结果落盘</td><td><code>renderCall</code> / <code>renderResult</code> 自定义显示；clear、new-list 弹确认框</td><td><span class="tag inner">内</span> 模型调用时</td></tr>
+<tr class="hl"><td>催办</td><td>有未完成任务且本次提问还没催过（第 365–369 行）</td><td><code>pi.sendMessage</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>sendCustomMessage</code></a></td><td>steer 入队 → <code>_handlePostAgentRun</code> → <code>agent.continue()</code></td><td>聊天区显示催办消息</td><td><span class="tag outer">外</span> 每 run 结束</td></tr>
+<tr><td>重置催办</td><td><code>nudgedThisCycle = false</code></td><td><code>pi.on("input")</code></td><td>–</td><td>–</td><td><span class="tag outer">外</span> 每条用户消息</td></tr>
+<tr><td>状态恢复</td><td><code>reconstructState</code>（第 302–323 行）</td><td>session_start / session_tree</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>getBranch</code></a></td><td>refreshUI</td><td>循环外</td></tr>
+<tr><td>页脚 / widget / 状态</td><td>进度、最多 5 行任务；当前任务</td><td><code>setFooter</code>、<code>setWidget(belowEditor)</code>、<code>setStatus</code></td><td>–</td><td>每次 refreshUI 都重新 setFooter</td><td>每次工具动作后</td></tr>
+<tr><td>/tilldone</td><td>完整清单浮层</td><td><code>ctx.ui.custom</code>（非浮层模式，占编辑器位）</td><td>–</td><td>Esc 关闭</td><td>命令执行时</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：details 和内存里的任务共用同一批对象，/tree 回去看到的是“现在”的状态。</b><code>makeDetails</code>（第 168–175 行）只是 <code>[...tasks]</code> 浅拷贝，数组里的 Task 对象和内存里的是同一批。Pi 落盘时会把当时的 JSON 写进文件（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1187"><code>session-manager.ts:1187</code></a>），但内存里的会话条目保存的是对象引用，没有拷贝（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1204"><code>appendMessage</code></a>）。之后 toggle（第 500 行）、update（第 573 行）原地改对象，早先那些结果里的 details 也跟着变了；<code>reconstructState</code> 又直接 <code>tasks = details.tasks</code>（第 315 行），之后 add 的 <code>push</code> 会塞进那条旧结果的数组。结果：同一个进程里 /tree 回到 “#1 刚加上” 那一刻，显示的却是 #1 已完成；退出后 /resume 从文件读，才是对的。修法：<code>makeDetails</code> 里 <code>tasks: tasks.map(t =&gt; ({ ...t }))</code>，<code>reconstructState</code> 里同样拷一份。模拟器里先 add、toggle 两次，再 /tree 回第 2 条就能看到两边不一致。</div>
+
+<div class="callout warn"><b>Bug：<code>setStatus</code> 两个参数写反了。</b>第 289、293 行是 <code>setStatus(文字, "tilldone")</code>，而签名是 <code>setStatus(key, text)</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L166"><code>types.ts:166</code></a>）。于是每次文字不同（任务数变了），就以那段文字为 key 新增一条状态，值都是 “tilldone”，旧的从不删除（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L146"><code>footer-data-provider.ts:146</code></a>）。因为本扩展自己换掉了页脚，这些状态平时看不到；但如果别的扩展把页脚换回内置的，状态区会出现一串 “tilldone tilldone tilldone”。修法：<code>setStatus("tilldone", 文字)</code>。</div>
+
+<div class="callout"><b>同一条回复里“先 toggle 再干活”会被拦。</b>默认并行执行时，<code>executeToolCallsParallel</code> 先把这一批的每个调用依次 prepare（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L614"><code>agent-loop.ts:614</code></a>，<code>tool_call</code> 就在这里触发），全部 prepare 完才一起执行（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L656"><code>:656</code></a>）。模型在一条回复里发 <code>tilldone toggle #1</code> + <code>read a.ts</code>，read 的门检查发生在 toggle 真正执行之前，看到的还是“没有进行中的任务”，被拦。模型下一个 turn 重试就过了，只是多花一个 turn。场景 B 演示了这个时序。若把 tilldone 工具设为 <code>executionMode: "sequential"</code>，整批会改为逐个 prepare + 执行（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L526"><code>agent-loop.ts:526</code></a>），就不会这样。</div>
+
+<div class="callout"><b>催办的节流靠 <code>input</code>。</b><code>nudgedThisCycle</code> 只在用户发消息时（第 385–388 行）清零，所以一次提问最多催一次：第二个 run 结束时即使还没做完，也不会再催，外循环停稳。这避免了无限续跑。代价是：催办消息本身走 <code>sendMessage</code>，不经过 <code>input</code>；如果别的扩展用 <code>sendUserMessage</code> 发消息，会经过 <code>input</code> 并清零，可能多催一次。另外 agent_end 不区分用户按 Esc 中止的情况：中止后照样会排一条催办（推断：会在下一次提问时随 steer 送达，未实际验证）。</div>
+
+<div class="callout"><b>旧事件名。</b>第 329–330 行订阅的 <code>session_switch</code>、<code>session_fork</code> 在 Pi 1.4.0 里已经没有了：换会话、fork 都改为发 <code>session_start</code>，用 <code>reason</code> 区分（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L758"><code>types.ts:758</code></a>）。因为第 325 行的 <code>session_start</code> 本来就会重建状态，所以功能上没缺，只是这两行是死代码。</div>
+
+<div class="callout"><b>和其他扩展叠加。</b>tilldone 每次 refreshUI 都重新 <code>setFooter</code>（第 297 行），页脚槽是“最后一个赢”（第 02 篇），所以只要 agent 动一下任务，tilldone 就会把别的扩展（minimal、tool-counter）的页脚抢回来，也会挡住 theme-cycler 的状态。<code>tool_call</code> 门和第 05 篇 damage-control 叠加时，谁先 <code>-e</code> 谁先问，任何一个 block 就生效。</div>
+
+<h2 id="sum">小结</h2>
+<p>tilldone 把扩展能挂的位置几乎用了一遍：用 <code>registerTool</code> 给模型一个新工具，用 <code>tool_call</code> 在 run 内循环里设门，用工具结果的 <code>details</code> 把状态存进会话树，用 <code>agent_end</code> + <code>triggerTurn</code> 让 settle 外循环再转一圈，再用 <code>input</code> 给续跑节流。下一篇 <code>agent-team.ts</code> 换到编排：注册的工具会启动子代理，并用 <code>setActiveTools</code> 控制主 agent 能做什么。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [49, 'const TillDoneParams = Type.Object({', 'l2', '工具参数的 schema（typebox）。Pi 用它生成给模型的参数声明，并在 <code>prepareToolCall</code> 里校验。'],
+  [60, 'const NEXT_STATUS: Record<TaskStatus, TaskStatus> = { idle: "inprogress", inprogress: "done", done: "idle" };', 'l3', 'toggle 是三态循环：idle → inprogress → done → idle。'],
+  [159, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调用。下面 5 个闭包变量是全部状态。'],
+  [164, '	let nudgedThisCycle = false;', 'l3', '本次提问是否已经催过。只在 input 时清零。'],
+  [168, '	const makeDetails = (action: string, error?: string): TillDoneDetails => ({', 'l3', '每次工具调用都把完整状态放进结果的 details，状态因此跟着会话树走。'],
+  [170, '		tasks: [...tasks],', 'l3', '⚠ 浅拷贝：数组是新的，Task 对象是同一批。之后原地改对象会改到历史结果。'],
+  [218, '		ctx.ui.setFooter((tui, theme, footerData) => {', 'l4', '每次 refreshUI 都重新装页脚：旧页脚 dispose、新页脚挂上。页脚槽“最后一个赢”，所以会反复抢走别人的页脚。'],
+  [289, '			ctx.ui.setStatus("📋 TillDone: no tasks", "tilldone");', 'l4', '⚠ 参数写反：key 是这段文字，值是 "tilldone"。'],
+  [293, '			ctx.ui.setStatus(`${label}: ${tasks.length} tasks (${remaining} remaining)`, "tilldone");', 'l4', '⚠ 同上，而且文字每次不同，状态条目越积越多。'],
+  [302, '	const reconstructState = (ctx: ExtensionContext) => {', 'l3', '从会话分支重建：沿 <code>getBranch()</code> 找最后一个 tilldone 结果的 details。'],
+  [308, '		for (const entry of ctx.sessionManager.getBranch()) {', 'l1', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>getBranch</code></a>：根 → 当前叶子。/tree 换了叶子，就读到另一条分支上的快照。'],
+  [315, '				tasks = details.tasks;', 'l3', '⚠ 直接拿历史条目里的数组当当前状态（没拷贝），之后的 push / 原地修改都会改到那条历史结果。'],
+  [325, '	pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。resume、fork 在 1.4.0 也走这里（reason 区分）。'],
+  [329, '	pi.on("session_switch", async (_event, ctx) => reconstructState(ctx));', 'l2', '1.4.0 没有这个事件，永远不触发。'],
+  [331, '	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));', 'hit', '/tree 导航后（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L4202"><code>agent-session.ts:4202</code></a>），循环外：按新分支重建。'],
+  [335, '	pi.on("tool_call", async (event, _ctx) => {', 'hit', '<span class="tag inner">run 内循环</span>每个工具执行前（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>agent-loop.ts:739</code></a>）。和第 05 篇一样返回 block，但不 abort，reason 能到达模型（同第 06 篇）。'],
+  [336, '		if (event.toolName === "tilldone") return { block: false };', 'l3', '自己的工具永远放行，否则没法建任务。'],
+  [353, '		if (active.length === 0) {', 'l3', '有未完成任务但没有进行中的：要求先 toggle。并行批次里这一步会看不到同批 toggle 的结果。'],
+  [365, '	pi.on("agent_end", async (_event, _ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a>：<span class="tag outer">settle 外循环</span>，每个 run 结束 1 次。不看 event（包括是否被中止）。'],
+  [367, '		if (incomplete.length === 0 || nudgedThisCycle) return;', 'l3', '全做完，或者这次提问已经催过：不催，外循环停稳。'],
+  [375, '		pi.sendMessage(', 'l2', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L384"><code>loader.ts:384</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>sendCustomMessage</code></a>：此时还算在跑，消息作为 steer 入队（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2376"><code>:2376</code></a>）。'],
+  [381, '			{ triggerTurn: true },', 'hit', '要求它触发一轮。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2014"><code>_handlePostAgentRun</code></a> 看到队列里有消息 → <code>agent.continue()</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1903"><code>:1903</code></a>）：外循环第 2 圈。'],
+  [385, '	pi.on("input", async () => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a>：每条用户消息清零“已催过”，然后放行。'],
+  [392, '	pi.registerTool({', 'hit', '第一次出现的接口。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>：登记工具定义，Pi 把它加进工具注册表，名字、描述、参数随系统提示词和工具声明发给模型。'],
+  [403, '		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {', 'hit', '模型调用 tilldone 时，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a> 调到这里：<span class="tag inner">run 内循环</span>的工具阶段。返回的 content 给模型看，details 给扩展和 UI。'],
+  [415, '						const confirmed = await ctx.ui.confirm(', 'l4', '工具执行到一半等用户确认：这个 turn 的工具阶段停在这里，最多 30 秒。'],
+  [500, '					task.status = NEXT_STATUS[task.status];', 'l3', '⚠ 原地修改对象：之前结果里 details 引用的同一个 Task 也变了。'],
+  [507, '								t.status = "idle";', 'l3', '同一时间只允许一个进行中：其他的自动降为 idle。'],
+  [619, '		renderCall(args, theme) {', 'l4', '自定义工具调用在聊天区的显示。renderResult（第 628 行）同理，读的是 details。'],
+  [713, '	pi.registerCommand("tilldone", {', 'hit', '命令，循环外（同第 07 篇）。'],
+  [721, '			await ctx.ui.custom<void>((_tui, theme, _kb, done) => {', 'l4', '没有 <code>overlay: true</code>：组件占编辑器的位置，而不是浮在上面。'],
+];
+WT.source(SRC);
+
+// ─────────── tilldone 状态逻辑复刻（第 160–323 行 + 工具分支） ───────────
+const ICON = { idle: '○', inprogress: '●', done: '✓' };
+const NEXT = { idle: 'inprogress', inprogress: 'done', done: 'idle' };
+function newExt() { return { tasks: [], nextId: 1, listTitle: undefined, listDescription: undefined, history: [] }; }
+function makeDetails(x, action) { return { action, tasks: [...x.tasks], nextId: x.nextId, listTitle: x.listTitle, listDescription: x.listDescription }; } // 第 168–175 行
+function record(x, action, label) { const d = makeDetails(x, action); x.history.push({ label, details: d, disk: JSON.stringify(d) }); }
+const ACT = {
+  newList(x, title) { x.tasks = []; x.nextId = 1; x.listTitle = title; x.listDescription = undefined; record(x, 'new-list', `new-list "${title}"`); },
+  add(x, items) { for (const it of items) x.tasks.push({ id: x.nextId++, text: it, status: 'idle' }); record(x, 'add', `add ${items.length}`); },
+  toggle(x, id) {
+    const t = x.tasks.find(t => t.id === id); if (!t) return `Task #${id} not found`;
+    t.status = NEXT[t.status];
+    if (t.status === 'inprogress') for (const o of x.tasks) if (o.id !== id && o.status === 'inprogress') o.status = 'idle';
+    record(x, 'toggle', `toggle #${id} → ${t.status}`);
+  },
+  update(x, id) { const t = x.tasks.find(t => t.id === id); if (!t) return `Task #${id} not found`; t.text = t.text + '（改）'; record(x, 'update', `update #${id}`); },
+  remove(x, id) { const i = x.tasks.findIndex(t => t.id === id); if (i < 0) return `Task #${id} not found`; x.tasks.splice(i, 1); record(x, 'remove', `remove #${id}`); },
+  clear(x) { x.tasks = []; x.nextId = 1; x.listTitle = undefined; record(x, 'clear', 'clear'); },
+};
+function gate(x, tool) { // 第 335–361 行
+  if (tool === 'tilldone') return null;
+  if (x.tasks.length === 0) return '🚫 No TillDone tasks defined. You MUST use `tilldone new-list` or `tilldone add` …';
+  if (x.tasks.every(t => t.status === 'done')) return '🚫 All TillDone tasks are done. You MUST use `tilldone add` …';
+  if (!x.tasks.some(t => t.status === 'inprogress')) return '🚫 No task is in progress. You MUST use `tilldone toggle` …';
+  return null;
+}
+function reconstruct(x, upto) { // 第 302–323 行，读到第 upto 条为止（模拟 /tree 回到那里）
+  x.tasks = []; x.nextId = 1; x.listTitle = undefined;
+  for (let i = 0; i <= upto; i++) { const d = x.history[i].details; x.tasks = d.tasks; x.nextId = d.nextId; x.listTitle = d.listTitle; }
+}
+function footerRows(x) { // 第 224–281 行（近似）
+  const done = x.tasks.filter(t => t.status === 'done').length, act = x.tasks.filter(t => t.status === 'inprogress').length, idle = x.tasks.length - done - act;
+  const title = x.listTitle ? ` ${x.listTitle} ` : ' TillDone ';
+  if (!x.tasks.length) return [[title + 'no tasks', 'dim']];
+  const rows = [[`${title}[${done}/${x.tasks.length}]` + ' '.repeat(18) + `○ ${idle}  ● ${act}  ✓ ${done}`, 'sw-acc']];
+  const vis = [...x.tasks.filter(t => t.status === 'inprogress'), ...x.tasks.filter(t => t.status === 'done').reverse()].slice(0, 5);
+  vis.forEach(t => rows.push([` ${ICON[t.status]} ${t.text}`, t.status === 'done' ? 'dim' : 'sw-ok']));
+  if (x.tasks.length > vis.length) rows.push([`   +${x.tasks.length - vis.length} more`, 'dim']);
+  return rows;
+}
+
+// ─────────── 双循环动画 ───────────
+// 补丁 { op } 由 onStep 执行：new / add / toggle1 / toggle2 / done1 …；{ blocked } 记一次被拦；{ nudge } 记一次催办
+const SCN = {
+  normal: [
+    ['session', 'session_start → reconstructState', '', {}, '新会话，没有 tilldone 结果：任务为空，装上页脚'],
+    ['input', 'input → nudged = false', '', {}, '用户：把 auth 模块改成 JWT'],
+    ['bas', 'before_agent_start', 'outer', {}, '未订阅；工具描述已在系统提示词里'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：read src/auth.ts'],
+    ['tools', 'tool_call (read) → block', 'inner', { blockMsg: 'No TillDone tasks defined' }, '门：没有任务 → reason 成为 toolResult，没有 abort'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：tilldone new-list + tilldone add ×3'],
+    ['tools', 'tilldone.execute ×2', 'inner', { op: 'plan' }, '工具执行：任务落进 details，refreshUI 重装页脚'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 3', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：tilldone toggle #1'],
+    ['tools', 'tilldone.execute (toggle)', 'inner', { op: 'toggle1' }, '#1 → inprogress，widget 显示 WORKING ON #1'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 4', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：edit src/auth.ts'],
+    ['tools', 'tool_call (edit) → 放行', 'inner', {}, '有进行中的任务：门放行，edit 执行'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 5', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“改好了。”没有 toolCall（#1 还没标完成，#2、#3 没做）'],
+    ['tend', 'turn_end', 'inner', {}, 'run 内循环结束'],
+    ['aend', 'agent_end → sendMessage(triggerTurn)', 'outer', { nudge: true }, '3 个未完成 → 催办消息作为 steer 入队，nudged = true'],
+    ['post', '_handlePostAgentRun：hasQueuedMessages', 'outer', {}, 'agent-session.ts:2014 → agent.continue()：外循环第 2 圈'],
+    ['astart', 'agent_start', 'outer', {}, 'run #2：输入是催办消息', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：tilldone toggle #1（→ done）'],
+    ['tools', 'tilldone.execute (toggle)', 'inner', { op: 'done1' }, '#1 完成；#2、#3 仍是 idle'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“#2、#3 需要你确认数据库迁移方案再继续。”'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, '还有 2 个未完成，但这次提问已经催过：不再催'],
+    ['post', '_handlePostAgentRun', 'outer', {}, '队列为空'],
+    ['settle', 'agent_before_settle', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳：1 次 settle，2 个 run'],
+  ],
+  batch: [
+    ['session', 'session_start → reconstructState', '', { op: 'plan' }, '假设已有 3 个 idle 任务（从上次的 details 恢复）'],
+    ['input', 'input', '', {}, '用户：开始做第一项'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '一条回复里两个 toolCall：tilldone toggle #1、read src/auth.ts'],
+    ['tools', 'prepare #1：tool_call (tilldone) → 放行', 'inner', {}, 'agent-loop.ts:614：并行模式先逐个 prepare'],
+    ['tools', 'prepare #2：tool_call (read) → block', 'inner', { blockMsg: 'No task is in progress' }, 'toggle 还没执行：没有进行中的任务 → read 被拦'],
+    ['tools', '执行：tilldone toggle', 'inner', { op: 'toggle1' }, 'agent-loop.ts:656：prepare 全部结束后才执行'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '模型读到 block reason，重发 read'],
+    ['tools', 'tool_call (read) → 放行', 'inner', {}, '这次 #1 已是 inprogress'],
+    ['tend', 'turn_end', 'inner', {}, '多花了一个 turn'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+WT.loops({
+  hit: ['session', 'input', 'tools', 'aend'],
+  sub: { input: 'input：重置“已催过”', tools: 'tool_call 门 + tilldone 工具', aend: 'agent_end → 催办续跑' },
+  legend: [
+    '橙框 = tilldone 用到的回调：session_start / session_tree 重建状态，input 清零催办标记，tools 格是 tool_call 门和 tilldone 工具执行，agent_end 发催办。',
+    '催办让外循环从 _handlePostAgentRun 经 agent.continue() 回到 agent_start（图中“↻ agent.continue() → 新 run”那条线）。页脚 / widget 的 render() 不在图里。',
+  ],
+  scenes: SCN,
+  state: () => ({ x: newExt(), blocked: 0, nudges: 0, last: '' }),
+  onStep(st, s) {
+    const x = st.x, op = s.patch.op;
+    if (op === 'plan') { ACT.newList(x, 'Auth → JWT'); ACT.add(x, ['改 token 生成', '迁移 session 表', '更新登录接口']); }
+    if (op === 'toggle1') ACT.toggle(x, 1);
+    if (op === 'done1') ACT.toggle(x, 1);
+    if (s.patch.blockMsg) { st.blocked++; st.last = '🚫 ' + s.patch.blockMsg; }
+    if (s.patch.nudge) { st.nudges++; st.last = '⚠️ You still have ' + x.tasks.filter(t => t.status !== 'done').length + ' incomplete task(s) … Don\'t stop until it\'s done!'; }
+  },
+  logTag: s => /tool_call|tilldone|agent_end|input|session_start/.test(s.event) && !/放行$/.test(s.event) ? '<span class="tag hit">本扩展</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    const x = st.x, rows = [];
+    if (st.last) rows.push([' ' + st.last, st.last.startsWith('🚫') ? 'sw-wrn' : 'sw-acc'], ['', '']);
+    const cur = x.tasks.find(t => t.status === 'inprogress');
+    rows.push([' ─'.repeat(30), 'dim'], [' > ', 'dim'], [' ─'.repeat(30), 'dim']);
+    if (cur) rows.push([` ● WORKING ON  #${cur.id}  ${cur.text}`, 'sw-ok']);
+    rows.push(...footerRows(x).map(([t, c]) => [' ' + t, c]));
+    paintLines(foot1, rows);
+    WT.flash(foot1);
+    rc.textContent = `门拦下 ${st.blocked} 次 · 催办 ${st.nudges} 次 · 会话里 tilldone 结果 ${x.history.length} 条`;
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 内循环链 + 外循环续跑链 ───────────
+const CHIPS = {
+  footer:   ['setFooter + setWidget（每次 refreshUI）', 110, 235, 51, 1],
+  confirm:  ['confirm（new-list / clear）', 357, 175, 51, 1],
+  overlay:  ['/tilldone 面板', 544, 95, 51, 1],
+  render:   ['renderResult', 651, 90, 51, 1],
+  recon:    ['reconstructState（302–323）', 110, 170, 147, 1],
+  gate:     ['tool_call 门（335–361）', 292, 145, 147, 1],
+  exec:     ['execute（403–617）', 449, 120, 147, 1],
+  nudge:    ['agent_end 催办（365–383）', 581, 155, 147, 1],
+  loader:   ['loader · jiti', 110, 100, 243, 1],
+  reg:      ['registerTool · on ×7 · cmd', 222, 170, 243, 1],
+  emittc:   ['runner.emitToolCall', 404, 130, 243, 1],
+  sendmsg:  ['pi.sendMessage(triggerTurn)', 546, 175, 243, 1],
+  sess:     ['AgentSession', 110, 100, 339, 1],
+  prep:     ['prepareToolCall', 222, 110, 339, 1],
+  exectool: ['executePreparedToolCall', 344, 155, 339, 1],
+  append:   ['appendMessage（存引用）', 511, 150, 339, 1],
+  cont:     ['agent.continue()', 673, 115, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/tilldone.ts -e extensions/theme-cycler.ts</code>。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），第 159 行：任务为空。'],
+  ['reg', '<span class="tag l2">L2</span> 登记 7 个事件、<code>/tilldone</code> 命令，以及 <code>registerTool</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>）：tilldone 工具进入注册表，描述和参数随系统提示词发给模型。'],
+  ['recon', '<span class="tag l3">L3</span> <code>session_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>）→ <code>reconstructState</code>：沿分支找最后一个 tilldone 结果，恢复任务。'],
+  ['footer', '<span class="tag l4">L4</span> <code>refreshUI</code>：装页脚（替换内置页脚）、按需挂 belowEditor 的 widget、写状态（参数写反了）。<br><b>启动链结束。下面是 run 内循环。</b>'],
+  ['prep', '<span class="tag l1">L1</span> 模型发 <code>read</code>：<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L718"><code>prepareToolCall</code></a> 调 <code>beforeToolCall</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>:739</code></a>）。'],
+  ['emittc', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a> 调到第 335 行。'],
+  ['gate', '<span class="tag l3">L3</span> 门：没有任务 → <code>{ block: true, reason }</code>。没有 abort，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L755"><code>agent-loop.ts:755</code></a> 把 reason 写进 toolResult，下一个 turn 模型读到。'],
+  ['exectool', '<span class="tag l1">L1</span> 模型改发 <code>tilldone add</code>：门放行，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L831"><code>executePreparedToolCall</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a> 调扩展的 execute。'],
+  ['exec', '<span class="tag l3">L3</span> 第 460–483 行：建任务，返回 <code>{ content, details: makeDetails("add") }</code>，并 refreshUI。'],
+  ['append', '<span class="tag l1">L1</span> toolResult 落盘：文件里写下此刻的 JSON（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1187"><code>session-manager.ts:1187</code></a>），内存里的条目保存的却是 details 对象本身。'],
+  ['render', '<span class="tag l4">L4</span> 工具结果组件用 <code>renderResult</code> 画 “✓ Added task #1…”。<br><b>下面是 run 结束后的外循环。</b>'],
+  ['nudge', '<span class="tag l3">L3</span> <code>agent_end</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a>）：还有未完成任务、这次提问没催过 → 拼催办文字。'],
+  ['sendmsg', '<span class="tag l2">L2</span> <code>pi.sendMessage(…, { triggerTurn: true })</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>sendCustomMessage</code></a>：run 仍算在跑，作为 steer 入队（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2376"><code>:2376</code></a>）。'],
+  ['sess', '<span class="tag l1">L1</span> <code>agent.prompt</code> 返回，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2014"><code>_handlePostAgentRun</code></a> 发现队列里有 agent_end 之后排进来的消息，返回 true。'],
+  ['cont', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1903"><code>agent.continue()</code></a>：<b>settle 外循环第 2 圈</b>，新 run 以催办消息开头。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+let sim = newExt(), simMsg = '', treeView = null;
+function refreshTreeSelect() {
+  const sel = $('t-idx'); sel.textContent = '';
+  sim.history.forEach((h, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${i + 1}（${h.label}）`; sel.appendChild(o); });
+}
+function drawSim() {
+  const rows = [];
+  rows.push([' 内存里的 tasks：', 'acc']);
+  if (!sim.tasks.length) rows.push(['   （空）', 'dim']);
+  sim.tasks.forEach(t => rows.push([`   ${ICON[t.status]} #${t.id} [${t.status}] ${t.text}`, t.status === 'inprogress' ? 'sw-ok' : t.status === 'done' ? 'dim' : '']));
+  const g = gate(sim, $('g-tool').value);
+  rows.push(['', ''], [` tool_call 门（${$('g-tool').value}）：${g ? 'block → ' + g : '放行'}`, g ? 'sw-wrn' : 'sw-ok']);
+  rows.push(['', ''], [` 会话里的 tilldone 结果（${sim.history.length} 条）：`, 'acc']);
+  sim.history.forEach((h, i) => {
+    const now = JSON.stringify(h.details), same = now === h.disk;
+    rows.push([`   ${i + 1}. ${h.label}  ${same ? '' : '⚠ 内存里的 details 已被后来的操作改过'}`, same ? 'dim' : 'sw-wrn']);
+  });
+  if (treeView) {
+    rows.push(['', ''], [` /tree 回到第 ${treeView.i + 1} 条之后：`, 'acc']);
+    rows.push(['   内存重建（同一进程）：' + treeView.mem, treeView.mem === treeView.disk ? 'sw-ok' : 'sw-wrn']);
+    rows.push(['   磁盘上那一刻（/resume 后）：' + treeView.disk, 'sw-ok']);
+  }
+  if (simMsg) rows.push(['', ''], [' ' + simMsg, 'sw-wrn']);
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  const drift = sim.history.filter(h => JSON.stringify(h.details) !== h.disk).length;
+  $('m-note').textContent = drift ? `${drift} 条历史结果在内存里已经和写入文件时不一样：/tree 回到它们时会看到“现在”的状态` : '';
+  simMsg = '';
+}
+const fmtTasks = ts => ts.length ? ts.map(t => `#${t.id}${ICON[t.status]}`).join(' ') : '（空）';
+const idOf = () => Number($('a-id').value);
+const act = (f) => { treeView = null; const r = f(); if (typeof r === 'string') simMsg = r; refreshTreeSelect(); drawSim(); };
+$('a-new').onclick = () => act(() => ACT.newList(sim, 'Auth refactor'));
+$('a-add').onclick = () => act(() => ACT.add(sim, ['改 token 生成', '迁移 session 表', '更新登录接口']));
+$('a-toggle').onclick = () => act(() => ACT.toggle(sim, idOf()));
+$('a-update').onclick = () => act(() => ACT.update(sim, idOf()));
+$('a-remove').onclick = () => act(() => ACT.remove(sim, idOf()));
+$('a-clear').onclick = () => act(() => ACT.clear(sim));
+$('a-reset').onclick = () => { sim = newExt(); treeView = null; refreshTreeSelect(); drawSim(); };
+$('t-go').onclick = () => {
+  if (!sim.history.length) return;
+  const i = Number($('t-idx').value);
+  const disk = JSON.parse(sim.history[i].disk);
+  reconstruct(sim, i);
+  treeView = { i, mem: fmtTasks(sim.tasks), disk: fmtTasks(disk.tasks) };
+  drawSim();
+};
+$('g-tool').addEventListener('input', drawSim);
+refreshTreeSelect();
+drawSim();
+</script>
+</body>
+</html>
