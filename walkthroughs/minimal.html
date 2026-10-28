@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>minimal.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 01</div>
+<h1>minimal.ts</h1>
+<p class="subtitle">在页脚显示模型名和 10 格上下文条。33 行，只订阅一个事件，没有订阅任何循环事件。<br>运行：<code>just ext-minimal</code></p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。源码里两个嵌套的 while 转的都是 turn。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div>
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：1 个 run，2 个 turn（带工具）</option>
+    <option value="compact">场景 B：compaction 触发第 2 个 run</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">minimal 页脚（实时）</div><div class="term" id="foot1"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>minimal</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a></td><td>✔</td></tr>
+<tr><td><code>input</code> · <code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a></td><td>–</td></tr>
+<tr><td><code>agent_start</code> · <code>agent_end</code></td><td><span class="tag outer">外</span> 每 run</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a></td><td>–</td></tr>
+<tr><td><code>agent_before_settle</code></td><td><span class="tag outer">外</span> 每 run 末</td><td>≤ N</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2017"><code>agent-session.ts:2017</code></a></td><td>–</td></tr>
+<tr><td><code>agent_settled</code></td><td><span class="tag outer">外</span> 出口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1084"><code>agent-session.ts:1084</code></a></td><td>–</td></tr>
+<tr><td><code>turn_start</code> · <code>turn_end</code></td><td><span class="tag inner">内</span> 每 turn</td><td>M</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>agent-loop.ts:216</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L296"><code>agent-loop.ts:296</code></a></td><td>–</td></tr>
+<tr><td><code>context</code></td><td><span class="tag inner">内</span> 每次调 LLM</td><td>M</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L400"><code>agent-loop.ts:400</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/sdk.ts#L431"><code>sdk.ts:431</code></a></td><td>–</td></tr>
+<tr><td><code>message_*</code> · <code>tool_*</code></td><td><span class="tag inner">内</span> 流式 / 工具</td><td>多</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L430"><code>agent-loop.ts:430</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L668"><code>agent-session.ts:668</code></a> / <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L690"><code>agent-session.ts:690</code></a></td><td>–</td></tr>
+<tr class="hl"><td><code>footer.render(width)</code></td><td>与循环异步</td><td>每帧</td><td><a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔</td></tr>
+</tbody></table></div>
+<p class="small muted">源码链接指向 <code>LearnTopEngSkills/vendor/pi</code>（Pi 1.4.0 · 4a08025）的 TS 源码。run 内部会自己处理 steering 和 follow-up；只有 retry、compaction、agent_end 之后才排进来的消息、或 before_settle 要求 continue，才会让外循环再开一个 run。想看 16 项接口的完整列表，读<a href="../../../../../docs/10-pi-harness/teach/lessons/0002-harness-dual-loops.html">第 2 课</a>。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>从 <code>pi -e</code> 启动到页脚出现，再到每帧拉取数据，共 10 步。按“下一步”看路径怎么在四层之间穿梭。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 10</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–7 步都在双循环启动之前；第 8–10 步每帧都会跑，跟循环并行。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>minimal 不写提示词，但它的进度条量的就是装配出来的上下文有多大。数据从左往右流动，minimal 在最下面读数。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 370" role="img" aria-label="提示词上下文：安装、控制、装配">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">安装 · 谁放进来</text>
+  <text class="bt" x="262" y="24" font-size="13" style="fill:var(--accent)">控制 · 谁能改</text>
+  <text class="bt" x="530" y="24" font-size="13" style="fill:var(--accent)">装配 · 怎么拼</text>
+
+  <g class="chip"><rect x="16" y="40" width="200" height="34" rx="7"/><text x="26" y="62" font-size="11.5"><tspan class="mono">system</tspan> · buildSystemPrompt</text><title>system-prompt.ts:128，按 section 生成，以 role:system 消息存进 transcript；工具集变化时 declareToolChanges 再插一条</title></g>
+  <g class="chip"><rect x="16" y="84" width="200" height="34" rx="7"/><text x="26" y="106" font-size="11.5"><tspan class="mono">user</tspan> · 编辑器输入（L4）</text></g>
+  <g class="chip"><rect x="16" y="128" width="200" height="34" rx="7"/><text x="26" y="150" font-size="11.5"><tspan class="mono">custom</tspan> · 扩展注入（L2）</text></g>
+  <g class="chip"><rect x="16" y="172" width="200" height="34" rx="7"/><text x="26" y="194" font-size="11.5"><tspan class="mono">assistant</tspan> · LLM，带 usage</text></g>
+  <g class="chip"><rect x="16" y="216" width="200" height="34" rx="7"/><text x="26" y="238" font-size="11.5"><tspan class="mono">toolResult</tspan> · 工具执行</text></g>
+
+  <g class="chip"><rect x="258" y="44" width="220" height="40" rx="7"/><text class="mono" x="268" y="61" font-size="11.5">input</text><text x="268" y="77" font-size="10" style="fill:var(--outer)">外循环入口 · 改写用户原文</text></g>
+  <g class="chip"><rect x="258" y="94" width="220" height="40" rx="7"/><text class="mono" x="268" y="111" font-size="11.5">before_agent_start</text><text x="268" y="127" font-size="10" style="fill:var(--outer)">每次 settle 1 次 · 动态系统提示词</text></g>
+  <g class="chip"><rect x="258" y="144" width="220" height="40" rx="7"/><text class="mono" x="268" y="161" font-size="11.5">context</text><text x="268" y="177" font-size="10" style="fill:var(--inner)">内循环每 turn · 改本次请求，不落盘</text></g>
+  <g class="chip"><rect x="258" y="194" width="220" height="40" rx="7"/><text class="mono" x="268" y="211" font-size="11.5">message_end</text><text x="268" y="227" font-size="10" style="fill:var(--inner)">内循环 · 替换刚落盘的消息</text></g>
+
+  <g class="chip"><rect x="526" y="54" width="170" height="44" rx="7"/><text class="mono" x="536" y="72" font-size="11.5">_prepareRun</text><text class="mut" x="536" y="89" font-size="10">sys补丁+user+custom</text></g>
+  <g class="chip"><rect x="526" y="124" width="170" height="54" rx="7"/><text class="mono" x="536" y="142" font-size="11">transformContext</text><text class="mono" x="536" y="157" font-size="11">→ convertToLlm</text><text x="536" y="171" font-size="10" style="fill:var(--inner)">每 turn</text></g>
+  <g class="chip"><rect x="726" y="124" width="80" height="54" rx="7"/><text x="766" y="156" text-anchor="middle" font-size="13" font-weight="700">LLM</text></g>
+
+  <path class="arrow flow" marker-end="url(#ah2)" d="M216,145 L256,145"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M478,114 L524,80"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M478,164 L524,152"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M611,98 L611,122"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M696,151 L724,151"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M766,178 L766,270 L222,270 L222,192 L218,192"/>
+  <text class="mut" x="470" y="264" font-size="10">回复 + 工具结果回到上下文（内循环下一 turn）</text>
+
+  <!-- 落盘 → 读数 -->
+  <path class="arrow flow" marker-end="url(#ah2)" d="M368,234 L368,312 L392,312"/>
+  <g class="chip"><rect x="394" y="294" width="150" height="36" rx="7"/><text x="404" y="316" font-size="11">SessionManager 落盘</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M544,312 L566,312"/>
+  <g class="chip"><rect x="568" y="294" width="120" height="36" rx="7"/><text class="mono" x="578" y="316" font-size="10.5">getContextUsage</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M688,312 L708,312"/>
+  <g class="chip hit"><rect x="710" y="294" width="102" height="36" rx="7"/><text x="720" y="316" font-size="11">minimal 页脚</text></g>
+  <text class="mut" x="394" y="350" font-size="10">基准 = 最后一条 assistant 的 usage，再加上之后消息的估算（compaction.ts:227）</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>上下文在哪变大</th><th>循环</th><th>页脚百分比</th></tr></thead>
+<tbody>
+<tr><td>用户消息 / steering / follow-up 写入</td><td><span class="tag inner">内</span> turn 开头</td><td>message_end 落盘后才跳（估算）</td></tr>
+<tr><td>assistant 流式输出（message_update）</td><td><span class="tag inner">内</span></td><td><b>不动</b>：页脚在重绘，但还没落盘</td></tr>
+<tr><td>assistant message_end（带 usage）</td><td><span class="tag inner">内</span> 每 turn</td><td>跳到<b>真实值</b>（provider 返回的 token 数）</td></tr>
+<tr><td>toolResult</td><td><span class="tag inner">内</span></td><td>跳（估算）</td></tr>
+<tr><td>compaction</td><td><span class="tag outer">外</span> run 之间</td><td>变成 null，显示 <b>0%</b>（实际是“未知”）</td></tr>
+<tr><td><code>context</code> 事件裁剪</td><td><span class="tag inner">内</span></td><td>不反映：只改本次请求，不落盘</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>下面这个模拟器用 JS 原样复刻了 minimal 的 <code>render()</code>，拖动滑块试试。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">模型 <select id="m-model"><option>claude-sonnet-5-5</option><option>gpt-5.5-codex</option><option value="">（未选）</option></select></label>
+    <label class="small">percent <input type="range" id="m-pct" min="0" max="130" value="30"> <span class="counter" id="m-pctv">30</span></label>
+    <label class="small"><input type="checkbox" id="m-null"> null（compaction 后）</label>
+    <label class="small">宽度 <input type="range" id="m-w" min="24" max="90" value="64"> <span class="counter" id="m-wv">64</span></label>
+    <label class="small"><input type="checkbox" id="m-fix"> 应用修复</label>
+  </div>
+  <div class="term" id="foot2"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>模型名</td><td><code>ctx.model?.id</code></td><td>getter <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L913"><code>runner.ts:913</code></a></td><td>选中的模型（不一定是 prepareRequest 路由后实际调用的）</td><td>dim 色，左对齐</td><td>与循环无关，<code>/model</code> 后下一帧</td></tr>
+<tr><td>上下文条</td><td><code>round(pct/10)</code></td><td><code>getContextUsage</code> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L949"><code>runner.ts:949</code></a></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L4297"><code>agent-session.ts:4297</code></a></td><td>右对齐</td><td><span class="tag inner">内</span> 每个 message_end；<span class="tag outer">外</span> compaction 后清零</td></tr>
+<tr><td>主题 / 标题</td><td><code>themeMap.ts</code>：synthwave</td><td><code>hasUI</code> 判断</td><td>–</td><td><code>setTheme</code>，150ms 后 <code>setTitle</code></td><td>循环外：session_start（/reload 时再来一次）</td></tr>
+<tr><td>自适应排版</td><td>无状态纯函数</td><td>–</td><td>–</td><td><code>visibleWidth</code> / <code>truncateToWidth</code></td><td>每帧，与循环异步</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：percent ≥ 105 时 render 抛异常。</b><code>getContextUsage</code> 不会把百分比限制在 100 以内，于是 <code>"-".repeat(10 - 11)</code> 抛 <code>RangeError</code>，页脚渲染失败。在模拟器里把 percent 拖到 105 就能复现。修复：<code>Math.min(10, Math.max(0, Math.round(pct / 10)))</code>。</div>
+
+<h2 id="sum">小结</h2>
+<p>minimal 在循环外（<code>session_start</code>）装好页脚，之后每次重绘时去 L2 的 <code>ctx</code> 拉 L1 的状态。它不订阅任何循环事件，也不碰提示词。下一篇 <code>pure-focus.ts</code>。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [13, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 加载扩展时调用 1 次。这时只登记 handler，什么都还没运行。'],
+  [14, '  pi.on("session_start", async (_event, ctx) => {', 'hit', '唯一的订阅。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 在启动时发 1 次，此时双循环还没开始。/reload 时会以 reason:"reload" 再发一次。'],
+  [15, '    applyExtensionDefaults(import.meta.url, ctx);', 'l3', 'themeMap.ts：设主题 synthwave，150ms 后把终端标题设成 “π - minimal”。多个扩展叠加时，只有第一个 -e 的扩展能设主题。'],
+  [16, '    ctx.ui.setFooter((_tui, theme, _footerData) => ({', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2524"><code>setExtensionFooter</code></a>：立即调用这个工厂，把组件挂进 footerContainer，再 requestRender。'],
+  [17, '      dispose: () => {},', 'l4', '没有定时器，也没有订阅，所以不需要释放任何东西。'],
+  [18, '      invalidate() {},', 'l4', '没有缓存，每帧都重新计算。'],
+  [19, '      render(width: number): string[] {', 'hit', '第二个回调点：TUI 每帧通过 Container.render（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a>）调用它。它和双循环异步，但几乎每个循环事件都会触发一次重绘。'],
+  [20, '        const model = ctx.model?.id || "no-model";', 'l2', 'ctx.model 是 getter（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L913"><code>runner.ts:913</code></a>），每次读都是当前值。'],
+  [21, '        const usage = ctx.getContextUsage();', 'l2', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L949"><code>runner.ts:949</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L4297"><code>agent-session.ts:4297</code></a>：从 SessionManager 的 projection 估算 token 数。'],
+  [22, '        const pct = (usage && usage.percent !== null) ? usage.percent : 0;', 'l3', 'compaction 之后、下一次 assistant 回复之前，percent 是 null，这里显示成 0（实际是“未知”）。'],
+  [23, '        const filled = Math.round(pct / 10);', 'l3', '⚠ 没有限制上限。pct ≥ 105 时 filled = 11。'],
+  [24, '        const bar = "#".repeat(filled) + "-".repeat(10 - filled);', 'l3', '⚠ filled = 11 时 "-".repeat(-1) 抛 RangeError。'],
+  [26, '        const left = theme.fg("dim", ` ${model}`);', 'l4', '用 theme 给文字着色，theme 由 setFooter 工厂传入。'],
+  [27, '        const right = theme.fg("dim", `[${bar}] ${Math.round(pct)}% `);', 'l4', '右半边：进度条加百分比。'],
+  [28, '        const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(right)));', 'l4', 'visibleWidth 计算宽度时会忽略 ANSI 颜色码；中间至少留 1 个空格。'],
+  [30, '        return [truncateToWidth(left + pad + right, width)];', 'l4', '返回一行文字交给 TUI；终端太窄时截断。'],
+];
+WT.source(SRC);
+
+// ─────────── minimal render() 复刻 ───────────
+function minimalRender(model, pct, width, fixed) {
+  const p = pct === null ? 0 : pct;
+  let filled = Math.round(p / 10);
+  if (fixed) filled = Math.min(10, Math.max(0, filled));
+  if (10 - filled < 0) throw new RangeError(`Invalid count value: ${10 - filled}`);
+  const bar = '#'.repeat(filled) + '-'.repeat(10 - filled);
+  const left = ` ${model || 'no-model'}`;
+  const right = `[${bar}] ${Math.round(p)}% `;
+  const pad = ' '.repeat(Math.max(1, width - left.length - right.length));
+  return (left + pad + right).slice(0, width);
+}
+
+// ─────────── 双循环动画 ───────────
+// [节点, 事件, 循环, 状态补丁, 说明, run+, turn+]；状态只有 pct（null = compaction 后的“未知”）
+const SCN = {
+  normal: [
+    ['session', 'session_start', '', { pct: 0 }, 'minimal 装上页脚，第一次 render'],
+    ['input', 'input', '', {}, '用户回车'],
+    ['bas', 'before_agent_start', 'outer', {}, '每次 settle 1 次：可以改系统提示词'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (user)', 'inner', { pct: 4 }, '用户消息落盘 → 百分比跳'],
+    ['llm', 'context → LLM', 'inner', {}, 'transformContext → convertToLlm → 请求'],
+    ['msg', 'message_update ×N', 'inner', {}, '流式输出：页脚在重绘，百分比不动'],
+    ['msg', 'message_end (assistant)', 'inner', { pct: 18 }, '带 usage 落盘 → 跳到真实值'],
+    ['tools', 'tool_call → tool_result', 'inner', { pct: 26 }, '工具结果落盘（估算）'],
+    ['tend', 'turn_end', 'inner', {}, '有工具结果 → 进入下一 turn'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_update ×N', 'inner', {}, '百分比不动'],
+    ['msg', 'message_end (assistant)', 'inner', { pct: 31 }, '没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, '没有工具 / steering / follow-up → run 结束'],
+    ['aend', 'agent_end', 'outer', {}, 'run #1 结束'],
+    ['post', '_handlePostAgentRun', 'outer', {}, '不需要 retry、compaction，也没有排队'],
+    ['settle', 'agent_before_settle', 'outer', {}, '没有扩展要求 continue'],
+    ['settled', 'agent_settled', 'outer', {}, '外循环退出 → 空闲'],
+  ],
+  compact: [
+    ['session', 'session_start', '', { pct: 71 }, '会话已经用了不少上下文'],
+    ['input', 'input', '', {}, '用户回车'],
+    ['bas', 'before_agent_start', 'outer', {}, '每次 settle 1 次'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', { pct: 84 }, ''],
+    ['tools', 'tool_call → tool_result', 'inner', { pct: 93 }, '工具输出很大'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', { pct: 97 }, '接近上限'],
+    ['tend', 'turn_end', 'inner', {}, 'run 结束'],
+    ['aend', 'agent_end', 'outer', {}, 'run #1 结束'],
+    ['post', '_handlePostAgentRun', 'outer', { pct: null }, '超过阈值 → 自动 compaction → percent 变 null，页脚显示 0%'],
+    ['astart', 'agent_start', 'outer', {}, 'agent.continue() → run #2（外循环第 2 圈）', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', { pct: 14 }, '压缩后第一次有 usage → 百分比恢复'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, 'run #2 结束'],
+    ['post', '_handlePostAgentRun', 'outer', {}, '没有需要处理的'],
+    ['settle', 'agent_before_settle', 'outer', {}, '不 continue'],
+    ['settled', 'agent_settled', 'outer', {}, '一次 settle，2 个 run'],
+  ],
+};
+const foot1 = document.getElementById('foot1');
+WT.loops({
+  hit: ['session'],
+  legend: '橙框 = minimal 用到的回调。另一个是 footer.render()：不在图里，几乎每个事件都会让 TUI requestRender()，重绘时调用它。',
+  scenes: SCN,
+  state: () => ({ pct: 0 }),
+  // input / before_agent_start / _handlePostAgentRun 不触发重绘，除非这一步改了 pct
+  preview(st, s) {
+    if (!['input', 'post', 'bas'].includes(s.node) || 'pct' in s.patch) {
+      foot1.textContent = minimalRender('claude-sonnet-5-5', st.pct, 60, false);
+      WT.flash(foot1);
+    }
+  },
+  idle() { foot1.textContent = '（还没启动）'; },
+});
+
+// ─────────── 四层启动链 ───────────
+// [文字, x, 宽, 层中心 y, 是否用到]
+const CHIPS = {
+  bind:   ['bindCurrentSessionExtensions', 165, 190, 51, 1],
+  setft:  ['setExtensionFooter', 368, 135, 51, 1],
+  render: ['TUI.doRender → render()', 516, 160, 51, 1],
+  theme:  ['theme.fg / truncate', 688, 120, 51, 1],
+  biz:    ['条形图 + 排版（minimal:20–30）', 170, 230, 147, 1],
+  tmap:   ['applyExtensionDefaults（themeMap）', 420, 250, 147, 1],
+  loader: ['loader · jiti', 170, 165, 243, 1],
+  on:     ['pi.on', 350, 60, 243, 1],
+  emit:   ['runner.emit', 425, 120, 243, 1],
+  ctx:    ['ctx.model / getContextUsage', 560, 200, 243, 1],
+  sess:   ['AgentSession', 170, 110, 339, 1],
+  gcu:    ['getContextUsage', 295, 160, 339, 1],
+  sm:     ['SessionManager projection', 470, 180, 339, 1],
+  loop:   ['agent-loop 双循环（未直接用）', 660, 150, 339, 0],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/minimal.ts</code> 创建 AgentSession。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 即时编译 .ts（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L584"><code>loader.ts:584</code></a>），调用 <code>factory(pi)</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），也就是 minimal 第 13 行。'],
+  ['on', '<span class="tag l2">L2</span> <code>pi.on("session_start")</code> 只<b>登记</b> handler，不执行。'],
+  ['bind', '<span class="tag l4">L4</span> 交互模式构造 UI 上下文，<code>setFooter</code> 指向 <code>setExtensionFooter</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1973"><code>interactive-mode.ts:1973</code></a> / <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2651"><code>interactive-mode.ts:2651</code></a>）。'],
+  ['emit', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 发出 <code>session_start</code>，minimal 第 14 行拿到 <code>ctx</code>。'],
+  ['tmap', '<span class="tag l3">L3</span> <code>applyExtensionDefaults</code>：主题 synthwave，标题 “π - minimal”。'],
+  ['setft', '<span class="tag l4">L4</span> <code>setExtensionFooter</code> 调工厂得到组件，挂进 footerContainer，<code>requestRender()</code>。<br><b>从下一步开始每帧都会跑，与双循环并行。</b>'],
+  ['render', '<span class="tag l4">L4</span> TUI <code>doRender</code> → <code>render(width)</code>（minimal 第 19 行）。双循环里几乎每个事件都会触发重绘。'],
+  ['ctx', '<span class="tag l2">L2</span> render 内读 <code>ctx.model</code> 和 <code>ctx.getContextUsage()</code>，这两个都是实时 getter。'],
+  ['gcu', '<span class="tag l1">L1</span> <code>getContextUsage</code> 从 SessionManager 的 projection 估算 token 数；数据来自内循环每个 <code>message_end</code> 的落盘。回到 L3 画成进度条（第 22–24 行）。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [150, 339] });
+
+// ─────────── 页脚模拟器 ───────────
+const $ = id => document.getElementById(id);
+function drawSim() {
+  const isNull = $('m-null').checked;
+  const p = isNull ? null : Number($('m-pct').value);
+  const w = Number($('m-w').value);
+  $('m-pctv').textContent = isNull ? 'null' : p; $('m-wv').textContent = w;
+  const f = $('foot2'), note = $('m-note');
+  try {
+    f.textContent = minimalRender($('m-model').value, p, w, $('m-fix').checked);
+    f.classList.remove('err');
+    note.textContent = isNull ? 'percent 为 null → 显示 0%，实际含义是“未知”。'
+      : p > 100 ? '超过 100%：上下文已经溢出，修复后进度条封顶在 10 格。' : '';
+  } catch (e) {
+    f.textContent = `✖ render() 抛出 ${e.name}: ${e.message}`;
+    f.classList.add('err');
+    note.textContent = '页脚渲染失败。勾选“应用修复”看效果。';
+  }
+}
+['m-model', 'm-pct', 'm-null', 'm-w', 'm-fix'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>

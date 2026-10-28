@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tool-counter.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 04</div>
+<h1>tool-counter.ts</h1>
+<p class="subtitle">用一个两行的自定义页脚顶替内置页脚：第一行是模型、上下文条、token 和成本，第二行是目录、git 分支和工具计数。102 行，订阅 <code>session_start</code> 和 <code>tool_execution_end</code>，另外在页脚工厂里订阅了 <code>footerData.onBranchChange</code>。前三篇的数据各只有一个来源，这一篇的页脚同时读四个：事件流、会话树、上下文估算和 git HEAD。<br>运行：<code>just ext-tool-counter</code></p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。结构仍是“事件写、渲染读”，只是 render 不光读闭包：第 39 行每帧遍历会话树，第 50 行读 git 分支，第 53 行读上下文估算。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+本扩展的回调点：<code>session_start</code> 在循环外；<code>tool_execution_end</code> 在 <b>run 内循环</b>的工具阶段（每个工具 1 次）；<code>render()</code> 和 <code>onBranchChange</code> 回调都与循环异步。token 和成本没有订阅任何事件，是 render 自己去会话树里数的，所以它们在 <code>message_end</code> 落盘之后的那一帧才变。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：1 个 run，3 个 turn（两行各在什么时候变）</option>
+    <option value="resume">场景 B：/resume 旧会话，工具里切 git 分支，再 /reload</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">页脚（实时，宽 72 列）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 装页脚</td></tr>
+<tr><td><code>input</code> · <code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>:1935</code></a></td><td>–</td></tr>
+<tr><td><code>agent_start</code> · <code>agent_end</code></td><td><span class="tag outer">外</span> 每 run</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>:329</code></a></td><td>–</td></tr>
+<tr><td><code>agent_before_settle</code> · <code>agent_settled</code></td><td><span class="tag outer">外</span> 出口</td><td>≤ N · 1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2017"><code>agent-session.ts:2017</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1084"><code>:1084</code></a></td><td>–</td></tr>
+<tr><td><code>turn_*</code> · <code>context</code></td><td><span class="tag inner">内</span> 每 turn</td><td>M</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>agent-loop.ts:216</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L400"><code>:400</code></a></td><td>–</td></tr>
+<tr><td><code>message_end</code></td><td><span class="tag inner">内</span> 每条消息</td><td>多</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1147"><code>agent-session.ts:1147</code></a>（随后 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1165"><code>:1165</code></a> appendMessage 落盘）</td><td>未订阅，但第 1 行靠它落盘的 assistant 消息变</td></tr>
+<tr><td><code>tool_call</code> · <code>tool_execution_start</code></td><td><span class="tag inner">内</span> 每个工具，执行前</td><td>K</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L668"><code>agent-session.ts:668</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L553"><code>agent-loop.ts:553</code></a> / <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L608"><code>:608</code></a></td><td>–</td></tr>
+<tr class="hl"><td><code>tool_execution_end</code></td><td><span class="tag inner">内</span> 每个工具，执行后</td><td>K</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L931"><code>agent-loop.ts:931</code></a>；桥接 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1370"><code>agent-session.ts:1370</code></a></td><td>✔ 计数（第 2 行右侧）</td></tr>
+<tr class="hl"><td><code>footer.render(width)</code></td><td>与循环异步</td><td>每帧</td><td><a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔ 读四个来源，拼两行</td></tr>
+<tr class="hl"><td><code>onBranchChange</code> 回调</td><td>与循环异步</td><td>git HEAD 变一次 1 次（通常 0）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L197"><code>footer-data-provider.ts:197</code></a> ← HEAD 目录监听 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L316"><code>:316</code></a></td><td>✔ <code>requestRender()</code></td></tr>
+<tr class="hl"><td><code>dispose()</code></td><td>循环外</td><td>0（换页脚或 /reload 时 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2531"><code>interactive-mode.ts:2531</code></a> ← <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2464"><code>:2464</code></a></td><td>✔ 退订 onBranchChange</td></tr>
+</tbody></table></div>
+<p class="small muted">为什么 <code>message_end</code> 之后的那一帧就能看到新 token：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1144"><code>agent-session.ts:1144</code></a> 先通知 UI，UI 调 <code>requestRender()</code>，但它只是 <code>process.nextTick</code> 排一帧（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L1035"><code>tui.ts:1035</code></a>）；同一个同步段里 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1165"><code>:1165</code></a> 已经把消息 <code>appendMessage</code> 进会话树，等那一帧真正画的时候 <code>getBranch()</code> 里已经有它了。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–9 步是启动链（循环外），到页脚装好、git 监听登记完为止。后面是三条运行链：第 10–14 步是一次工具调用写计数，第 15–19 步是一条 assistant 消息落盘后页脚去读它，第 20–21 步是 git 分支变化。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、运行链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 21</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–9 步在双循环启动之前；第 10 步起是运行中会反复走的三条链。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>tool-counter 不在安装、控制、装配任何一段：不写提示词，不改消息。但它的四个数据来源离上下文的远近不同，这是本篇要看清的地方。只有上下文条读的是“装配出来的上下文有多大”；token 和成本读的是会话树上的<b>原始记录</b>，compaction 之前的也算；工具计数和 git 分支跟上下文毫无关系。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 400" role="img" aria-label="页脚的四个数据来源与提示词上下文的关系">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">安装 · 控制 · 装配（本扩展都不碰）</text>
+  <g class="chip"><rect x="16" y="38" width="150" height="34" rx="7"/><text x="26" y="60" font-size="11"><tspan class="mono">system</tspan> · 不注册工具</text><title>system-prompt.ts:128 按 section 生成；工具段和不装时一样</title></g>
+  <g class="chip"><rect x="178" y="38" width="190" height="34" rx="7"/><text x="188" y="60" font-size="11"><tspan class="mono">input / before_agent_start</tspan></text><title>都未订阅</title></g>
+  <g class="chip"><rect x="380" y="38" width="120" height="34" rx="7"/><text class="mono" x="390" y="60" font-size="11">context</text><title>agent-loop.ts:400 → sdk.ts:431；未订阅</title></g>
+  <g class="chip"><rect x="526" y="32" width="190" height="46" rx="7"/><text class="mono" x="536" y="51" font-size="11">buildSessionContext</text><text class="mut" x="536" y="67" font-size="10">compaction 之后的消息 → LLM</text><title>session-manager.ts：LLM 看到的消息列表，压缩过的部分换成摘要</title></g>
+  <g class="chip"><rect x="736" y="32" width="70" height="46" rx="7"/><text x="771" y="60" text-anchor="middle" font-size="13" font-weight="700">LLM</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M716,55 L734,55"/>
+
+  <text class="bt" x="20" y="112" font-size="13" style="fill:var(--accent)">页脚的四个来源</text>
+  <!-- 来源 1：上下文估算 -->
+  <g class="chip"><rect x="16" y="126" width="220" height="44" rx="7"/><text class="mono" x="26" y="144" font-size="11">ctx.getContextUsage()</text><text class="mut" x="26" y="161" font-size="10">估算装配后的上下文 · compaction 后为 null</text><title>agent-session.ts:4297；compaction 之后、下一条 assistant 之前返回 percent: null</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M611,78 L611,100 L126,100 L126,124"/>
+  <text class="mut" x="300" y="95" font-size="10">只有这一项读“装配出来的上下文”</text>
+  <!-- 来源 2：会话树 -->
+  <g class="chip"><rect x="16" y="184" width="220" height="44" rx="7"/><text class="mono" x="26" y="202" font-size="11">sessionManager.getBranch()</text><text class="mut" x="26" y="219" font-size="10">根 → 当前叶子，含 compaction 之前</text><title>session-manager.ts:1469：沿 parentId 一路走到根；不经过 buildSessionContext</title></g>
+  <!-- 来源 3：事件流 -->
+  <g class="chip"><rect x="16" y="242" width="220" height="44" rx="7"/><text class="mono" x="26" y="260" font-size="11">tool_execution_end</text><text class="mut" x="26" y="277" font-size="10">事件流旁路 · 只进闭包</text><title>agent-loop.ts:931；不落盘，/reload 后归零</title></g>
+  <!-- 来源 4：git -->
+  <g class="chip"><rect x="16" y="300" width="220" height="44" rx="7"/><text class="mono" x="26" y="318" font-size="11">footerData.getGitBranch()</text><text class="mut" x="26" y="335" font-size="10">读 .git/HEAD · 与会话无关</text><title>footer-data-provider.ts:127，结果缓存，HEAD 变了才重读</title></g>
+
+  <path class="arrow flow" marker-end="url(#ah2)" d="M236,148 L318,148"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M236,206 L318,206"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M236,264 L318,264"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M236,322 L318,322"/>
+  <g class="chip"><rect x="320" y="132" width="180" height="32" rx="7"/><text x="330" y="152" font-size="11">pct → 10 格条 + %</text></g>
+  <g class="chip"><rect x="320" y="190" width="180" height="32" rx="7"/><text x="330" y="210" font-size="11">Σ usage.input / output / cost</text></g>
+  <g class="chip"><rect x="320" y="248" width="180" height="32" rx="7"/><text x="330" y="268" font-size="11">闭包 counts</text></g>
+  <g class="chip"><rect x="320" y="306" width="180" height="32" rx="7"/><text x="330" y="326" font-size="11">(branch)</text></g>
+
+  <path class="arrow flow" marker-end="url(#ah2)" d="M500,148 L548,176"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M500,206 L548,190"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M500,264 L548,284"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M500,322 L548,298"/>
+  <g class="chip hit"><rect x="550" y="160" width="256" height="44" rx="7"/><text x="560" y="178" font-size="11">第 1 行：模型 + 条 ｜ in / out / $</text><text class="mut" x="560" y="195" font-size="10">render() 每帧重算</text><title>tool-counter.ts:59–77</title></g>
+  <g class="chip hit"><rect x="550" y="268" width="256" height="44" rx="7"/><text x="560" y="286" font-size="11">第 2 行：目录 (分支) ｜ 工具计数</text><text class="mut" x="560" y="303" font-size="10">render() 每帧重算</text><title>tool-counter.ts:80–95</title></g>
+  <text class="mut" x="16" y="372" font-size="10">四条路都不回到上下文：LLM 看不到页脚上的任何数字。token / 成本和上下文条看起来都在说“用了多少”，但一个数的是历史账单，一个估的是下一次请求的大小。</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>页脚上的数</th><th>来源</th><th>和上下文的关系</th><th>compaction 之后</th><th>/reload、/resume 之后</th></tr></thead>
+<tbody>
+<tr><td>上下文条、%</td><td><code>ctx.getContextUsage()</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L4297"><code>agent-session.ts:4297</code></a></td><td>估算<b>装配后</b>的上下文（最后一条 assistant 的 usage + 之后的估算）</td><td>percent 为 null，显示 <code>0%</code>、条留 1 格（第 55 行的 <code>|| 1</code>）</td><td>从会话重算，不受影响</td></tr>
+<tr class="hl"><td>in / out / $</td><td><code>getBranch()</code> 里每条 assistant 的 <code>usage</code></td><td>不是上下文：是根到当前叶子路径上<b>所有</b>请求的账单，压缩掉的部分也算</td><td>不变（旧消息还在会话树上）</td><td>从会话重算：/resume 后显示旧会话的累计</td></tr>
+<tr class="hl"><td>工具计数</td><td>闭包 <code>counts</code></td><td>无关：事件旁路，不落盘</td><td>不变</td><td><b>归零</b>，显示 “waiting for tools”</td></tr>
+<tr><td>目录、(分支)</td><td><code>ctx.cwd</code>、<code>footerData.getGitBranch()</code></td><td>无关：读文件系统</td><td>不变</td><td>重新读 HEAD</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器用 JS 复刻了 <code>render()</code>：左边按钮往会话里加一条 assistant 消息、执行一个工具，或者改 git / 上下文状态。下方可以切到“内置页脚”对照，看同样的会话在 Pi 自带页脚里怎么显示。</p>
+<div class="card">
+  <div class="controls">
+    <button id="m-msg">+ assistant 回复（in 3.2k / out 210 / $0.0120）</button>
+    <button id="m-msgc">+ 命中缓存的回复（in 120 / cacheRead 30k / $0.0105）</button>
+  </div>
+  <div class="controls" id="m-tools"></div>
+  <div class="controls">
+    <button id="m-tree">/tree 回到上一条 assistant</button>
+    <button id="m-reload">/reload</button>
+    <label class="small">git <select id="m-git">
+      <option value="main" selected>main</option>
+      <option value="feat/footer">feat/footer</option>
+      <option value="detached">detached HEAD</option>
+      <option value="">不在 git 仓库</option>
+    </select></label>
+  </div>
+  <div class="controls">
+    <label class="small">上下文 % <input type="range" id="m-pct" min="0" max="120" value="18"> <span class="counter" id="m-pctv">18</span></label>
+    <label class="small"><input type="checkbox" id="m-null"> null（compaction 后）</label>
+    <label class="small"><input type="checkbox" id="m-fix"> 修复越界</label>
+    <label class="small">宽度 <input type="range" id="m-w" min="30" max="100" value="72"> <span class="counter" id="m-wv">72</span></label>
+  </div>
+  <div class="controls">
+    <label class="small">显示 <select id="m-view">
+      <option value="ext" selected>tool-counter 页脚</option>
+      <option value="builtin">内置页脚（对照）</option>
+    </select></label>
+  </div>
+  <div class="term" id="foot2"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：宽度按字符数算（真实用 <code>visibleWidth</code>，中日文字算 2 列）；内置页脚只复刻了 token / 成本 / 上下文那部分，格式按 <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/footer.ts#L180"><code>footer.ts:180</code></a> 起的几行写，省略了会话名、模型和扩展状态行。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>工具计数</td><td><code>counts[name]++</code>（第 23 行）</td><td><code>pi.on("tool_execution_end")</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1370"><code>agent-session.ts:1370</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1096"><code>runner.emit</code></a></td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L931"><code>emitToolExecutionEnd</code></a>，被拦截、出错也发</td><td>搭 UI 的 <code>requestRender</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L3605"><code>interactive-mode.ts:3605</code></a>）</td><td><span class="tag inner">内</span> 每执行完一个工具</td></tr>
+<tr><td>token / 成本</td><td>遍历分支累加 <code>usage.input</code>、<code>output</code>、<code>cost.total</code>（第 39–46 行）</td><td><code>ctx.sessionManager</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L905"><code>runner.ts:905</code></a>）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>getBranch</code></a>；新消息在 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1165"><code>agent-session.ts:1165</code></a> 落盘</td><td>每帧重算，没有缓存</td><td><span class="tag inner">内</span> assistant 的 message_end 之后那一帧</td></tr>
+<tr><td>上下文条</td><td><code>Math.round(pct / 10) || 1</code>（第 55 行）</td><td><code>ctx.getContextUsage</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L949"><code>runner.ts:949</code></a>）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L4297"><code>getContextUsage</code></a></td><td>success 色的 <code>#</code> + dim 色的 <code>-</code></td><td>每条消息落盘后（估算会跳）</td></tr>
+<tr><td>模型名</td><td><code>ctx.model?.id</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L913"><code>get model</code></a></td><td>当前模型</td><td>dim 色</td><td>切模型后的下一帧</td></tr>
+<tr><td>git 分支</td><td>有分支才拼 <code>(branch)</code>（第 82–84 行）</td><td>工厂第三个参数 <code>footerData</code>（只读视图）</td><td>–</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L127"><code>getGitBranch</code></a> 带缓存；HEAD 目录监听 → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L197"><code>notifyBranchChange</code></a></td><td>与循环异步：HEAD 变化后</td></tr>
+<tr><td>装页脚</td><td>工厂返回 <code>{ dispose, invalidate, render }</code></td><td><code>ctx.ui.setFooter</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2651"><code>interactive-mode.ts:2651</code></a></td><td>–</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2524"><code>setExtensionFooter</code></a>：先 dispose 旧页脚（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2531"><code>:2531</code></a>），清空容器（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2534"><code>:2534</code></a>），再调工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2537"><code>:2537</code></a>）</td><td>循环外：session_start</td></tr>
+<tr><td>主题 / 标题</td><td><code>themeMap.ts</code>：synthwave</td><td><code>hasUI</code> 判断；只有第一个 <code>-e</code> 设主题</td><td><code>settings.theme</code> 写盘（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/settings-manager.ts#L754"><code>settings-manager.ts:754</code></a>）</td><td><code>setTheme</code>，150ms 后 <code>setTitle</code>（“π - tool-counter”）</td><td>循环外：session_start</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>和 minimal 同一个 bug：percent ≥ 105 时 render 抛异常。</b>第 55–56 行照搬了 minimal 的写法，<code>getContextUsage</code> 不把百分比限制在 100 以内，于是 <code>"-".repeat(10 - 11)</code> 抛 <code>RangeError</code>（第 63 行还会再 repeat 一次）。上下文溢出、正需要看页脚的时候，页脚反而画不出来。模拟器里把上下文 % 拖到 105 就能复现。修法：<code>const filled = Math.min(10, Math.max(1, Math.round(pct / 10)));</code>，勾上“修复越界”看效果。</div>
+
+<div class="callout warn"><b>第 35 行的注释写错了。</b>它说第 1 行是 “cwd + branch (left), tokens + cost (right)”，实际第 1 行左边是模型和上下文条（第 52 行的注释才是对的），cwd 和分支在第 2 行。像是改布局时漏改的旧注释。修法：删掉第 35 行，保留第 52 行。</div>
+
+<div class="callout"><b>“in” 不含缓存，“$” 含缓存。</b>第 42 行只加 <code>usage.input</code>，而 pi-ai 的 <code>Usage</code> 把缓存读写单独放在 <code>cacheRead</code> / <code>cacheWrite</code>（<a href="../../../../../vendor/pi/packages/ai/src/types.ts#L459"><code>ai/src/types.ts:459</code></a>）；第 44 行的 <code>cost.total</code> 却包含了缓存的费用。开着 prompt caching 时，页脚会出现“in 很小、$ 不小”的组合。内置页脚把 <code>R</code>（cacheRead）和 <code>W</code>（cacheWrite）单独列出来（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/footer.ts#L183"><code>footer.ts:183</code></a>）。这是取舍不是错：本扩展想要的是简洁。模拟器里点“命中缓存的回复”再切到内置页脚对照。</div>
+
+<div class="callout"><b>只算当前分支，不算整棵树。</b>本扩展用 <code>getBranch()</code>：只数根到当前叶子的那条路。内置页脚用 <code>getEntries()</code> 数<b>所有</b>条目，还加上 compaction、branch_summary 的摘要请求费用（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/footer.ts#L124"><code>footer.ts:124</code></a>）。所以 <code>/tree</code> 回到早先的节点后，本扩展的 $ 会<b>变小</b>，而钱其实已经花了。两种都说得通：一个是“这条对话的成本”，一个是“这个会话文件的总账单”。另外内置页脚按 leafId 和条目数缓存统计结果（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/footer.ts#L102"><code>footer.ts:102</code></a> getSessionStats），本扩展每帧从头遍历；会话很长时，流式输出期间每帧都要走一遍整条分支。</div>
+
+<div class="callout"><b>两行的寿命不一样。</b>第 1 行全部从会话和运行时现算，第 2 行的工具计数活在闭包里。<code>/resume</code> 一个旧会话时，第 1 行立刻显示旧会话的累计 token 和成本，第 2 行却是 “waiting for tools”。这不是 bug，但读者容易以为两行说的是同一段时间。场景 B 演示了这个错位。</div>
+
+<div class="callout"><b><code>onBranchChange</code> 这一行其实可以不写。</b>Pi 自己在 <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1115"><code>interactive-mode.ts:1115</code></a> 已经订阅了同一个 provider 的分支变化并 <code>requestRender()</code>，所以 HEAD 一变，即使扩展不订阅，下一帧也会重画。扩展再订阅一次只是多排一次重绘（<code>requestRender</code> 会合并，见 <a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L1033"><code>tui.ts:1033</code></a>），无害。它的价值是示范“工厂里订阅、<code>dispose</code> 里退订”的写法：页脚被替换或 <code>/reload</code> 时 Pi 会调 <code>dispose</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2531"><code>interactive-mode.ts:2531</code></a>），回调不会泄漏。另外别把两个 “branch” 搞混：<code>getBranch()</code> 是<b>会话树</b>上的路径，<code>getGitBranch()</code> / <code>onBranchChange</code> 是 <b>git</b> 分支。</div>
+
+<div class="callout"><b>和其他页脚扩展叠加：最后一个 <code>setFooter</code> 赢。</b>第 02 篇讲过，页脚只有一个槽，<code>setExtensionFooter</code> 每次都先清空容器（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2534"><code>interactive-mode.ts:2534</code></a>）。和 minimal、pure-focus 一起装时只会剩一个，被替换掉的那个会收到 <code>dispose</code>。这不是本扩展写错，是槽位的设计；想和别人共存应该改用 widget 或 <code>setStatus</code>。</div>
+
+<h2 id="sum">小结</h2>
+<p>tool-counter 把第 01 篇的页脚和第 03 篇的计数合在一起，并多接了两个来源：render 每帧去会话树里数 assistant 的 usage，git 分支由 <code>footerData</code> 提供、HEAD 变了会通知。只有工具计数是事件写进来的，其余都是 render 自己现读，所以“刷新时机”取决于数据什么时候落盘，而不是订阅了什么。下一篇 <code>damage-control.ts</code>，第一次在 <code>tool_call</code> 上返回 <code>block</code>，从“看”变成“拦”。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [7, ' * Demonstrates: setFooter, footerData.getGitBranch(), onBranchChange(),', 'l3', '文件头列出的三个新接口：setFooter 第 01 篇见过，footerData 和 onBranchChange 是本篇第一次出现。'],
+  [13, 'import type { AssistantMessage } from "@mariozechner/pi-ai";', 'l2', '只导入类型，用来给第 41 行做类型断言，运行时会被擦掉。旧包名由 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L118"><code>loader.ts:118</code></a> 别名到新包。'],
+  [15, 'import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";', 'l4', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L113"><code>loader.ts:113</code></a> 别名。两个函数都会跳过 ANSI 颜色码计算宽度。'],
+  [19, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调用 1 次。/reload 时重跑，下面的 counts 回到空对象。'],
+  [20, '  const counts: Record<string, number> = {};', 'l3', '页脚上唯一的“扩展自己的状态”。其他数字都是 render 时现读的。'],
+  [22, '  pi.on("tool_execution_end", async (event) => {', 'hit', '和第 03 篇一样：<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L931"><code>agent-loop.ts:931</code></a> 发出，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1370"><code>agent-session.ts:1370</code></a> 桥接。<span class="tag inner">run 内循环</span>每个工具 1 次。'],
+  [23, '    counts[event.toolName] = (counts[event.toolName] || 0) + 1;', 'l3', '不看 isError，被拦截的调用也算。没有 requestRender：靠 UI 随后的重绘。'],
+  [26, '  pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 启动时 1 次，循环外。注意 <code>ctx</code> 被下面的 render 闭包捕获，以后每帧都用它。'],
+  [27, '    applyExtensionDefaults(import.meta.url, ctx);', 'l3', 'themeMap.ts：主题 synthwave，标题 “π - tool-counter”。'],
+  [28, '    ctx.ui.setFooter((tui, theme, footerData) => {', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2524"><code>setExtensionFooter</code></a>：dispose 旧页脚、清空容器，然后<b>立即</b>调这个工厂，传入 <code>this.ui</code>、主题和 <code>footerDataProvider</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2537"><code>:2537</code></a>）。'],
+  [29, '      const unsub = footerData.onBranchChange(() => tui.requestRender());', 'hit', 'git HEAD 变化时被调（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L140"><code>footer-data-provider.ts:140</code></a> 登记，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L197"><code>:197</code></a> 通知）。与循环异步。Pi 自己也订阅了同一件事，见 ③ 的说明。'],
+  [32, '        dispose: unsub,', 'l4', '返回的退订函数直接当 dispose。页脚被替换或 /reload 时 Pi 调它（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2531"><code>interactive-mode.ts:2531</code></a>）。'],
+  [34, '        render(width: number): string[] {', 'hit', 'TUI 每帧通过 Container.render（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a>）调用，与循环异步。下面所有计算每帧都重做一遍。'],
+  [35, '          // --- Line 1: cwd + branch (left), tokens + cost (right) ---', 'l3', '⚠ 注释写错：cwd 和分支在第 2 行。第 52 行的注释才对。'],
+  [39, '          for (const entry of ctx.sessionManager.getBranch()) {', 'l1', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>getBranch</code></a>：从当前叶子沿 parentId 走到根再反转。包括 compaction 之前的条目，不包括其他分支。<b>每帧</b>都走一遍，没有缓存。'],
+  [40, '            if (entry.type === "message" && entry.message.role === "assistant") {', 'l3', '只数 assistant 消息。compaction / branch_summary 条目自带的 usage 不算。'],
+  [42, '              tokIn += m.usage.input;', 'l3', '只加 input，不含 cacheRead / cacheWrite。'],
+  [44, '              cost += m.usage.cost.total;', 'l3', 'cost.total 已经包含缓存读写的费用，所以和 “in” 的口径不一样。'],
+  [48, '          const fmt = (n: number) => n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`;', 'l3', '≥1000 显示成 x.xk；没有 M 档，100 万显示成 1000.0k。'],
+  [50, '          const branch = footerData.getGitBranch();', 'l4', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L127"><code>getGitBranch</code></a>：第一次读 HEAD 后缓存；不在仓库返回 null，detached 返回 "detached"。'],
+  [53, '          const usage = ctx.getContextUsage();', 'l2', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L949"><code>runner.ts:949</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L4297"><code>agent-session.ts:4297</code></a>。compaction 后 percent 为 null。'],
+  [54, '          const pct = usage ? usage.percent : 0;', 'l3', 'percent 为 null 时 pct 是 null：第 55 行算成 1 格，第 66 行显示 0%（实际是“未知”）。'],
+  [55, '          const filled = Math.round(pct / 10) || 1;', 'l3', '⚠ 至少 1 格（0% 也显示一格）；没有上限，pct ≥ 105 时 filled = 11。'],
+  [56, '          const bar = "#".repeat(filled) + "-".repeat(10 - filled);', 'l3', '⚠ filled = 11 时 "-".repeat(-1) 抛 RangeError，整个页脚画不出来。这个 bar 变量后面其实没用到，第 62–63 行又 repeat 了一次。'],
+  [57, '          const model = ctx.model?.id || "no-model";', 'l2', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L913"><code>runner.ts:913</code></a> get model，每帧读当前值，切模型后下一帧就变。'],
+  [76, '          const pad1 = " ".repeat(Math.max(1, width - visibleWidth(l1Left) - visibleWidth(l1Right)));', 'l4', '左右对齐：中间至少 1 个空格。'],
+  [77, '          const line1 = truncateToWidth(l1Left + pad1 + l1Right, width, "");', 'l4', '太宽就截断，省略号传的是空串。截掉的是右边：窄终端上先丢 $ 和 token。'],
+  [86, '          const entries = Object.entries(counts);', 'l3', '按工具第一次结束的顺序列出。'],
+  [88, '            ? theme.fg("dim", "waiting for tools ")', 'l3', '还没有任何工具调用（或刚 /reload、/resume）时显示。'],
+  [95, '          const line2 = truncateToWidth(l2Left + pad2 + l2Right, width, "");', 'l4', '工具种类多时同样从右截断，不折行：页脚永远是 2 行。'],
+  [97, '          return [line1, line2];', 'l4', '交给 footerContainer。内置页脚被整个替换掉。'],
+];
+WT.source(SRC);
+
+// ─────────── tool-counter render() 复刻 ───────────
+// 会话：all = 所有 assistant 条目（含被 /tree 抛下的），path = 当前分支上的下标
+function newSession() { return { all: [], path: [] }; }
+function addMsg(sess, m) { sess.all.push(m); sess.path.push(sess.all.length - 1); }
+const fmt = n => n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`;
+// 第 34–97 行。返回两行，每行是 [{t, cls}] 片段；fixed = 是否套用越界修复
+function extRender(o, width, fixed) {
+  let tokIn = 0, tokOut = 0, cost = 0;
+  o.sess.path.forEach(i => { const m = o.sess.all[i]; tokIn += m.i; tokOut += m.o; cost += m.c; });
+  const pct = o.pct;
+  let filled = Math.round(pct / 10) || 1;
+  if (fixed) filled = Math.min(10, Math.max(1, filled));
+  if (10 - filled < 0) throw new RangeError(`Invalid count value: ${10 - filled}`);
+  const l1L = [{ t: ` ${o.model} `, cls: 'sw-dim' }, { t: '[', cls: 'sw-wrn' }, { t: '#'.repeat(filled), cls: 'sw-ok' },
+    { t: '-'.repeat(10 - filled), cls: 'sw-dim' }, { t: ']', cls: 'sw-wrn' }, { t: ' ', cls: 'sw-dim' }, { t: `${Math.round(pct)}%`, cls: 'sw-acc' }];
+  const l1R = [{ t: fmt(tokIn), cls: 'sw-ok' }, { t: ' in ', cls: 'sw-dim' }, { t: fmt(tokOut), cls: 'sw-acc' },
+    { t: ' out ', cls: 'sw-dim' }, { t: `$${cost.toFixed(4)}`, cls: 'sw-wrn' }, { t: ' ', cls: 'sw-dim' }];
+  const l2L = [{ t: ` ${o.dir}`, cls: 'sw-dim' }];
+  if (o.git) l2L.push({ t: ' ', cls: 'sw-dim' }, { t: '(', cls: 'sw-wrn' }, { t: o.git, cls: 'sw-ok' }, { t: ')', cls: 'sw-wrn' });
+  const entries = Object.entries(o.counts);
+  const l2R = [];
+  if (!entries.length) l2R.push({ t: 'waiting for tools ', cls: 'sw-dim' });
+  else {
+    entries.forEach(([n, c], k) => {
+      if (k) l2R.push({ t: ' | ', cls: 'sw-wrn' });
+      l2R.push({ t: n, cls: 'sw-acc' }, { t: ' ', cls: 'sw-dim' }, { t: `${c}`, cls: 'sw-ok' });
+    });
+    l2R.push({ t: ' ', cls: 'sw-dim' });
+  }
+  return [joinLR(l1L, l1R, width), joinLR(l2L, l2R, width)];
+}
+const segLen = segs => segs.reduce((a, s) => a + s.t.length, 0);
+function joinLR(L, R, width) {
+  const pad = { t: ' '.repeat(Math.max(1, width - segLen(L) - segLen(R))) };
+  return truncate([...L, pad, ...R], width);
+}
+function truncate(segs, width) {
+  const out = []; let used = 0;
+  for (const s of segs) {
+    if (used >= width) break;
+    const t = s.t.slice(0, width - used);
+    out.push({ ...s, t }); used += t.length;
+  }
+  return out;
+}
+// 内置页脚的 token / 成本 / 上下文部分（footer.ts:124 起、:180 起）：所有条目，含缓存读写
+function builtinRender(o, width) {
+  const tot = { i: 0, o: 0, r: 0, c: 0 };
+  o.sess.all.forEach(m => { tot.i += m.i; tot.o += m.o; tot.r += m.r || 0; tot.c += m.c; });
+  const parts = [];
+  if (tot.i) parts.push(`↑${fmt(tot.i)}`);
+  if (tot.o) parts.push(`↓${fmt(tot.o)}`);
+  if (tot.r) parts.push(`R${fmt(tot.r)}`);
+  if (tot.c) parts.push(`$${tot.c.toFixed(3)}`);
+  const ctxs = o.pctNull ? '?/200k' : `${o.pct.toFixed(1)}%/200k`;
+  return [
+    truncate([{ t: ` ~/repo/${o.dir}` + (o.git ? ` (${o.git})` : ''), cls: 'dim' }], width),
+    joinLR([{ t: ' ' + [...parts, ctxs].join(' '), cls: 'dim' }], [{ t: `${o.model} `, cls: 'dim' }], width),
+  ];
+}
+function paint(el, lines) {
+  el.textContent = '';
+  lines.forEach((segs, i) => {
+    segs.forEach(s => {
+      const sp = document.createElement('span');
+      sp.textContent = s.t;
+      if (s.cls) sp.className = s.cls;
+      el.appendChild(sp);
+    });
+    if (i < lines.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+const MODEL = 'gpt-5.5-codex';
+const MSG = { i: 3200, o: 210, r: 0, c: 0.012 };
+
+// ─────────── 双循环动画 ───────────
+// [节点, 事件, 循环, 状态补丁, 说明, run+, turn+]
+// 状态：mounted（页脚在不在）、pct、git、counts、sess（会话树）、renders
+// 直接合并的补丁：{ mounted }、{ pct }、{ git }
+// 由 onStep 处理的补丁：
+//   { tool }        一次 tool_execution_end
+//   { msg: [i,o,c] } 一条 assistant 落盘（会话树变了，扩展没收到任何事件）
+//   { fresh }       工厂重跑：counts 归零（会话树不受影响）
+const SCN = {
+  normal: [
+    ['session', 'session_start', '', { mounted: true }, 'setFooter：内置页脚被替换成两行；0 in 0 out，waiting for tools'],
+    ['input', 'input', '', {}, '用户回车'],
+    ['bas', 'before_agent_start', 'outer', {}, '每次 settle 1 次：本扩展未订阅'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (user)', 'inner', { pct: 4 }, 'user 消息落盘：没有 usage，token 不变，上下文条估算跳一下'],
+    ['llm', 'context → LLM', 'inner', {}, '请求和不装本扩展时完全一样'],
+    ['msg', 'message_end (assistant)', 'inner', { msg: [3200, 210, 0.012], pct: 18 }, '落盘（agent-session.ts:1165）→ 下一帧 render 遍历分支，第 1 行 token / $ 变了'],
+    ['tools', 'tool_execution_end (read)', 'inner', { tool: 'read' }, '第 2 行：read 1'],
+    ['tools', 'tool_execution_end (grep)', 'inner', { tool: 'grep' }, 'read 1 | grep 1'],
+    ['msg', 'message_end (toolResult ×2)', 'inner', { pct: 26 }, '工具结果落盘：不是 assistant，不进 token 合计；上下文条变'],
+    ['tend', 'turn_end', 'inner', {}, '有工具结果 → 下一 turn'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', { msg: [4100, 380, 0.0161], pct: 29 }, 'in 是两次请求 input 的<b>和</b>，不是上下文大小'],
+    ['tools', 'tool_execution_end (edit)', 'inner', { tool: 'edit' }, ''],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 3', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', { msg: [4600, 150, 0.0148], pct: 31 }, '没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, 'run 结束'],
+    ['aend', 'agent_end', 'outer', {}, 'run #1 结束'],
+    ['post', '_handlePostAgentRun', 'outer', {}, '不需要 retry、compaction'],
+    ['settle', 'agent_before_settle', 'outer', {}, '没有扩展要求 continue'],
+    ['settled', 'agent_settled', 'outer', {}, '停稳。tool_execution_end 被调 3 次；token / $ 一次事件都没收到，全靠 render 现读'],
+  ],
+  resume: [
+    ['session', 'session_start (resume)', '', { mounted: true, msg: [48200, 6100, 0.231], pct: 62 }, '/resume 旧会话：第 1 行马上是旧会话的累计，第 2 行却是 waiting for tools'],
+    ['input', 'input', '', {}, '用户：新开个分支再改'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', { msg: [9800, 120, 0.031], pct: 66 }, 'toolCall：bash "git checkout -b feat/footer"'],
+    ['tools', 'HEAD 变化 → onBranchChange', '', { git: 'feat/footer' }, '与循环异步：HEAD 目录监听（防抖 500ms）→ notifyBranchChange → Pi 自己的回调和第 29 行的回调都 requestRender'],
+    ['tools', 'tool_execution_end (bash)', 'inner', { tool: 'bash' }, 'bash 1'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', { msg: [10100, 90, 0.032], pct: 67 }, '没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['post', '_handlePostAgentRun', 'outer', {}, ''],
+    ['settle', 'agent_before_settle', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳'],
+    ['session', '/reload → resetExtensionUI', '', { mounted: false }, 'setExtensionFooter(undefined)（interactive-mode.ts:2464）：先调 dispose 退订，恢复内置页脚'],
+    ['session', 'session.reload() → factory', '', { fresh: true }, '扩展重新加载，新闭包里 counts = {}'],
+    ['session', 'session_start (reload)', '', { mounted: true }, '再次 setFooter：token / $ 照旧（会话树没变），工具计数归零'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+WT.loops({
+  hit: ['session', 'tools'],
+  sub: { tools: 'tool_execution_end' },
+  legend: [
+    '橙框 = tool-counter 用到的回调。tools 格的副标题换成了真正订阅的 tool_execution_end。msg 格没有橙框：token / $ 跟着 message_end 落盘变，但扩展没订阅它。',
+    '不在图里的：footer 的 render()（每帧）和 onBranchChange 回调（git HEAD 变化时），都与循环异步。',
+  ],
+  scenes: SCN,
+  state: () => ({ mounted: false, pct: 0, git: 'main', counts: {}, sess: newSession(), renders: 0 }),
+  onStep(st, s) {
+    if (s.patch.fresh) st.counts = {};
+    if ('tool' in s.patch) st.counts[s.patch.tool] = (st.counts[s.patch.tool] || 0) + 1;
+    if (s.patch.msg) { const [i, o, c] = s.patch.msg; addMsg(st.sess, { i, o, r: 0, c }); }
+    if (st.mounted && s.node !== 'bas' && s.node !== 'post') st.renders += 1;
+  },
+  logTag: s => 'tool' in s.patch ? '<span class="tag hit">本扩展</span>'
+    : 'git' in s.patch ? '<span class="tag hit">onBranchChange</span>'
+    : s.patch.msg ? '<span class="tag l4">render 读</span>'
+    : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    const W = 72;
+    const o = { sess: st.sess, pct: st.pct, git: st.git, counts: st.counts, model: MODEL, dir: 'pi-vs-claude-code' };
+    if (st.mounted) paint(foot1, extRender(o, W, false));
+    else paint(foot1, builtinRender({ ...o, pctNull: false }, W));
+    WT.flash(foot1);
+    rc.textContent = st.mounted
+      ? `render() 已被调用约 ${st.renders} 次，每次都遍历 ${st.sess.path.length} 条 assistant · tool_execution_end 已处理 ${Object.values(st.counts).reduce((a, b) => a + b, 0)} 次`
+      : '页脚已被摘掉，暂时是内置页脚';
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 三条运行链 ───────────
+// [文字, x, 宽, 层中心 y, 是否用到]
+const CHIPS = {
+  bind:   ['bindCurrentSessionExtensions', 110, 190, 51, 1],
+  setf:   ['setExtensionFooter', 312, 130, 51, 1],
+  fdp:    ['FooterDataProvider · HEAD 监听', 454, 180, 51, 1],
+  render: ['requestRender → render()', 646, 160, 51, 1],
+  tmap:   ['applyExtensionDefaults（themeMap）', 110, 240, 147, 1],
+  biz:    ['counts[name]++（22–24）', 362, 165, 147, 1],
+  sum:    ['getBranch 累加 + 拼两行（36–97）', 539, 205, 147, 1],
+  loader: ['loader · jiti', 110, 105, 243, 1],
+  on:     ['pi.on ×2', 227, 70, 243, 1],
+  emit:   ['runner.emit', 309, 95, 243, 1],
+  ctxui:  ['ctx.ui.setFooter', 416, 125, 243, 1],
+  bridge: ['_emitExtensionEvent', 553, 140, 243, 1],
+  ctxget: ['ctx getter ×4', 705, 100, 243, 1],
+  sess:   ['AgentSession', 110, 100, 339, 1],
+  loop:   ['runLoop · executeToolCalls', 222, 185, 339, 1],
+  tee:    ['emitToolExecutionEnd', 419, 140, 339, 1],
+  hae:    ['_handleAgentEvent', 571, 125, 339, 1],
+  sm:     ['SessionManager', 708, 100, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/tool-counter.ts</code> 创建 AgentSession。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 即时编译 .ts（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L584"><code>loader.ts:584</code></a>），调用 <code>factory(pi)</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），也就是第 19 行：闭包里的 <code>counts</code> 在这时创建。'],
+  ['on', '<span class="tag l2">L2</span> 两次 <code>pi.on</code>：<code>tool_execution_end</code> 和 <code>session_start</code>，只<b>登记</b>，不执行。'],
+  ['bind', '<span class="tag l4">L4</span> 交互模式构造 UI 上下文（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1973"><code>interactive-mode.ts:1973</code></a>），<code>setFooter</code> 指向 <code>setExtensionFooter</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2651"><code>:2651</code></a>）。'],
+  ['emit', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 发出 <code>session_start</code>，<code>runner.emit</code> 调到第 26 行，拿到 <code>ctx</code>。'],
+  ['tmap', '<span class="tag l3">L3</span> <code>applyExtensionDefaults</code>：主题 synthwave，标题 “π - tool-counter”。'],
+  ['ctxui', '<span class="tag l2">L2</span> 第 28 行 <code>ctx.ui.setFooter(factory)</code>。'],
+  ['setf', '<span class="tag l4">L4</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2524"><code>setExtensionFooter</code></a>：没有旧的自定义页脚可 dispose；清空 footerContainer（内置页脚被拿掉），调工厂，传入 <code>this.ui</code>、主题和 <code>footerDataProvider</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2537"><code>:2537</code></a>）。'],
+  ['fdp', '<span class="tag l4">L4</span> 工厂第 29 行在 provider 上登记分支回调（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L140"><code>footer-data-provider.ts:140</code></a>），拿到的退订函数当作 <code>dispose</code>。<br><b>启动链到此结束。下面是运行中反复走的三条链。</b>'],
+  ['loop', '<span class="tag l1">L1</span> <b>链 A · 工具计数。</b><span class="tag inner">run 内循环</span>里 assistant 带 toolCall，进入 <code>executeToolCalls</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L279"><code>agent-loop.ts:279</code></a>）。'],
+  ['tee', '<span class="tag l1">L1</span> 工具结束或被拦截，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L931"><code>agent-loop.ts:931</code></a> 发 <code>tool_execution_end</code>。'],
+  ['hae', '<span class="tag l1">L1</span> <code>_handleAgentEvent</code> 先发给扩展（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1143"><code>agent-session.ts:1143</code></a>）。'],
+  ['bridge', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1370"><code>agent-session.ts:1370</code></a> 转成扩展事件，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1096"><code>runner.emit</code></a> 调第 22 行。'],
+  ['biz', '<span class="tag l3">L3</span> <code>counts[name]++</code>，不刷新屏幕。随后 UI 处理同一事件时 <code>requestRender()</code>。'],
+  ['hae', '<span class="tag l1">L1</span> <b>链 B · token / 成本。</b>一条 assistant 的 <code>message_end</code> 到达 <code>_handleAgentEvent</code>：先发扩展（本扩展没订阅，什么也不做），再通知 UI（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1144"><code>:1144</code></a>），UI 排一帧。'],
+  ['sm', '<span class="tag l1">L1</span> 同一个同步段里 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1165"><code>agent-session.ts:1165</code></a> <code>appendMessage</code>：消息挂到会话树上，叶子前移。'],
+  ['render', '<span class="tag l4">L4</span> nextTick 之后那一帧（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L1035"><code>tui.ts:1035</code></a>），<code>Container.render</code>（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a>）调到第 34 行。'],
+  ['ctxget', '<span class="tag l2">L2</span> render 通过捕获的 <code>ctx</code> 读 <code>sessionManager</code>、<code>getContextUsage()</code>、<code>model</code>、<code>cwd</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L901"><code>runner.ts:901</code></a> 起的 getter）。'],
+  ['sum', '<span class="tag l3">L3</span> 遍历 <code>getBranch()</code>，刚落盘的那条已经在里面；累加 usage，拼出两行，交回 footerContainer。'],
+  ['fdp', '<span class="tag l4">L4</span> <b>链 C · git 分支。</b>HEAD 所在目录被监听（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L316"><code>footer-data-provider.ts:316</code></a>）；变化后防抖、重读分支，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L197"><code>notifyBranchChange</code></a> 调所有回调：Pi 自己的（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1115"><code>interactive-mode.ts:1115</code></a>）和第 29 行的。'],
+  ['render', '<span class="tag l4">L4</span> 两个回调都 <code>requestRender()</code>，合并成一帧；第 50 行 <code>getGitBranch()</code> 读到新分支。这条链完全不经过 L1 和双循环。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+let sim = { sess: newSession(), counts: {} };
+['read', 'bash', 'edit', 'grep', 'write'].forEach(name => {
+  const b = document.createElement('button');
+  b.textContent = `tool_execution_end (${name})`;
+  b.onclick = () => { sim.counts[name] = (sim.counts[name] || 0) + 1; drawSim(); };
+  $('m-tools').appendChild(b);
+});
+$('m-msg').onclick = () => { addMsg(sim.sess, { ...MSG }); drawSim(); };
+$('m-msgc').onclick = () => { addMsg(sim.sess, { i: 120, o: 180, r: 30000, c: 0.0105 }); drawSim(); };
+$('m-tree').onclick = () => { sim.sess.path.pop(); drawSim(); };
+$('m-reload').onclick = () => { sim.counts = {}; drawSim(); };
+function drawSim() {
+  const w = Number($('m-w').value); $('m-wv').textContent = w;
+  const p = Number($('m-pct').value); $('m-pctv').textContent = p;
+  const pctNull = $('m-null').checked;
+  const o = { sess: sim.sess, pct: pctNull ? null : p, git: $('m-git').value, counts: sim.counts, model: MODEL, dir: 'pi-vs-claude-code' };
+  const view = $('m-view').value;
+  const el = $('foot2'), notes = [];
+  el.classList.remove('err');
+  if (view === 'builtin') {
+    paint(el, builtinRender({ ...o, pct: p, pctNull }, w));
+    notes.push('内置页脚：数所有条目（含 /tree 抛下的分支），R = cacheRead 单独列出；没有工具计数');
+  } else {
+    try { paint(el, extRender(o, w, $('m-fix').checked)); }
+    catch (e) { el.classList.add('err'); el.textContent = `${e.name}: ${e.message}\n（页脚 render 抛异常，这一帧画不出来）`; }
+  }
+  const dropped = sim.sess.all.length - sim.sess.path.length;
+  if (dropped) notes.push(`有 ${dropped} 条 assistant 不在当前分支上：本扩展的 $ 不算它们，内置页脚算`);
+  if (sim.sess.all.some(m => m.r)) notes.push('有缓存命中：本扩展的 in 不含 cacheRead，$ 却含');
+  if (pctNull) notes.push('percent = null：显示 0%，条留 1 格');
+  else if (p >= 105 && !$('m-fix').checked && view === 'ext') notes.push('filled = 11 → "-".repeat(-1)');
+  if (!Object.keys(sim.counts).length && sim.sess.path.length && view === 'ext') notes.push('第 1 行有累计、第 2 行 waiting for tools：/reload 或 /resume 之后就是这样');
+  $('m-note').textContent = notes.join(' · ');
+  WT.flash(el);
+}
+['m-w', 'm-pct', 'm-null', 'm-fix', 'm-git', 'm-view'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>

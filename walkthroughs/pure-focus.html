@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pure-focus.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 02</div>
+<h1>pure-focus.ts</h1>
+<p class="subtitle">用一个 <code>render()</code> 返回空数组的组件顶替内置页脚，页脚从 2–3 行变成 0 行。24 行，和 minimal 一样只订阅 <code>session_start</code>，不碰任何循环事件。<br>运行：<code>just ext-pure-focus</code></p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。和 minimal 相比，差别只在第 19–20 行：render 什么也不画。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+pure-focus 的两个回调都不在循环里：<code>session_start</code> 在循环外，<code>render()</code> 与循环异步。循环照常转、照常触发重绘，只是每次重绘页脚都交回 0 行。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div>
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：1 个 run，2 个 turn（带工具）</option>
+    <option value="reload">场景 B：/reload 时页脚先回来再被摘掉</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="grid c2">
+  <div><div class="small muted">终端底部（pure-focus 生效时）</div><div class="term" id="foot1"></div></div>
+  <div><div class="small muted">对照：同一时刻的内置页脚（被摘掉的那部分）</div><div class="term" id="foot0"></div></div>
+</div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>pure-focus</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔</td></tr>
+<tr><td><code>input</code> · <code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a></td><td>–</td></tr>
+<tr><td><code>agent_start</code> · <code>agent_end</code></td><td><span class="tag outer">外</span> 每 run</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a></td><td>–</td></tr>
+<tr><td><code>agent_before_settle</code> · <code>agent_settled</code></td><td><span class="tag outer">外</span> 出口</td><td>≤ N · 1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2017"><code>agent-session.ts:2017</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1084"><code>:1084</code></a></td><td>–</td></tr>
+<tr><td><code>turn_*</code> · <code>context</code> · <code>message_*</code> · <code>tool_*</code></td><td><span class="tag inner">内</span> 每 turn</td><td>M / 多</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>agent-loop.ts:216</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L400"><code>:400</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L430"><code>:430</code></a></td><td>–</td></tr>
+<tr class="hl"><td><code>footer.render(width)</code></td><td>与循环异步</td><td>每帧</td><td><a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔ 返回 <code>[]</code></td></tr>
+</tbody></table></div>
+<p class="small muted">循环事件仍然经过 <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L3363"><code>interactive-mode.ts:3363 handleEvent</code></a>，它第一件事是 <code>this.footer.invalidate()</code>（第 3368 行）。这里的 <code>this.footer</code> 是内置页脚对象，已经不在组件树上，pure-focus 自己的 <code>invalidate()</code> 不会被它叫到。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>从 <code>pi -e</code> 启动到页脚消失共 13 步。前 10 步都在循环开始之前；第 11–13 步说明摘掉之后还剩什么在跑。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 13</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。灰字 chip 是本扩展没用到、但和它有关的部件。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>pure-focus 不在安装、控制、装配任何一段：LLM 收到的请求和不装它时逐字节相同。它动的是最下面那一段<b>读数</b>：内置页脚原本在这里显示 token、成本和上下文百分比，现在没人显示了。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 380" role="img" aria-label="提示词上下文：安装、控制、装配，以及被摘掉的读数">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">安装 · 谁放进来</text>
+  <text class="bt" x="262" y="24" font-size="13" style="fill:var(--accent)">控制 · 谁能改</text>
+  <text class="bt" x="530" y="24" font-size="13" style="fill:var(--accent)">装配 · 怎么拼</text>
+
+  <g class="chip"><rect x="16" y="40" width="200" height="34" rx="7"/><text x="26" y="62" font-size="11.5"><tspan class="mono">system</tspan> · buildSystemPrompt</text><title>system-prompt.ts:128，按 section 生成</title></g>
+  <g class="chip"><rect x="16" y="84" width="200" height="34" rx="7"/><text x="26" y="106" font-size="11.5"><tspan class="mono">user</tspan> · 编辑器输入（L4）</text><title>pure-focus 不碰编辑器，输入路径不变</title></g>
+  <g class="chip"><rect x="16" y="128" width="200" height="34" rx="7"/><text x="26" y="150" font-size="11.5"><tspan class="mono">custom</tspan> · 扩展注入（L2）</text><title>pure-focus 没有调用 pi.sendMessage</title></g>
+  <g class="chip"><rect x="16" y="172" width="200" height="34" rx="7"/><text x="26" y="194" font-size="11.5"><tspan class="mono">assistant</tspan> · LLM，带 usage</text><title>usage 是内置页脚 ↑↓ 和 $ 的数据源</title></g>
+  <g class="chip"><rect x="16" y="216" width="200" height="34" rx="7"/><text x="26" y="238" font-size="11.5"><tspan class="mono">toolResult</tspan> · 工具执行</text></g>
+
+  <g class="chip"><rect x="258" y="44" width="220" height="40" rx="7"/><text class="mono" x="268" y="61" font-size="11.5">input</text><text x="268" y="77" font-size="10" style="fill:var(--outer)">外循环入口 · pure-focus 未订阅</text><title>agent-session.ts:2117</title></g>
+  <g class="chip"><rect x="258" y="94" width="220" height="40" rx="7"/><text class="mono" x="268" y="111" font-size="11.5">before_agent_start</text><text x="268" y="127" font-size="10" style="fill:var(--outer)">每次 settle 1 次 · 未订阅</text><title>agent-session.ts:1935</title></g>
+  <g class="chip"><rect x="258" y="144" width="220" height="40" rx="7"/><text class="mono" x="268" y="161" font-size="11.5">context</text><text x="268" y="177" font-size="10" style="fill:var(--inner)">内循环每 turn · 未订阅</text><title>agent-loop.ts:400 → sdk.ts:431</title></g>
+  <g class="chip"><rect x="258" y="194" width="220" height="40" rx="7"/><text class="mono" x="268" y="211" font-size="11.5">message_end</text><text x="268" y="227" font-size="10" style="fill:var(--inner)">内循环 · 未订阅</text></g>
+
+  <g class="chip"><rect x="526" y="54" width="170" height="44" rx="7"/><text class="mono" x="536" y="72" font-size="11.5">_prepareRun</text><text class="mut" x="536" y="89" font-size="10">sys补丁+user+custom</text></g>
+  <g class="chip"><rect x="526" y="124" width="170" height="54" rx="7"/><text class="mono" x="536" y="142" font-size="11">transformContext</text><text class="mono" x="536" y="157" font-size="11">→ convertToLlm</text><text x="536" y="171" font-size="10" style="fill:var(--inner)">每 turn</text></g>
+  <g class="chip"><rect x="726" y="124" width="80" height="54" rx="7"/><text x="766" y="156" text-anchor="middle" font-size="13" font-weight="700">LLM</text></g>
+
+  <path class="arrow flow" marker-end="url(#ah2)" d="M216,145 L256,145"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M478,114 L524,80"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M478,164 L524,152"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M611,98 L611,122"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M696,151 L724,151"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M766,178 L766,270 L222,270 L222,192 L218,192"/>
+  <text class="mut" x="470" y="264" font-size="10">回复 + 工具结果回到上下文（内循环下一 turn）</text>
+
+  <!-- 落盘 → 读数（被摘掉） -->
+  <path class="arrow flow" marker-end="url(#ah2)" d="M368,234 L368,312 L392,312"/>
+  <g class="chip"><rect x="394" y="294" width="150" height="36" rx="7"/><text x="404" y="316" font-size="11">SessionManager 落盘</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M544,312 L566,312"/>
+  <g class="chip"><rect x="568" y="294" width="120" height="36" rx="7"/><text class="mono" x="578" y="316" font-size="10.5">usage / ctx%</text><title>footer.ts:102 getSessionStats 遍历 getEntries；ctx% 来自 getContextUsage</title></g>
+  <path class="arrow" stroke-dasharray="3 4" d="M688,312 L708,312"/>
+  <g class="chip"><rect x="710" y="294" width="102" height="36" rx="7"/><text class="mut" x="720" y="311" font-size="10.5">内置页脚</text><text class="mut" x="720" y="325" font-size="9.5">已摘下，不渲染</text><title>FooterComponent 被 footerContainer.clear() 移出组件树（interactive-mode.ts:2534）</title></g>
+  <line x1="708" y1="300" x2="812" y2="324" style="stroke:var(--hit);stroke-width:1.6"/>
+  <g class="chip hit"><rect x="16" y="294" width="200" height="36" rx="7"/><text x="26" y="316" font-size="11">pure-focus render() → []</text><title>不读 ctx，不读 footerData，不读 theme</title></g>
+  <text class="mut" x="16" y="350" font-size="10">没有任何箭头指向它：pure-focus 什么也不读</text>
+  <text class="mut" x="394" y="350" font-size="10">数据照常落盘，只是没人显示。上下文快满、要 compaction 时你看不到预警。</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>内置页脚显示的</th><th>数据来源</th><th>对应上下文哪一段</th><th>装 pure-focus 后</th></tr></thead>
+<tbody>
+<tr><td>cwd (git 分支) • 会话名</td><td><code>footerData.getGitBranch</code> · sessionManager</td><td>不涉及</td><td>看不到</td></tr>
+<tr><td><code>↑in ↓out R W CH</code> · <code>$cost</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/footer.ts#L102"><code>footer.ts:102</code></a> 遍历所有 assistant 的 usage</td><td><span class="tag inner">内</span> 每 turn 的 assistant message_end</td><td>看不到</td></tr>
+<tr><td><code>18.0%/200k (auto)</code></td><td><code>getContextUsage</code></td><td>装配结果的大小估算</td><td>看不到：compaction 前没有预警</td></tr>
+<tr><td>model • thinking</td><td><code>session.state.model</code></td><td>请求发给谁</td><td>看不到</td></tr>
+<tr><td>扩展状态行（<code>setStatus</code>）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/footer.ts#L290"><code>footer.ts:290</code></a> <code>getExtensionStatuses</code></td><td>不涉及</td><td>看不到：叠加扩展的状态被吞</td></tr>
+<tr class="hl"><td>Working 指示器</td><td><code>statusContainer</code>（不在页脚里）</td><td><span class="tag outer">外</span> run 进行中</td><td><b>仍然可见</b></td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>pure-focus 的核心逻辑只有 <code>render() { return []; }</code>，单独模拟没意思。真正有讲头的是它和别的扩展叠加时谁赢。下面用 JS 复刻了 pure-focus、minimal 的 render 和内置页脚（简化版），选一种 <code>-e</code> 组合试试。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">-e 组合 <select id="m-combo">
+      <option value="pf">pure-focus（just ext-pure-focus）</option>
+      <option value="sw">subagent-widget + pure-focus + theme-cycler（just ext-subagent-widget）</option>
+      <option value="pf-min">pure-focus + minimal</option>
+      <option value="min-pf">minimal + pure-focus</option>
+      <option value="none">不装扩展（内置页脚）</option>
+    </select></label>
+    <label class="small"><input type="checkbox" id="m-work"> 运行中</label>
+    <label class="small">宽度 <input type="range" id="m-w" min="40" max="90" value="64"> <span class="counter" id="m-wv">64</span></label>
+  </div>
+  <div class="term" id="foot2"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>摘掉页脚</td><td>工厂返回 <code>render: () =&gt; []</code></td><td><code>ctx.ui.setFooter</code> → uiContext <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2651"><code>interactive-mode.ts:2651</code></a></td><td>–</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2524"><code>setExtensionFooter</code></a>：<code>footerContainer.clear()</code> 再挂上新组件</td><td>循环外：session_start；render 每帧，与循环异步</td></tr>
+<tr><td>多个扩展抢页脚</td><td>无</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1096"><code>runner.emit</code></a> 按 <code>this.extensions</code> 的顺序逐个调 handler（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1100"><code>:1100</code></a>；推断就是 <code>-e</code> 的顺序）</td><td>–</td><td>每次 <code>setFooter</code> 都 clear，<b>最后一个赢</b></td><td>循环外：session_start</td></tr>
+<tr><td>扩展状态行消失</td><td>不读 <code>_footerData</code></td><td>别的扩展 <code>setStatus</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2303"><code>interactive-mode.ts:2303</code></a> 照常写入</td><td>–</td><td>只有内置页脚会读（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/footer.ts#L290"><code>footer.ts:290</code></a>）</td><td>写入时 requestRender，但画出来是 0 行</td></tr>
+<tr><td>主题 / 标题</td><td><code>themeMap.ts</code>：everforest</td><td><code>hasUI</code> 判断；只有第一个 <code>-e</code> 设主题</td><td><code>settings.theme</code> 写盘（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/settings-manager.ts#L754"><code>settings-manager.ts:754</code></a>）</td><td><code>setTheme</code>，150ms 后 <code>setTitle</code></td><td>循环外：session_start</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>叠加时会吞掉别的扩展的状态行。</b><code>just ext-subagent-widget</code> 同时加载了 pure-focus 和 theme-cycler。theme-cycler 用 <code>setStatus("theme", "🎨 …")</code> 显示当前主题，但这一行只有内置页脚会画，而内置页脚已经被 pure-focus 摘掉，所以无论启动时还是用快捷键 / <code>/theme</code> 切主题，这行状态都看不到。在模拟器里选第二个组合就能看到。这算组合用法的问题，不是 pure-focus 代码写错：它的注释写的就是去掉 “status line”（<code>setStatus</code> 的类型注释也叫它 footer/status bar，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L165"><code>types.ts:165</code></a>）。</div>
+
+<div class="callout"><b>注释里说的 “status line”</b>指页脚第三行的扩展状态，不是 run 进行中的 Working 指示器。后者挂在 <code>statusContainer</code>，在组件树里排在编辑器上面（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L984"><code>interactive-mode.ts:984</code></a>），pure-focus 管不到它。勾选模拟器的“运行中”可以看到它还在。要连它一起去掉，得再调一次 <code>ctx.ui.setWorkingVisible(false)</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2363"><code>interactive-mode.ts:2363</code></a>）。另外，文件头的用法写成了 <code>pi -e examples/extensions/pure-focus.ts</code>，本仓库的实际路径是 <code>extensions/</code>。</div>
+
+<h2 id="sum">小结</h2>
+<p>pure-focus 和 minimal 是同一个模式：在循环外（<code>session_start</code>）用 <code>setFooter</code> 换掉 L4 的一个槽位，之后跟着 TUI 重绘被调用。区别是 minimal 每帧去 L2 拉 L1 的数据，pure-focus 什么都不拉。槽位只有一个，所以叠加扩展时是最后一个 <code>setFooter</code> 赢。下一篇 <code>tool-counter-widget.ts</code>，第一次订阅 run 内循环的事件。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [4, ' * Removes the footer bar and status line entirely, leaving only', 'l4', '注释说的 status line 是页脚第三行的扩展状态（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/footer.ts#L290"><code>footer.ts:290</code></a>），不包括 Working 指示器。'],
+  [7, ' * Usage: pi -e examples/extensions/pure-focus.ts', 'l2', '路径是从 Pi 官方示例抄来的，本仓库里是 <code>extensions/pure-focus.ts</code>，用 <code>just ext-pure-focus</code> 跑。'],
+  [11, 'import { applyExtensionDefaults } from "./themeMap.ts";', 'l3', '共享工具模块，minimal 那篇讲过。pure-focus 映射到 everforest。'],
+  [13, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 加载时调用 1 次，只登记 handler。'],
+  [14, '  pi.on("session_start", async (_event, ctx) => {', 'hit', '唯一的订阅。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 启动时发 1 次，双循环还没开始；/reload 时 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>agent-session.ts:3755</code></a> 再发一次。'],
+  [15, '    applyExtensionDefaults(import.meta.url, ctx);', 'l3', '设主题 everforest（文件缺失时回落 synthwave），150ms 后把终端标题设成 “π - pure-focus”。叠加时只有第一个 -e 能设主题。'],
+  [16, '    ctx.ui.setFooter((_tui, _theme, _footerData) => ({', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2524"><code>setExtensionFooter</code></a>：先 dispose 旧的自定义页脚，<code>footerContainer.clear()</code> 把内置页脚移出组件树（第 2534 行），再调这个工厂（第 2537 行）挂上新组件，最后 requestRender。三个参数都用 <code>_</code> 开头：一个都不用。'],
+  [17, '      dispose: () => {},', 'l4', '没有定时器，也没有订阅 <code>onBranchChange</code>，无需释放。'],
+  [18, '      invalidate() {},', 'l4', '没有缓存。注意 handleEvent 里每个事件调的 <code>this.footer.invalidate()</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L3368"><code>interactive-mode.ts:3368</code></a>）是内置页脚的，不是这个。'],
+  [19, '      render(_width: number): string[] {', 'hit', '第二个回调点：TUI 每帧通过 Container.render（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a>）调用它，与双循环异步。'],
+  [20, '        return [];', 'l3', '整个扩展的“业务”：0 行。Container 把子组件的行拼起来，空数组就是不占高度，编辑器下面直接到底。'],
+];
+WT.source(SRC);
+
+// ─────────── 页脚复刻 ───────────
+// pure-focus：原样复刻
+const pureFocusRender = (_width) => [];
+// minimal：原样复刻（见第 01 篇；这里固定 pct 不超过 100）
+function minimalRender(model, pct, width) {
+  const filled = Math.round(pct / 10);
+  const bar = '#'.repeat(filled) + '-'.repeat(10 - filled);
+  const left = ` ${model}`, right = `[${bar}] ${Math.round(pct)}% `;
+  const pad = ' '.repeat(Math.max(1, width - left.length - right.length));
+  return [(left + pad + right).slice(0, width)];
+}
+// 内置 FooterComponent：简化复刻（footer.ts:157），只保留各段的形状
+const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+function builtinRender(s, width, statuses) {
+  const stats = [];
+  if (s.tin) stats.push('↑' + fmtK(s.tin));
+  if (s.tout) stats.push('↓' + fmtK(s.tout));
+  if (s.cost) stats.push('$' + s.cost.toFixed(3));
+  stats.push((s.pct === null ? '?' : s.pct.toFixed(1) + '%') + '/200k (auto)');
+  const left = stats.join(' '), right = 'claude-sonnet-5-5 • high';
+  const pad = ' '.repeat(Math.max(2, width - left.length - right.length));
+  const lines = ['~/pi-vs-claude-code (main)'.slice(0, width), (left + pad + right).slice(0, width)];
+  if (statuses && statuses.length) lines.push(statuses.join(' ').slice(0, width));
+  return lines;
+}
+// 终端底部：对话尾巴 + statusContainer + 编辑器 + footerContainer
+function viewport(footerLines, working, width) {
+  const rule = '─'.repeat(width);
+  const out = [' assistant: …（对话区）'];
+  if (working) out.push(' ⠋ Working...            ← statusContainer');
+  out.push(rule, ' > _', rule);
+  return out.concat(footerLines);
+}
+
+// ─────────── 双循环动画 ───────────
+// [节点, 事件, 循环, 状态补丁, 说明, run+, turn+]
+// 状态：pf = 当前页脚是不是 pure-focus 的；work = Working 指示器；tin/tout/cost/pct 给对照用的内置页脚
+const SCN = {
+  normal: [
+    ['session', 'session_start', '', { pf: true }, 'pure-focus 调 setFooter：内置页脚被 clear，换上空组件'],
+    ['input', 'input', '', {}, '用户回车'],
+    ['bas', 'before_agent_start', 'outer', {}, '每次 settle 1 次'],
+    ['astart', 'agent_start', 'outer', { work: true }, 'run #1，Working 指示器出现（不在页脚里，pure-focus 管不到）', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (user)', 'inner', { pct: 4 }, '内置页脚的百分比会跳；pure-focus 照样 0 行'],
+    ['llm', 'context → LLM', 'inner', {}, '请求内容和不装 pure-focus 时完全一样'],
+    ['msg', 'message_update ×N', 'inner', {}, '流式输出，每块都触发重绘 → render() 被调 → []'],
+    ['msg', 'message_end (assistant)', 'inner', { tin: 3200, tout: 410, cost: 0.012, pct: 18 }, '带 usage 落盘：↑↓$ 更新了，但只有对照栏看得见'],
+    ['tools', 'tool_call → tool_result', 'inner', { pct: 26 }, '工具结果落盘'],
+    ['tend', 'turn_end', 'inner', {}, '有工具结果 → 下一 turn'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_update ×N', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', { tin: 7100, tout: 690, cost: 0.027, pct: 31 }, '没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, 'run 结束'],
+    ['aend', 'agent_end', 'outer', {}, 'run #1 结束'],
+    ['post', '_handlePostAgentRun', 'outer', {}, '不需要 retry、compaction'],
+    ['settle', 'agent_before_settle', 'outer', {}, '没有扩展要求 continue'],
+    ['settled', 'agent_settled', 'outer', { work: false }, '停稳 → Working 消失。全程 pure-focus 只做了一件事：返回 []'],
+  ],
+  reload: [
+    ['session', 'session_start (startup)', '', { pf: true, tin: 7100, tout: 690, cost: 0.027, pct: 31 }, '启动时已经摘掉页脚'],
+    ['session', '/reload → resetExtensionUI', '', { pf: false }, 'interactive-mode.ts:6413 → setExtensionFooter(undefined)（第 2464 行）：内置页脚挂回来'],
+    ['session', 'session.reload()', '', {}, '重新加载扩展；这段时间内置页脚可见（推断：时间很短，可能只闪一下）'],
+    ['session', 'session_start (reload)', '', { pf: true }, 'agent-session.ts:3755 再发一次 → pure-focus 再调 setFooter，页脚又变 0 行'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), foot0 = document.getElementById('foot0'), rc = document.getElementById('rc');
+WT.loops({
+  hit: ['session'],
+  sub: { session: '启动 / reload · 循环外' },
+  legend: '橙框 = pure-focus 用到的回调。另一个是 footer.render()：不在图里，每次重绘被调用，永远返回 []。',
+  scenes: SCN,
+  state: () => ({ pf: false, work: false, tin: 0, tout: 0, cost: 0, pct: 0, renders: 0 }),
+  // 估算 render() 被调了几次：每步重绘 1 次，流式 ×N 算 5 次；before_agent_start / _handlePostAgentRun 不算
+  onStep(st, s) {
+    if (st.pf && s.node !== 'bas' && s.node !== 'post') st.renders += s.event.includes('×N') ? 5 : 1;
+  },
+  preview(st) {
+    const W = 46;
+    const fl = st.pf ? pureFocusRender(W) : builtinRender(st, W);
+    foot1.textContent = viewport(fl, st.work, W).join('\n');
+    foot0.textContent = viewport(builtinRender(st, W), st.work, W).join('\n');
+    WT.flash(foot1);
+    rc.textContent = st.pf
+      ? `pure-focus render() 已被调用 ${st.renders} 次，每次返回 0 行 · 左边少了 ${builtinRender(st, W).length} 行`
+      : '当前挂的是内置页脚（pure-focus 的组件不在树上）';
+  },
+  idle() {
+    foot1.textContent = '（还没启动）'; foot0.textContent = '（还没启动）';
+    rc.textContent = '';
+  },
+});
+
+// ─────────── 四层启动链 ───────────
+// [文字, x, 宽, 层中心 y, 是否用到]
+const CHIPS = {
+  bind:    ['bindCurrentSessionExtensions', 165, 180, 51, 1],
+  setft:   ['setExtensionFooter', 355, 125, 51, 1],
+  render:  ['Container.render → render()', 490, 172, 51, 1],
+  builtin: ['内置 footer 已摘下', 672, 120, 51, 0],
+  tmap:    ['applyExtensionDefaults（themeMap）', 165, 250, 147, 1],
+  fac:     ['工厂：render 返回 []', 430, 160, 147, 1],
+  loader:  ['loader · jiti · pi.on', 165, 140, 243, 1],
+  ui:      ['ctx.ui.setFooter / setTheme', 315, 180, 243, 1],
+  fdp:     ['footerDataProvider（未读）', 505, 170, 243, 0],
+  sess:    ['AgentSession', 165, 110, 339, 1],
+  ss:      ['emit session_start', 285, 130, 339, 1],
+  set:     ['settings.theme 写盘', 425, 140, 339, 1],
+  loop:    ['agent-loop 双循环（未用）', 575, 170, 339, 0],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/pure-focus.ts</code> 创建 AgentSession。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译 .ts（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L584"><code>loader.ts:584</code></a>），调 <code>factory(pi)</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>）。第 14 行的 <code>pi.on</code> 只<b>登记</b> handler。'],
+  ['bind', '<span class="tag l4">L4</span> 交互模式构造 UI 上下文（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1973"><code>interactive-mode.ts:1973</code></a>），<code>setFooter</code> 指向 <code>setExtensionFooter</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2651"><code>interactive-mode.ts:2651</code></a>）。此时挂着的还是内置页脚。'],
+  ['ss', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 经 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1096"><code>runner.emit</code></a> 发出 <code>session_start</code>，按扩展加载顺序逐个调 handler。'],
+  ['tmap', '<span class="tag l3">L3</span> 第 15 行 <code>applyExtensionDefaults</code>：查表得到 everforest。'],
+  ['ui', '<span class="tag l2">L2</span> <code>ctx.ui.setTheme("everforest")</code>。主题文件不在时返回失败，themeMap 改设 synthwave。'],
+  ['set', '<span class="tag l1">L1</span> 设成功的主题名被写进全局 settings（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2670"><code>interactive-mode.ts:2670</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/settings-manager.ts#L754"><code>settings-manager.ts:754</code></a>）。下次不带扩展启动 pi 也是这个主题。'],
+  ['ui', '<span class="tag l2">L2</span> 第 16 行 <code>ctx.ui.setFooter(factory)</code>。'],
+  ['setft', '<span class="tag l4">L4</span> <code>setExtensionFooter</code>：<code>footerContainer.clear()</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2534"><code>interactive-mode.ts:2534</code></a>），内置页脚离开组件树。'],
+  ['fac', '<span class="tag l3">L3</span> 调工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2537"><code>interactive-mode.ts:2537</code></a>）得到 <code>{ dispose, invalidate, render }</code>，挂进 footerContainer，<code>requestRender()</code>。<br><b>启动链到此结束，下面三步是之后一直在发生的事。</b>'],
+  ['render', '<span class="tag l4">L4</span> 每帧 <a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>Container.render</code></a> 调第 19 行 <code>render(width)</code>，拿到 <code>[]</code>，页脚高度 0。双循环里几乎每个事件都会触发一帧。'],
+  ['builtin', '<span class="tag l4">L4</span> 内置 FooterComponent 没有被销毁，<code>handleEvent</code> 每个事件还会 <code>invalidate()</code> 它（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L3368"><code>interactive-mode.ts:3368</code></a>），但它不在树上，<code>render</code> 不会被调用。'],
+  ['fdp', '<span class="tag l2">L2</span> 叠加的扩展调 <code>setStatus</code> 时，文字照常写进 footerDataProvider（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2303"><code>interactive-mode.ts:2303</code></a>）。能读它的只有内置页脚和用了 <code>footerData</code> 的自定义页脚；pure-focus 不读，于是状态行消失。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [165, 339] });
+
+// ─────────── 叠加模拟器 ───────────
+// 每个扩展在 session_start 里做的事：theme = 是否调 applyExtensionDefaults（只有第一个 -e 生效），footer = setFooter 的 render，status = setStatus
+const EXT = {
+  'pure-focus':      { theme: 'everforest', footer: w => pureFocusRender(w) },
+  'minimal':         { theme: 'synthwave',  footer: w => minimalRender('claude-sonnet-5-5', 31, w) },
+  'subagent-widget': { theme: 'cyberpunk' },
+  'theme-cycler':    { theme: 'synthwave', status: name => `🎨 ${name}` },
+};
+const COMBO = {
+  pf: ['pure-focus'],
+  sw: ['subagent-widget', 'pure-focus', 'theme-cycler'],
+  'pf-min': ['pure-focus', 'minimal'],
+  'min-pf': ['minimal', 'pure-focus'],
+  none: [],
+};
+const THEMES_ON_DISK = ['synthwave', 'cyberpunk', 'catppuccin-mocha', 'dracula', 'gruvbox', 'midnight-ocean', 'nord', 'ocean-breeze', 'tokyo-night']; // 当前工作区 .pi/themes
+const $ = id => document.getElementById(id);
+function simulate(list, width, working) {
+  let theme = '（默认）', footer = null, owner = '内置页脚';
+  const statuses = [];
+  if (list.length) {
+    const want = EXT[list[0]].theme;
+    theme = THEMES_ON_DISK.includes(want) ? want : `synthwave（${want} 文件缺失，回落）`;
+  }
+  list.forEach(name => {           // runner.emit 按加载顺序调 handler
+    const e = EXT[name];
+    if (e.footer) { footer = e.footer; owner = name; }   // 每次 setFooter 都先 clear：最后一个赢
+    if (e.status) statuses.push(e.status(theme.split('（')[0]));
+  });
+  const st0 = { tin: 7100, tout: 690, cost: 0.027, pct: 31 };
+  const lines = footer ? footer(width) : builtinRender(st0, width, statuses);
+  return { theme, owner, statuses, lines, screen: viewport(lines, working, width) };
+}
+function drawSim() {
+  const w = Number($('m-w').value); $('m-wv').textContent = w;
+  const list = COMBO[$('m-combo').value];
+  const r = simulate(list, w, $('m-work').checked);
+  $('foot2').textContent = r.screen.join('\n');
+  const lost = r.statuses.length && r.owner !== '内置页脚' ? `；被吞掉的状态：${r.statuses.join(' ')}` : '';
+  $('m-note').textContent = `加载顺序：${list.join(' → ') || '无'} · 页脚归 ${r.owner}（${r.lines.length} 行）· 主题 ${r.theme}${lost}`;
+}
+['m-combo', 'm-work', 'm-w'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>

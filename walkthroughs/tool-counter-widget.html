@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tool-counter-widget.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 03</div>
+<h1>tool-counter-widget.ts</h1>
+<p class="subtitle">在编辑器上方挂一个 widget，按工具名统计调用次数，每个工具一种背景色。68 行，订阅 <code>session_start</code> 和 <code>tool_execution_end</code>：前两篇只在循环外装组件，这一篇第一次订阅 run 内循环的事件。<br>运行：<code>just ext-tool-counter-widget</code>（同时加载 minimal）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。结构是“事件写、渲染读”：第 35–42 行在内循环里改闭包变量，第 50–61 行在每帧重绘时读它们。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+本扩展有三个回调点：<code>session_start</code> 在循环外，<code>tool_execution_end</code> 在 <b>run 内循环</b>的工具执行阶段（每个工具 1 次），<code>render()</code> 与循环异步。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：1 个 run，3 个 turn（并行 read ×2，再 bash + edit）</option>
+    <option value="block">场景 B：被拦截的调用也计数，/reload 后清零</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">编辑器上方的 widget（实时）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 挂 widget</td></tr>
+<tr><td><code>input</code> · <code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>:1935</code></a></td><td>–</td></tr>
+<tr><td><code>agent_start</code> · <code>agent_end</code></td><td><span class="tag outer">外</span> 每 run</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>:329</code></a></td><td>–</td></tr>
+<tr><td><code>agent_before_settle</code> · <code>agent_settled</code></td><td><span class="tag outer">外</span> 出口</td><td>≤ N · 1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2017"><code>agent-session.ts:2017</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1084"><code>:1084</code></a></td><td>–</td></tr>
+<tr><td><code>turn_*</code> · <code>context</code> · <code>message_*</code></td><td><span class="tag inner">内</span> 每 turn</td><td>M / 多</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>agent-loop.ts:216</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L400"><code>:400</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L430"><code>:430</code></a></td><td>–</td></tr>
+<tr><td><code>tool_call</code>（可拦截）</td><td><span class="tag inner">内</span> 每个工具，执行前</td><td>K</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L668"><code>agent-session.ts:668</code></a>（beforeToolCall）</td><td>–</td></tr>
+<tr><td><code>tool_execution_start</code></td><td><span class="tag inner">内</span> 每个工具，执行前</td><td>K</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L553"><code>agent-loop.ts:553</code></a>（串行）· <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L608"><code>:608</code></a>（并行）</td><td>–</td></tr>
+<tr class="hl"><td><code>tool_execution_end</code></td><td><span class="tag inner">内</span> 每个工具，执行后</td><td>K（= 本次 settle 的工具调用数）</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L931"><code>agent-loop.ts:931</code></a> ← <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L579"><code>:579</code></a>（串行）/ <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L621"><code>:621</code></a>、<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L648"><code>:648</code></a>（并行）；桥接 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1370"><code>agent-session.ts:1370</code></a></td><td>✔ 计数</td></tr>
+<tr class="hl"><td><code>widget.render(width)</code></td><td>与循环异步</td><td>每帧</td><td><a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔ 读计数</td></tr>
+</tbody></table></div>
+<p class="small muted">计数的 handler 自己不调 <code>requestRender</code>，靠的是 Pi 的顺序：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1143"><code>agent-session.ts:1143</code></a> 先把事件发给扩展，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1144"><code>:1144</code></a> 再通知 UI；UI 的 <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L3599"><code>interactive-mode.ts:3599</code></a> 更新工具结果后 <code>requestRender()</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L3605"><code>:3605</code></a>），下一帧 render 读到的已经是新数字。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>从 <code>pi -e</code> 启动到 widget 出现是前 8 步（循环外）；第 9–15 步是一次工具调用从 L1 冒到 L3 再落到 L4 的路径，每个工具都会走一遍。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、运行链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 15</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–8 步在双循环启动之前；第 9–15 步在 run 内循环里，每执行完一个工具走一遍。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>tool-counter-widget 不在安装、控制、装配任何一段：它不写提示词，也不读上下文。它从<b>事件流</b>旁路取数：<code>tool_execution_end</code> 先发出，紧接着才生成那条 toolResult 消息（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L579"><code>agent-loop.ts:579</code></a> → 580）。所以它数的是“发生过几次工具执行”，而不是“上下文里有几条 toolResult”。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 380" role="img" aria-label="提示词上下文：安装、控制、装配，以及事件旁路">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">安装 · 谁放进来</text>
+  <text class="bt" x="262" y="24" font-size="13" style="fill:var(--accent)">控制 · 谁能改</text>
+  <text class="bt" x="530" y="24" font-size="13" style="fill:var(--accent)">装配 · 怎么拼</text>
+
+  <g class="chip"><rect x="16" y="40" width="200" height="34" rx="7"/><text x="26" y="62" font-size="11.5"><tspan class="mono">system</tspan> · buildSystemPrompt</text><title>system-prompt.ts:128，按 section 生成；本扩展不注册工具，所以工具段不变</title></g>
+  <g class="chip"><rect x="16" y="84" width="200" height="34" rx="7"/><text x="26" y="106" font-size="11.5"><tspan class="mono">user</tspan> · 编辑器输入（L4）</text><title>widget 挂在编辑器上方，但不碰编辑器内容</title></g>
+  <g class="chip"><rect x="16" y="128" width="200" height="34" rx="7"/><text x="26" y="150" font-size="11.5"><tspan class="mono">custom</tspan> · 扩展注入（L2）</text><title>本扩展没有调用 pi.sendMessage</title></g>
+  <g class="chip"><rect x="16" y="172" width="200" height="34" rx="7"/><text x="26" y="194" font-size="11.5"><tspan class="mono">assistant</tspan> · LLM，带 usage</text><title>assistant 里的 toolCall 决定接下来执行哪些工具</title></g>
+  <g class="chip"><rect x="16" y="216" width="200" height="34" rx="7"/><text x="26" y="238" font-size="11.5"><tspan class="mono">toolResult</tspan> · 工具执行</text><title>agent-loop.ts:580 createToolResultMessage：在 tool_execution_end 之后才生成</title></g>
+
+  <g class="chip"><rect x="258" y="44" width="220" height="40" rx="7"/><text class="mono" x="268" y="61" font-size="11.5">input</text><text x="268" y="77" font-size="10" style="fill:var(--outer)">外循环入口 · 未订阅</text><title>agent-session.ts:2117</title></g>
+  <g class="chip"><rect x="258" y="94" width="220" height="40" rx="7"/><text class="mono" x="268" y="111" font-size="11.5">before_agent_start</text><text x="268" y="127" font-size="10" style="fill:var(--outer)">每次 settle 1 次 · 未订阅</text><title>agent-session.ts:1935；第 11 篇 purpose-gate 会用它</title></g>
+  <g class="chip"><rect x="258" y="144" width="220" height="40" rx="7"/><text class="mono" x="268" y="161" font-size="11.5">context</text><text x="268" y="177" font-size="10" style="fill:var(--inner)">内循环每 turn · 未订阅</text><title>agent-loop.ts:400 → sdk.ts:431</title></g>
+  <g class="chip"><rect x="258" y="194" width="220" height="40" rx="7"/><text class="mono" x="268" y="211" font-size="11.5">message_end</text><text x="268" y="227" font-size="10" style="fill:var(--inner)">内循环 · 未订阅</text></g>
+
+  <g class="chip"><rect x="526" y="54" width="170" height="44" rx="7"/><text class="mono" x="536" y="72" font-size="11.5">_prepareRun</text><text class="mut" x="536" y="89" font-size="10">sys补丁+user+custom</text></g>
+  <g class="chip"><rect x="526" y="124" width="170" height="54" rx="7"/><text class="mono" x="536" y="142" font-size="11">transformContext</text><text class="mono" x="536" y="157" font-size="11">→ convertToLlm</text><text x="536" y="171" font-size="10" style="fill:var(--inner)">每 turn</text></g>
+  <g class="chip"><rect x="726" y="124" width="80" height="54" rx="7"/><text x="766" y="156" text-anchor="middle" font-size="13" font-weight="700">LLM</text></g>
+
+  <path class="arrow flow" marker-end="url(#ah2)" d="M216,145 L256,145"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M478,114 L524,80"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M478,164 L524,152"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M611,98 L611,122"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M696,151 L724,151"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M766,178 L766,270 L222,270 L222,192 L218,192"/>
+  <text class="mut" x="470" y="264" font-size="10">回复 + 工具结果回到上下文（内循环下一 turn）</text>
+
+  <!-- 事件旁路 → widget -->
+  <g class="chip"><rect x="16" y="294" width="200" height="36" rx="7"/><text class="mono" x="26" y="316" font-size="10.5">emitToolExecutionEnd :931</text><title>agent-loop.ts:931；串行在 :579 调用，紧接着 :580 生成 toolResult</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M116,294 L116,252"/>
+  <text class="mut" x="124" y="278" font-size="10">先发事件，再生成消息</text>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M216,312 L248,312"/>
+  <g class="chip"><rect x="250" y="294" width="160" height="36" rx="7"/><text x="260" y="316" font-size="11">闭包 counts / total</text><title>内存里的变量，不落盘，不进 transcript</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M410,312 L438,312"/>
+  <g class="chip hit"><rect x="440" y="294" width="180" height="36" rx="7"/><text x="450" y="316" font-size="11">widget render() 每帧读</text><title>tool-counter-widget.ts:50</title></g>
+  <text class="mut" x="16" y="352" font-size="10">这条路不经过 SessionManager，也不经过 context：LLM 看不到计数，compaction 也不会让计数变化。</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>入口</th><th>循环</th><th>本扩展改了什么</th><th>会不会写回历史</th></tr></thead>
+<tbody>
+<tr><td><code>input</code> / <code>before_agent_start</code></td><td><span class="tag outer">外</span></td><td>不订阅：用户原文和系统提示词与不装时相同</td><td>–</td></tr>
+<tr><td><code>context</code> / <code>message_end</code></td><td><span class="tag inner">内</span></td><td>不订阅：请求和落盘的消息逐字节相同</td><td>–</td></tr>
+<tr class="hl"><td><code>tool_execution_end</code></td><td><span class="tag inner">内</span> 每个工具</td><td>只<b>读</b>事件的 <code>toolName</code>，返回值被忽略（这个事件也没有可返回的修改项）</td><td>不会：计数只在闭包里</td></tr>
+<tr><td>toolResult 消息</td><td><span class="tag inner">内</span></td><td>不碰。被拦截或出错的调用同样会产生 toolResult（isError），所以“计数”和“LLM 看到的工具结果条数”是对得上的</td><td>照常落盘（Pi 自己做）</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>下面的模拟器用 JS 复刻了 <code>tool_execution_end</code> handler 和 <code>render()</code>，再把 widget 放进终端底部的真实位置：编辑器上方的 widget 区，下方是 minimal 页脚。点工具按钮相当于发一次 <code>tool_execution_end</code>。</p>
+<div class="card">
+  <div class="controls" id="m-tools"></div>
+  <div class="controls">
+    <label class="small"><input type="checkbox" id="m-err"> 这次调用被拦截 / 出错（isError）</label>
+    <button id="m-reload">/reload</button>
+    <label class="small">宽度 <input type="range" id="m-w" min="24" max="100" value="64"> <span class="counter" id="m-wv">64</span></label>
+  </div>
+  <div class="controls">
+    <label class="small">叠加 <select id="m-other">
+      <option value="none">只有本扩展</option>
+      <option value="min" selected>+ minimal（just ext-tool-counter-widget）</option>
+      <option value="pg">+ minimal + purpose-gate（另一个 widget，key 不同）</option>
+      <option value="same">+ 另一个扩展也用 key "tool-counter"（假设）</option>
+    </select></label>
+  </div>
+  <div class="term" id="foot2"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>按工具计数</td><td><code>counts[name]++</code>、<code>total++</code>（第 40–41 行）</td><td><code>pi.on("tool_execution_end")</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1370"><code>agent-session.ts:1370</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1096"><code>runner.emit</code></a></td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L931"><code>emitToolExecutionEnd</code></a>：成功、出错、被拦截、找不到工具都会发</td><td>自己不刷新，搭 UI 的 <code>requestRender</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L3605"><code>:3605</code></a>）</td><td><span class="tag inner">内</span> 每执行完一个工具</td></tr>
+<tr><td>首见配色</td><td><code>palette[colorIdx % 8]</code>（第 36–39 行），第 9 种工具起颜色循环复用</td><td>–</td><td>并行执行时按<b>完成</b>顺序发事件（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L648"><code>agent-loop.ts:648</code></a>），所以先跑完的先拿颜色</td><td>24 位真彩背景 + 浅灰前景，不跟主题变</td><td><span class="tag inner">内</span> 某工具第一次结束时</td></tr>
+<tr><td>挂 widget</td><td>工厂只建一个 <code>Text("", 1, 1)</code></td><td><code>ctx.ui.setWidget</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2650"><code>interactive-mode.ts:2650</code></a></td><td>–</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2400"><code>setExtensionWidget</code></a>：按 key 存进 Map，默认 <code>aboveEditor</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2405"><code>:2405</code></a>），<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2491"><code>renderWidgets</code></a> 重建容器</td><td>循环外：session_start</td></tr>
+<tr><td>渲染一行（会折行）</td><td>拼 <code>Tools (N):</code> + 色块</td><td><code>theme.fg("accent")</code></td><td>–</td><td><a href="../../../../../vendor/pi/packages/tui/src/components/text.ts#L18"><code>Text</code></a> 上下各留 1 行空白；超宽时<b>折行</b>不截断。<code>MAX_WIDGET_LINES</code> 只管 <code>string[]</code> 形式（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2425"><code>:2425</code></a>），组件形式不受限</td><td>每帧，与循环异步</td></tr>
+<tr><td>计数的寿命</td><td>闭包变量，不读 transcript</td><td><code>/reload</code>：<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2466"><code>clearExtensionWidgets</code></a> 后重新执行工厂</td><td><code>/new</code>、<code>/resume</code>：重建 runtime，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session-services.ts#L154"><code>resourceLoader.reload</code></a>（推断：工厂也会重新执行）</td><td>widget 回到 <code>Tools (0):</code></td><td>循环外。<code>/resume</code> 一个旧会话时显示 0，不是会话历史里的总数</td></tr>
+<tr><td>主题 / 标题</td><td><code>themeMap.ts</code>：synthwave</td><td><code>hasUI</code> 判断；只有第一个 <code>-e</code> 设主题</td><td><code>settings.theme</code> 写盘（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/settings-manager.ts#L754"><code>settings-manager.ts:754</code></a>）</td><td><code>setTheme</code>，150ms 后 <code>setTitle</code>（“π - tool-counter-widget”）</td><td>循环外：session_start</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>文件头注释和实现对不上。</b>第 5 行写的格式是 <code>Tools (N): [Bash 3] [Read 7] [Write 2]</code>，实际输出没有方括号：每项是 <code>"  name count  "</code> 加一块背景色；工具名也不是首字母大写，而是 Pi 内置工具的原名 <code>bash</code>、<code>read</code>、<code>write</code>（例如 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/bash.ts#L418"><code>tools/bash.ts:418</code></a>）。另外第 11 行 import 了 <code>Box</code> 但没用到。模拟器里显示的就是实际格式。修法：把注释改成 <code>Tools (N):  bash 3   read 7 </code>（色块），删掉 <code>Box</code>。</div>
+
+<div class="callout warn"><b>叠加拦截类扩展时，被拦下的调用也算一次。</b><code>tool_execution_end</code> 不只在工具真正跑完时发：<code>tool_call</code> 被拦截（beforeToolCall 返回 block）、工具不存在、参数校验失败、中途 abort，都会走 <code>kind: "immediate"</code> 分支，同样发一次 <code>tool_execution_end</code>，只是 <code>isError: true</code>（<code>prepareToolCall</code>，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L718"><code>agent-loop.ts:718</code></a>）。本扩展不看 <code>isError</code>，所以和 damage-control 一起用时，被拦下的 <code>bash</code> 也会让计数 +1。这不算写错：它数的是“调用尝试”。想只数成功的，在 handler 开头加 <code>if (event.isError) return;</code>。模拟器里勾选“被拦截 / 出错”再点按钮就能看到。</div>
+
+<div class="callout"><b>widget 槽和页脚槽不一样。</b>上一篇讲过，页脚只有一个槽，多个 <code>setFooter</code> 是最后一个赢。widget 是按 key 存的 Map：key 不同就并排叠放（按插入顺序从上往下），key 相同才替换（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2412"><code>interactive-mode.ts:2412</code></a>）。在终端里，widget 区（<code>widgetContainerAbove</code>）排在 Working 指示器之下、编辑器之上（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L984"><code>interactive-mode.ts:984</code></a>）。purpose-gate 要等用户在弹窗里填完目的才调 <code>setWidget</code>，所以它总排在本扩展下面，跟 <code>-e</code> 顺序无关。</div>
+
+<h2 id="sum">小结</h2>
+<p>tool-counter-widget 是“事件写、渲染读”：在 run 内循环里订阅 <code>tool_execution_end</code> 改闭包里的计数，在循环外用 <code>setWidget</code> 挂一个组件，每帧重绘时读这些计数。它不刷新屏幕，靠 Pi “先发给扩展、再通知 UI”的顺序让下一帧看到新值。下一篇 <code>tool-counter.ts</code>，把同样的计数搬进页脚，并第一次用到 <code>footerData</code>（git 分支等）。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [5, ' * Format: Tools (N): [Bash 3] [Read 7] [Write 2]', 'l3', '⚠ 注释里的格式和实现不一致：实际没有方括号，工具名是 Pi 的原名（bash / read），见 ③ 的警示。'],
+  [11, 'import { Box, Text } from "@mariozechner/pi-tui";', 'l4', '旧包名，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L113"><code>loader.ts:113</code></a> 把它别名到新包。只用到 Text，<code>Box</code> 没用。'],
+  [14, 'const palette = [ /* 8 组深色 RGB */ ];', 'l3', '模块级常量，8 种深色背景，配浅灰前景字。第 9 种工具开始循环复用。'],
+  [25, 'function bg(rgb: number[], s: string): string {', 'l3', '用 24 位真彩 ANSI（<code>48;2;r;g;b</code>）给一段文字上背景色，结尾 <code>49m</code> 恢复默认背景。不经过 theme，所以换主题时色块不变。'],
+  [29, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 加载扩展时调用 1 次。下面 4 个变量都活在这个闭包里，/reload 时工厂重跑，它们回到初值。'],
+  [30, '  const counts: Record<string, number> = {};', 'l3', '工具名 → 次数。插入顺序就是 widget 上的显示顺序（Object.entries 按插入顺序）。'],
+  [33, '  let colorIdx = 0;', 'l3', '下一个新工具拿第几号颜色。'],
+  [35, '  pi.on("tool_execution_end", async (event) => {', 'hit', '第一个循环内的订阅。<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L931"><code>agent-loop.ts:931</code></a> 发出，经 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1370"><code>agent-session.ts:1370</code></a> 转成扩展事件。<span class="tag inner">run 内循环</span>每执行完一个工具调 1 次，不论成功与否。'],
+  [36, '    if (!(event.toolName in toolColors)) {', 'l3', '第一次见到这个工具名才分配颜色。并行执行时事件按完成顺序到达，先跑完的先拿颜色。'],
+  [37, '      toolColors[event.toolName] = palette[colorIdx % palette.length];', 'l3', '取模，所以不会越界；代价是第 9 种工具和第 1 种同色。'],
+  [40, '    counts[event.toolName] = (counts[event.toolName] || 0) + 1;', 'l3', '不看 <code>event.isError</code>：被拦截、出错、找不到的工具也计 1 次。'],
+  [41, '    total++;', 'l3', '总数。handler 到这里就结束了，没有 requestRender：刷新靠 UI 随后的重绘。'],
+  [44, '  pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 启动时发 1 次，循环外。/reload 时 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a> 再发。'],
+  [45, '    applyExtensionDefaults(import.meta.url, ctx);', 'l3', 'themeMap.ts：主题 synthwave，150ms 后标题设成 “π - tool-counter-widget”。只有第一个 -e 的扩展能设主题。'],
+  [46, '    ctx.ui.setWidget("tool-counter", (_tui, theme) => {', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2400"><code>setExtensionWidget</code></a>：先删同 key 的旧组件，立即调用这个工厂，按 key 存进 aboveEditor 的 Map，再 renderWidgets + requestRender。'],
+  [47, '      const text = new Text("", 1, 1);', 'l4', '<a href="../../../../../vendor/pi/packages/tui/src/components/text.ts#L18"><code>Text(text, paddingX=1, paddingY=1)</code></a>：左右各留 1 列，上下各留 1 行空白，所以 widget 至少占 3 行。'],
+  [50, '        render(width: number): string[] {', 'hit', '第三个回调点：TUI 每帧通过 Container.render（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a>）调用。与循环异步，只读闭包里的计数。'],
+  [51, '          const entries = Object.entries(counts);', 'l3', '按插入顺序（也就是每个工具第一次结束的顺序）列出。'],
+  [54, '            return bg(rgb, `\\x1b[38;2;220;220;220m  ${name} ${count}  \\x1b[39m`);', 'l4', '每项是 “两个空格 + 名字 + 空格 + 次数 + 两个空格”，浅灰字、彩色底。没有方括号。'],
+  [56, '          text.setText(', 'l4', '每帧都 setText，会清空 Text 的缓存（<a href="../../../../../vendor/pi/packages/tui/src/components/text.ts#L25"><code>text.ts:25</code></a>），所以每帧都重新折行。计数很少，开销可以忽略。'],
+  [57, '            theme.fg("accent", `Tools (${total}):`) +', 'l4', '标题用主题的 accent 色，这部分会跟主题变。'],
+  [60, '          return text.render(width);', 'l4', 'Text 按宽度折行（不截断），再加上下空行。工具种类多、终端窄时 widget 会变高。'],
+  [62, '        invalidate() {', 'l4', 'TUI 要求丢弃缓存时调用（例如主题文件变化，<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1109"><code>interactive-mode.ts:1109</code></a>），转给 Text。'],
+];
+WT.source(SRC);
+
+// ─────────── tool-counter-widget 复刻 ───────────
+const PALETTE = [[12, 40, 80], [50, 20, 70], [10, 55, 45], [70, 30, 10], [55, 15, 40], [15, 50, 65], [45, 45, 15], [65, 18, 25]];
+function newState() { return { counts: {}, colors: {}, total: 0, colorIdx: 0, errs: 0 }; }
+// 第 35–42 行
+function onToolEnd(st, toolName, isError) {
+  if (!(toolName in st.colors)) { st.colors[toolName] = PALETTE[st.colorIdx % PALETTE.length]; st.colorIdx++; }
+  st.counts[toolName] = (st.counts[toolName] || 0) + 1;
+  st.total++;
+  if (isError) st.errs++;
+}
+// 第 50–61 行 + Text(…, 1, 1)。返回行数组，每行是 [{t, cls?, bg?}] 片段。
+// 折行是近似：按“标题 / 色块”整块折，真实的 wrapTextWithAnsi 按空格断词，可能把一个色块拆到两行。
+function widgetRender(st, width) {
+  const units = [{ t: `Tools (${st.total}):`, cls: 'acc' }];
+  Object.entries(st.counts).forEach(([name, c]) => {
+    units.push({ t: ' ' });
+    units.push({ t: `  ${name} ${c}  `, cls: 'chunk', bg: st.colors[name] });
+  });
+  const padX = Math.min(1, Math.max(0, Math.floor((width - 1) / 2)));
+  const cw = Math.max(1, width - padX * 2);
+  const rows = [[]]; let used = 0;
+  units.forEach(u => {
+    if (u.t === ' ' && used === 0) return;
+    if (used + u.t.length > cw && used > 0) {
+      if (u.t === ' ') return;
+      rows.push([]); used = 0;
+    }
+    let t = u.t;
+    while (t.length > cw - used) {
+      rows[rows.length - 1].push({ ...u, t: t.slice(0, cw - used) });
+      t = t.slice(cw - used); rows.push([]); used = 0;
+    }
+    if (t) { rows[rows.length - 1].push({ ...u, t }); used += t.length; }
+  });
+  const blank = [{ t: ' '.repeat(width) }];
+  const body = rows.map(r => {
+    const len = r.reduce((a, s) => a + s.t.length, 0);
+    return [{ t: ' '.repeat(padX) }, ...r, { t: ' '.repeat(Math.max(0, width - padX - len)) }];
+  });
+  return [blank, ...body, blank];
+}
+function paint(el, lines) {
+  el.textContent = '';
+  lines.forEach((segs, i) => {
+    segs.forEach(s => {
+      const sp = document.createElement('span');
+      sp.textContent = s.t;
+      if (s.cls) sp.className = s.cls;
+      if (s.bg) sp.style.background = `rgb(${s.bg[0]}, ${s.bg[1]}, ${s.bg[2]})`;
+      el.appendChild(sp);
+    });
+    if (i < lines.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+const plain = (t, cls) => [{ t, cls }];
+const editorLines = w => [plain('─'.repeat(w), 'dim'), plain(' > ', 'dim'), plain('─'.repeat(w), 'dim')];
+
+// ─────────── 双循环动画 ───────────
+// [节点, 事件, 循环, 状态补丁, 说明, run+, turn+]
+// 状态 = newState() 的计数 + mounted（widget 在不在组件树上）+ renders（render() 估算次数）
+// 补丁：{ mounted } 挂上 / 摘掉 widget，直接合并进状态。
+// 下面两种补丁表达不了，由 onStep 读 s.patch 处理：
+//   { tool, err }  一次 tool_execution_end（tool/err 也会留在状态里，只当“最近一次”看，预览不读）
+//   { fresh }      工厂重跑，计数和 renders 归零
+const SCN = {
+  normal: [
+    ['session', 'session_start', '', { mounted: true }, 'setWidget("tool-counter")：widget 出现，显示 Tools (0):'],
+    ['input', 'input', '', {}, '用户回车'],
+    ['bas', 'before_agent_start', 'outer', {}, '每次 settle 1 次：本扩展未订阅'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '请求和不装本扩展时完全一样'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '两个 toolCall：read a.ts、read b.ts（并行执行）'],
+    ['tools', 'tool_execution_end (read)', 'inner', { tool: 'read' }, '先跑完的那个 → read 第一次出现，分到 0 号色'],
+    ['tools', 'tool_execution_end (read)', 'inner', { tool: 'read' }, 'read 2'],
+    ['tools', 'toolResult ×2 → message_end', 'inner', {}, 'toolResult 落盘；计数不变（不订阅 message_end）'],
+    ['tend', 'turn_end', 'inner', {}, '有工具结果 → 下一 turn'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：bash、edit'],
+    ['tools', 'tool_execution_end (bash)', 'inner', { tool: 'bash' }, 'bash 第一次出现，分到 1 号色'],
+    ['tools', 'tool_execution_end (edit)', 'inner', { tool: 'edit' }, 'edit 分到 2 号色'],
+    ['tend', 'turn_end', 'inner', {}, '下一 turn'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 3', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, '没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, 'run 结束'],
+    ['aend', 'agent_end', 'outer', {}, 'run #1 结束'],
+    ['post', '_handlePostAgentRun', 'outer', {}, '不需要 retry、compaction'],
+    ['settle', 'agent_before_settle', 'outer', {}, '没有扩展要求 continue'],
+    ['settled', 'agent_settled', 'outer', {}, '停稳。本次 settle 里 tool_execution_end 被调 4 次'],
+  ],
+  block: [
+    ['session', 'session_start', '', { mounted: true }, '挂上 widget（假设同时装了 damage-control）'],
+    ['input', 'input', '', {}, '用户回车'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：bash "rm -rf build"'],
+    ['tools', 'tool_call → block', 'inner', {}, 'damage-control 拦下：beforeToolCall 返回 block，工具没有执行'],
+    ['tools', 'tool_execution_end (bash, isError)', 'inner', { tool: 'bash', err: true }, '照样发事件 → bash 1（本扩展不看 isError）'],
+    ['tend', 'turn_end', 'inner', {}, '错误结果回给模型 → 下一 turn'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, '改用 read 看看'],
+    ['tools', 'tool_execution_end (read)', 'inner', { tool: 'read' }, 'read 1'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 3', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, '没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, 'run 结束'],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['post', '_handlePostAgentRun', 'outer', {}, ''],
+    ['settle', 'agent_before_settle', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳：Tools (2)，其中 1 次其实被拦下了'],
+    ['session', '/reload → resetExtensionUI', '', { mounted: false }, 'clearExtensionWidgets（interactive-mode.ts:2466）：widget 被摘掉'],
+    ['session', 'session.reload() → factory', '', { fresh: true }, '扩展重新加载，工厂重跑，新闭包里 counts = {}'],
+    ['session', 'session_start (reload)', '', { mounted: true }, 'agent-session.ts:3755 → 再次 setWidget：Tools (0):'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+WT.loops({
+  hit: ['session', 'tools'],
+  sub: { tools: 'tool_execution_end' },
+  legend: [
+    '橙框 = tool-counter-widget 用到的回调。tools 格的副标题换成了真正订阅的 tool_execution_end：每个工具执行完、toolResult 生成之前发出。',
+    '另一个是 widget 的 render()：不在图里，TUI 重绘时调用，与循环异步。',
+  ],
+  scenes: SCN,
+  state: () => ({ ...newState(), mounted: false, renders: 0 }),
+  onStep(st, s) {
+    if (s.patch.fresh) Object.assign(st, newState(), { renders: 0 });
+    if ('tool' in s.patch) onToolEnd(st, s.patch.tool, !!s.patch.err);
+    // 估算 render() 被调了几次：widget 在树上时每步重绘 1 次；before_agent_start / _handlePostAgentRun 不算
+    if (st.mounted && s.node !== 'bas' && s.node !== 'post') st.renders += 1;
+  },
+  logTag: s => 'tool' in s.patch ? '<span class="tag hit">本扩展</span>'
+    : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    const W = 60;
+    if (st.mounted) paint(foot1, [...widgetRender(st, W), ...editorLines(W)]);
+    else paint(foot1, [plain(' '.repeat(W)), ...editorLines(W)]);
+    WT.flash(foot1);
+    rc.textContent = st.mounted
+      ? `render() 已被调用约 ${st.renders} 次 · tool_execution_end 已处理 ${st.total} 次` + (st.errs ? `（其中 ${st.errs} 次 isError）` : '')
+      : 'widget 不在组件树上';
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 运行链 ───────────
+// [文字, x, 宽, 层中心 y, 是否用到]
+const CHIPS = {
+  bind:   ['bindCurrentSessionExtensions', 110, 190, 51, 1],
+  setw:   ['setExtensionWidget', 312, 130, 51, 1],
+  uih:    ['handleEvent → requestRender', 454, 185, 51, 1],
+  render: ['render() → Text', 651, 120, 51, 1],
+  tmap:   ['applyExtensionDefaults（themeMap）', 110, 240, 147, 1],
+  biz:    ['配色 + counts[name]++（35–41）', 362, 200, 147, 1],
+  loader: ['loader · jiti', 110, 105, 243, 1],
+  on:     ['pi.on ×2', 227, 70, 243, 1],
+  emit:   ['runner.emit', 309, 95, 243, 1],
+  ctxui:  ['ctx.ui.setWidget', 416, 125, 243, 1],
+  bridge: ['_emitExtensionEvent', 553, 140, 243, 1],
+  sess:   ['AgentSession', 110, 100, 339, 1],
+  loop:   ['runLoop · executeToolCalls', 222, 185, 339, 1],
+  tee:    ['emitToolExecutionEnd', 419, 150, 339, 1],
+  hae:    ['_handleAgentEvent', 581, 130, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/tool-counter-widget.ts -e extensions/minimal.ts</code> 创建 AgentSession。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 即时编译 .ts（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L584"><code>loader.ts:584</code></a>），调用 <code>factory(pi)</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），也就是第 29 行：闭包里的 counts / toolColors / total / colorIdx 在这时创建。'],
+  ['on', '<span class="tag l2">L2</span> 两次 <code>pi.on</code>：<code>tool_execution_end</code> 和 <code>session_start</code>，都只<b>登记</b>，不执行。'],
+  ['bind', '<span class="tag l4">L4</span> 交互模式构造 UI 上下文（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1973"><code>interactive-mode.ts:1973</code></a>），<code>setWidget</code> 指向 <code>setExtensionWidget</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2650"><code>:2650</code></a>）。'],
+  ['emit', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 发出 <code>session_start</code>，<code>runner.emit</code> 按扩展顺序调 handler，第 44 行拿到 <code>ctx</code>。'],
+  ['tmap', '<span class="tag l3">L3</span> <code>applyExtensionDefaults</code>：主题 synthwave，标题 “π - tool-counter-widget”（它是第一个 -e，minimal 的主题设置会被跳过）。'],
+  ['ctxui', '<span class="tag l2">L2</span> 第 46 行 <code>ctx.ui.setWidget("tool-counter", factory)</code>。'],
+  ['setw', '<span class="tag l4">L4</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2400"><code>setExtensionWidget</code></a>：调工厂得到组件，存进 aboveEditor 的 Map，<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2491"><code>renderWidgets</code></a> 重建容器并 <code>requestRender()</code>。<br><b>启动链到此结束。下面是每执行完一个工具都会走的运行链。</b>'],
+  ['loop', '<span class="tag l1">L1</span> <span class="tag inner">run 内循环</span>：assistant 带 toolCall，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L279"><code>agent-loop.ts:279</code></a> 进入 <code>executeToolCalls</code>，逐个（或并行）执行。'],
+  ['tee', '<span class="tag l1">L1</span> 工具结束（或被拦截）后，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L931"><code>agent-loop.ts:931</code></a> 发出 <code>tool_execution_end</code>；串行路径在 <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L579"><code>:579</code></a>，紧接着才生成 toolResult 消息。'],
+  ['hae', '<span class="tag l1">L1</span> <code>_handleAgentEvent</code>：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1143"><code>agent-session.ts:1143</code></a> <b>先</b>发给扩展。'],
+  ['bridge', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1370"><code>agent-session.ts:1370</code></a> 把 agent 事件转成扩展事件（toolCallId / toolName / result / isError），交给 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1096"><code>runner.emit</code></a>。'],
+  ['biz', '<span class="tag l3">L3</span> 第 35–41 行：第一次见到就分配颜色，<code>counts[name]++</code>、<code>total++</code>。不刷新屏幕。'],
+  ['uih', '<span class="tag l4">L4</span> 扩展处理完，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1144"><code>agent-session.ts:1144</code></a> 才通知 UI；<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L3599"><code>interactive-mode.ts:3599</code></a> 更新工具结果组件并 <code>requestRender()</code>（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L1027"><code>tui.ts:1027</code></a>）。'],
+  ['render', '<span class="tag l4">L4</span> 下一帧 <code>Container.render</code>（<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a>）调到第 50 行 <code>render(width)</code>，读 L3 的闭包计数，交给 Text 折行。顺序保证了这一帧看到的已经是新数字。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器：handler + render + 终端底部布局 ───────────
+const $ = id => document.getElementById(id);
+const TOOLS = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'subagent', 'nonexistent'];
+let sim = newState();
+TOOLS.forEach(name => {
+  const b = document.createElement('button');
+  b.textContent = name === 'nonexistent' ? 'nonexistent（找不到）' : name;
+  b.onclick = () => { onToolEnd(sim, name, name === 'nonexistent' || $('m-err').checked); drawSim(); };
+  $('m-tools').appendChild(b);
+});
+function purposeLines(w) {
+  const pad = [{ t: ' '.repeat(w), bg: [40, 20, 60] }];
+  const txt = '  PURPOSE: Refactor the auth module';
+  return [pad, [{ t: (txt + ' '.repeat(w)).slice(0, w), cls: 'acc', bg: [40, 20, 60] }], pad];
+}
+function minimalLine(w) {
+  const left = ' claude-sonnet-5-5', right = '[##--------] 18% ';
+  return plain((left + ' '.repeat(Math.max(1, w - left.length - right.length)) + right).slice(0, w), 'dim');
+}
+function drawSim() {
+  const w = Number($('m-w').value); $('m-wv').textContent = w;
+  const other = $('m-other').value;
+  const lines = [plain(' Working…（statusContainer，run 进行中才有）'.slice(0, w), 'dim'), plain(' '.repeat(w))]; // leading Spacer(1)
+  let note = '';
+  if (other === 'same') {
+    lines.push(plain('（另一个扩展的 widget：同 key 后到，替换掉了本扩展）'.slice(0, w), 'acc'));
+    note = 'key 相同：setExtensionWidget 先删旧的再存新的（interactive-mode.ts:2412），后调用的赢，和页脚槽一样只剩一个。';
+  } else {
+    lines.push(...widgetRender(sim, w));
+    if (other === 'pg') { lines.push(...purposeLines(w)); note = 'key 不同：两个 widget 并排叠放。purpose-gate 等用户填完目的才 setWidget，插入得晚，所以排在下面。'; }
+  }
+  lines.push(...editorLines(w));
+  if (other !== 'none') lines.push(minimalLine(w));
+  else lines.push(plain(' ~/repo (main)   ↑3.2k ↓410 $0.012   18.0%/200k'.slice(0, w), 'dim'));
+  paint($('foot2'), lines);
+  const kinds = Object.keys(sim.counts).length;
+  const extra = [];
+  if (sim.errs) extra.push(`其中 ${sim.errs} 次 isError=true（被拦截 / 出错 / 找不到），widget 不区分`);
+  if (kinds > PALETTE.length) extra.push(`已有 ${kinds} 种工具，超过 8 色：第 9 种起颜色和前面重复`);
+  if (!note && other === 'min') note = 'widget 在编辑器上方，minimal 在页脚：两个不同的容器，互不干扰。';
+  if (!note && other === 'none') note = '只装本扩展时，页脚是内置页脚。';
+  $('m-note').textContent = [note, ...extra].join(' · ');
+}
+$('m-reload').onclick = () => { sim = newState(); drawSim(); };
+['m-w', 'm-other'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>

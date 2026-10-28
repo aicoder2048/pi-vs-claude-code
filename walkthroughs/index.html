@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pi 扩展走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">pi-vs-claude-code · extensions/</div>
+<h1>Pi 扩展走读</h1>
+<p class="subtitle">按从简单到复杂的顺序，逐个走读 <code>extensions/</code> 里的扩展。每篇都从三个维度讲，每个维度都要落到 Pi 的双循环和具体的回调点上。</p>
+</header>
+
+<h2 id="method">三个维度</h2>
+
+<div class="grid c3">
+  <div class="card">
+    <h3 style="margin-top:0">维度一 · 四层结构</h3>
+    <p><span class="tag l1">L1 Runtime</span> <span class="tag l2">L2 扩展</span> <span class="tag l3">L3 业务</span> <span class="tag l4">L4 UI</span>：每一层由哪些部件组成，扩展碰到了哪些，启动链怎么穿过各层。</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">维度二 · 提示词上下文</h3>
+    <p>从“安装 / 控制 / 装配”三个环节，跟踪系统生成的提示词、动态提示词、用户消息和扩展消息怎么跨四层拼成一次 LLM 请求。</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">维度三 · 业务穿透</h3>
+    <p>列出扩展的每个 feature，从 L3 出发，穿透到 L2、L1，再落到 L4。</p>
+  </div>
+</div>
+
+<div class="callout"><b>贯穿三个维度：双循环。</b><span class="tag outer">settle 外循环 · 续跑—停稳</span> 重复 run（<code>agent-session.ts _startRun</code>）；<span class="tag inner">run 内循环 · 模型—工具</span> 重复 turn（<code>agent-loop.ts runLoop</code>）。每篇都标出扩展的回调挂在哪一层循环。概念见 <a href="../../../../../docs/10-pi-harness/teach/lessons/0002-harness-dual-loops.html">第 2 课 · Harness 双循环</a>。</div>
+
+<h2 id="order">排序依据</h2>
+<p>按复杂度从低到高排，复杂度看三个维度，合计分相同时按行数排：</p>
+<table><thead><tr><th>维度</th><th>怎么算</th></tr></thead><tbody>
+<tr><td>① 回调</td><td>订阅了几种 <code>pi.on</code> 事件</td></tr>
+<tr><td>② 装配</td><td>改系统提示词 2 分；改写输入、注入消息（<code>sendMessage</code> / <code>sendUserMessage</code>）、触发续跑各 1 分</td></tr>
+<tr><td>③ 注册</td><td>每个工具 2 分；每个命令、快捷键、参数 1 分；工具参数结构每 5 个字段 1 分</td></tr>
+</tbody></table>
+<p class="small muted">分数由 grep 统计，只是表面指标，界面逻辑、规则匹配这类复杂度没算进去。前三篇是在定这个规则之前写的，但位置正好符合。在分数基础上手动调整了两处：tilldone 提前到 purpose-gate 之后，agent-team 排在 agent-chain 之前。另外，这 18 个扩展都没用到 <code>agent_before_settle</code>、<code>context</code>、<code>turn_*</code> 这几个回调，双循环里的这些插口不会在走读里出现。</p>
+
+<h2 id="list">目录</h2>
+<div class="extlist">
+  <a class="ext" href="minimal.html"><span class="idx">01</span><span><span class="name">minimal.ts</span><br><span class="desc">页脚：模型名 + 10 格上下文条 · 33 行 · 不订阅循环事件，靠 TUI 重绘拉取</span></span><span class="st tag hit">已完成</span></a>
+  <a class="ext" href="pure-focus.html"><span class="idx">02</span><span><span class="name">pure-focus.ts</span><br><span class="desc">用 render 返回 [] 的组件顶替内置页脚 · 24 行 · 页脚槽只有一个，叠加时最后一个 setFooter 赢</span></span><span class="st tag hit">已完成</span></a>
+  <a class="ext" href="tool-counter-widget.html"><span class="idx">03</span><span><span class="name">tool-counter-widget.ts</span><br><span class="desc">编辑器上方的工具计数 widget · 68 行 · 第一次订阅内循环事件：tool_execution_end 写计数，render 每帧读</span></span><span class="st tag hit">已完成</span></a>
+  <a class="ext" href="tool-counter.html"><span class="idx">04</span><span><span class="name">tool-counter.ts</span><br><span class="desc">两行富页脚 · 102 行 · 计数靠事件写，token / 成本由 render 每帧遍历会话树现读，git 分支走 footerData</span></span><span class="st tag hit">已完成</span></a>
+  <div class="ext todo"><span class="idx">05</span><span><span class="name">damage-control.ts</span><br><span class="desc">第一次拦截：tool_call 返回 block · 232 行 · ① 2 ② 0 ③ 0</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">06</span><span><span class="name">damage-control-continue.ts</span><br><span class="desc">拦截之后让 agent 继续 · 256 行 · ① 2 ② 0 ③ 0</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">07</span><span><span class="name">session-replay.ts</span><br><span class="desc">命令 + 自定义 UI 回放会话 · 216 行 · ① 1 ② 0 ③ 1</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">08</span><span><span class="name">cross-agent.ts</span><br><span class="desc">读取 .claude/.gemini/.codex 命令，用户消息发起一次 settle · 292 行 · ① 1 ② 1 ③ 2</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">09</span><span><span class="name">theme-cycler.ts</span><br><span class="desc">命令 + 快捷键切换主题 · 181 行 · ① 2 ② 0 ③ 3</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">10</span><span><span class="name">system-select.ts</span><br><span class="desc">before_agent_start 改系统提示词 + setActiveTools · 167 行 · ① 2 ② 2 ③ 1</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">11</span><span><span class="name">purpose-gate.ts</span><br><span class="desc">input 改写 + 动态系统提示词 · 84 行 · ① 3 ② 3 ③ 0</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">12</span><span><span class="name">tilldone.ts</span><br><span class="desc">回调最多：input、tool_call、agent_end 续跑、session 分支 · 726 行 · ① 7 ② 3 ③ 4</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">13</span><span><span class="name">agent-team.ts</span><br><span class="desc">团队编排：自定义工具 + setActiveTools · 734 行 · ① 2 ② 2 ③ 6</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">14</span><span><span class="name">agent-chain.ts</span><br><span class="desc">顺序流水线：自定义工具 + 动态提示词 · 797 行 · ① 2 ② 2 ③ 4</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">15</span><span><span class="name">pi-pi.ts</span><br><span class="desc">元 agent：自定义工具 + 动态提示词 · 633 行 · ① 2 ② 2 ③ 5</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">16</span><span><span class="name">subagent-widget.ts</span><br><span class="desc">4 个工具 + 4 个命令，子代理与 sendMessage · 593 行 · ① 1 ② 2 ③ 14</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">17</span><span><span class="name">coms.ts</span><br><span class="desc">跨会话消息：4 个工具 + 参数 + agent_end · 1598 行 · ① 3 ② 2 ③ 17</span></span><span class="st tag off">待写</span></div>
+  <div class="ext todo"><span class="idx">18</span><span><span class="name">coms-net.ts</span><br><span class="desc">跨机器消息：在 coms 之上加网络 · 1639 行 · ① 3 ② 2 ③ 19</span></span><span class="st tag off">待写</span></div>
+</div>
+<p class="muted">themeMap.ts 是共享工具模块，不单独成篇，会在用到它的扩展里顺带讲。源码对照 Pi 1.4.0。</p>
+
+</main>
+</body>
+</html>
