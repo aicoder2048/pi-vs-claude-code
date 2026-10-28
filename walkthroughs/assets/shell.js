@@ -11,6 +11,7 @@
     // 阅读指南：跨篇通用的读法，会持续增补。新加一篇指南就在这里加一行。
     guides: [
       { title: "怎么读双循环与回调点", href: "guide-loops.html" },
+      { title: "一个 turn 的内部", href: "guide-turn.html" },
     ],
     walks: [
       { n: "01", title: "minimal.ts", href: "minimal.html" },
