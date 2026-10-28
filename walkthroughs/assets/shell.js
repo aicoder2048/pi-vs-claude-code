@@ -17,6 +17,7 @@
       { n: "06", title: "damage-control-continue.ts", href: "damage-control-continue.html" },
       { n: "07", title: "session-replay.ts", href: "session-replay.html" },
       { n: "08", title: "cross-agent.ts", href: "cross-agent.html" },
+      { n: "09", title: "theme-cycler.ts", href: "theme-cycler.html" },
     ],
     lessons: [
       { n: "01", title: "循环骨架与插口", href: LESSONS + "0001-loop-skeleton-and-sockets.html" },

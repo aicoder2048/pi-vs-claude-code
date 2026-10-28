@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>theme-cycler.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 09</div>
+<h1>theme-cycler.ts</h1>
+<p class="subtitle">用快捷键（Ctrl+X 向前、Ctrl+Q 向后）和 <code>/theme</code> 命令切换主题，切换后在状态行写主题名、在编辑器下方闪 3 秒色块。181 行，订阅 <code>session_start</code> 和 <code>session_shutdown</code>，注册 2 个快捷键、1 个命令。这一篇第一次用到 <code>pi.registerShortcut</code>：入口是键盘，既不经过 <code>prompt()</code>，也不进双循环。<br>运行：<code>just ext-theme-cycler</code>（同时加载 minimal）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。四个入口最后都汇到同一组函数：<code>cycleTheme</code> / <code>setTheme</code> 改主题，<code>updateStatus</code> 写状态，<code>showSwatch</code> 挂色块。本页按已提交（HEAD）的版本讲解。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+本扩展的入口全在循环外：<code>session_start</code> / <code>session_shutdown</code> 在会话的开始和结束；<code>/theme</code> 和第 07 篇一样，在 <code>prompt()</code> 入口被截走；快捷键更早，按键在<b>编辑器</b>里就被拦下（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/custom-editor.ts#L90"><code>custom-editor.ts:90</code></a>），根本没有变成文字提交。agent 正在跑时按快捷键也照样生效，和循环并行。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="keys">场景 A：按 Ctrl+Q、Ctrl+X（agent 正在跑）</option>
+    <option value="cmd">场景 B：/theme 选一个主题，然后 /reload</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">终端底部（实时，简化）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 主题 + 状态</td></tr>
+<tr class="hl"><td><code>session_shutdown</code></td><td>循环外</td><td>0（/reload、/new、/resume、退出时 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3723"><code>agent-session.ts:3723</code></a>（reload）· <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session-runtime.ts#L172"><code>agent-session-runtime.ts:172</code></a>（换会话）· <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session-runtime.ts#L406"><code>:406</code></a>（退出）</td><td>✔ 清掉色块定时器</td></tr>
+<tr class="hl"><td>快捷键 handler</td><td>与循环异步（编辑器按键）</td><td>0（每次按键 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2289"><code>interactive-mode.ts:2289</code></a> ← <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/custom-editor.ts#L90"><code>custom-editor.ts:90</code></a></td><td>✔ Ctrl+Q（Ctrl+X 被跳过，见 ③）</td></tr>
+<tr class="hl"><td><code>/theme</code> 命令 handler</td><td>循环外（截在 <code>prompt()</code> 入口）</td><td>0（每次输入 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2193"><code>agent-session.ts:2193</code></a></td><td>✔ 选择框 / 按名切换</td></tr>
+<tr><td><code>input</code> · <code>agent_*</code> · <code>turn_*</code> · <code>tool_*</code></td><td>外 / 内</td><td>1 / N / M / K</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a></td><td>–</td></tr>
+<tr class="hl"><td>色块 widget <code>render(w)</code></td><td>与循环异步</td><td>每帧（挂着的 3 秒内）</td><td><a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔ 画 5 个色块</td></tr>
+</tbody></table></div>
+<p class="small muted">至此走读里出现了扩展的三种入口：<code>pi.on</code> 由 Pi 在固定时点调用；<code>registerCommand</code> 在用户提交 <code>/名字</code> 时由 <code>prompt()</code> 调用；<code>registerShortcut</code> 在编辑器收到按键时调用，ctx 由交互模式现场拼出来（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2248"><code>interactive-mode.ts:2248</code></a>），每次按键都是新的一份。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–7 步是启动链：快捷键在加载时只是登记，等交互模式绑定扩展时才和内置快捷键比对，冲突的被跳过。第 8–14 步是一次 Ctrl+Q：从 L4 的编辑器直接到 L3，改主题时又穿到 L1 的设置文件，最后回到 L4 全屏重绘。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、快捷键链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 14</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–7 步在双循环启动之前；第 8 步起是一次快捷键，同样不进双循环。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>theme-cycler 不在安装、控制、装配任何一段：主题只影响终端怎么画，LLM 完全不知道。快捷键连文字都不产生，<code>/theme</code> 在 <code>input</code> 之前被截走，也不会变成 user 消息。它影响的是另一条“上下文”：<b>全局设置文件</b>。每切一次主题，<code>settings.theme</code> 就写一次盘，所有项目、所有 Pi 会话共享。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 250" role="img" aria-label="主题切换影响终端渲染和全局设置，不进上下文">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <g class="chip hit"><rect x="16" y="20" width="220" height="44" rx="7"/><text class="mono" x="26" y="38" font-size="11">ctx.ui.setTheme(name)</text><text class="mut" x="26" y="55" font-size="10">第 96、137、158 行</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M236,42 L276,42"/>
+  <g class="chip"><rect x="278" y="20" width="250" height="44" rx="7"/><text class="mono" x="288" y="38" font-size="11">themeController.setThemeName</text><text class="mut" x="288" y="55" font-size="10">全局 theme 是 Proxy，换掉内部实例</text><title>interactive-mode.ts:2674；theme.ts:653 的 Proxy</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M528,42 L568,42"/>
+  <g class="chip"><rect x="570" y="20" width="236" height="44" rx="7"/><text x="580" y="38" font-size="11">ui.invalidate → 全屏重绘</text><text class="mut" x="580" y="55" font-size="10">所有用 theme.fg 的组件立刻换色</text><title>theme-controller.ts:250</title></g>
+
+  <path class="arrow flow" marker-end="url(#ah2)" d="M403,64 L403,100"/>
+  <g class="chip hit"><rect x="278" y="102" width="250" height="44" rx="7"/><text class="mono" x="288" y="120" font-size="11">settingsManager.setTheme</text><text class="mut" x="288" y="137" font-size="10">写全局 settings.json（interactive-mode.ts:2677）</text><title>settings-manager.ts:754</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M528,124 L568,124"/>
+  <g class="chip"><rect x="570" y="102" width="236" height="44" rx="7"/><text x="580" y="120" font-size="11">下次启动读到这个主题……</text><text class="mut" x="580" y="137" font-size="10">除非 themeMap 在 session_start 又改掉</text></g>
+
+  <g class="chip"><rect x="16" y="180" width="220" height="44" rx="7"/><text x="26" y="198" font-size="11">LLM 上下文</text><text class="mut" x="26" y="215" font-size="10">不受影响：没有任何消息产生</text></g>
+  <g class="chip"><rect x="278" y="180" width="250" height="44" rx="7"/><text x="288" y="198" font-size="11">硬编码 RGB 的扩展</text><text class="mut" x="288" y="215" font-size="10">如第 03 篇的色块：不跟主题变</text></g>
+  <g class="chip"><rect x="570" y="180" width="236" height="44" rx="7"/><text x="580" y="198" font-size="11">状态行 setStatus("theme", …)</text><text class="mut" x="580" y="215" font-size="10">只有内置页脚会画</text></g>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>改了什么</th><th>在哪</th><th>寿命</th><th>LLM 看得到吗</th></tr></thead>
+<tbody>
+<tr class="hl"><td>当前主题</td><td>全局 <code>theme</code> Proxy（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/theme/theme.ts#L653"><code>theme.ts:653</code></a>）</td><td>本进程</td><td>否</td></tr>
+<tr class="hl"><td><code>settings.theme</code></td><td>全局设置文件（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/settings-manager.ts#L754"><code>settings-manager.ts:754</code></a>）</td><td>持久，所有项目共享</td><td>否</td></tr>
+<tr><td>状态 <code>theme</code></td><td><code>footerDataProvider</code></td><td>到 /reload</td><td>否</td></tr>
+<tr><td>色块 widget</td><td>编辑器下方（<code>belowEditor</code>）</td><td>3 秒</td><td>否</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器有两部分。上半部分复刻 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L680"><code>runner.getShortcuts</code></a> 的冲突判定，用的是 Pi 1.4.0 在 macOS 上的默认快捷键表：输入一个键，看扩展注册它会被跳过、覆盖内置功能，还是空闲可用。下半部分复刻 <code>cycleTheme</code>（第 82–105 行），主题列表按 Pi 的排序（system 在前，其余按字母）。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">扩展注册的键 <input id="m-key" type="text" value="ctrl+x" style="width:140px;font-family:var(--mono)"></label>
+    <span id="m-keys"></span>
+  </div>
+  <div class="term" id="m-kout"></div>
+  <div class="controls" style="margin-top:10px">
+    <button id="m-back">Ctrl+Q（-1）</button><button id="m-fwd">Ctrl+X（+1，若可用）</button>
+    <label class="small">当前主题 <select id="m-cur"></select></label>
+  </div>
+  <div class="term" id="m-tout"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：快捷键表取的是 macOS 默认值（Windows 上 <code>ctrl+q</code> 是排队 follow-up，属于保留键）；用户在 keybindings.json 里改过的键不在其中。主题列表用的是本仓库 <code>.pi/themes</code>（HEAD）加内置主题，家目录下的自定义主题不算。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr class="hl"><td>注册快捷键</td><td><code>"ctrl+x"</code> / <code>"ctrl+q"</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L323"><code>loader.ts:323 registerShortcut</code></a> 存进 <code>ext.shortcuts</code></td><td>–</td><td>绑定时 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L680"><code>getShortcuts</code></a> 与内置键比对；冲突写进启动时的 “[Extension issues]”（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1948"><code>interactive-mode.ts:1948</code></a>）</td><td>加载 / 绑定时</td></tr>
+<tr class="hl"><td>按键分发</td><td><code>cycleTheme(ctx, ±1)</code></td><td>现拼的 ctx（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2248"><code>:2248</code></a>），handler 不等待（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2289"><code>:2289</code></a>）</td><td>–</td><td>编辑器先查扩展快捷键（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/custom-editor.ts#L90"><code>custom-editor.ts:90</code></a>）；浮层、选择框有焦点时不生效</td><td>每次按键</td></tr>
+<tr><td>切主题</td><td>算下一个 index</td><td><code>ctx.ui.setTheme</code> / <code>getAllThemes</code></td><td>写 <code>settings.theme</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2677"><code>interactive-mode.ts:2677</code></a>）</td><td><code>invalidate</code>，所有组件重绘</td><td>立即</td></tr>
+<tr><td>状态行</td><td><code>🎨 名字</code></td><td><code>setStatus("theme", …)</code>（key 写对了）</td><td>–</td><td>内置页脚的扩展状态区；装了 minimal 时看不到</td><td>每次切换</td></tr>
+<tr><td>色块</td><td>5 个主题色 + 名字</td><td><code>setWidget("theme-swatch", …, { placement: "belowEditor" })</code></td><td>–</td><td>编辑器下方 3 行，3 秒后 <code>setWidget(…, undefined)</code> 摘掉</td><td>每次切换；定时器重置</td></tr>
+<tr><td><code>/theme</code></td><td>有参数直接切；没有就列表选</td><td>命令 ctx；<code>ctx.ui.select</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2635"><code>showExtensionSelector</code></a></td><td>同上</td><td>选择框</td><td>输入命令时</td></tr>
+<tr><td>清理</td><td>清掉色块定时器</td><td><code>pi.on("session_shutdown")</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3723"><code>agent-session.ts:3723</code></a> 等</td><td>–</td><td>会话结束时</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：Ctrl+X 和 Pi 的保留快捷键冲突，被直接跳过。</b>Pi 1.4.0 把 <code>ctrl+x</code> 分配给 <code>app.message.copy</code>（复制上一条回复，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/keybindings.ts#L64"><code>keybindings.ts:64</code></a>），而这个动作在保留名单里（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L110"><code>runner.ts:110</code></a>）。<code>getShortcuts</code> 遇到保留键时记一条 “conflicts with built-in shortcut. Skipping.” 然后 <code>continue</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L697"><code>runner.ts:697</code></a>）。结果是文件头和第 109 行承诺的“Ctrl+X 向前切换”从来不生效，按下去执行的是复制；只剩 Ctrl+Q 向后切换。在 Windows 上 <code>ctrl+q</code> 是排队 follow-up，也是保留键，两个快捷键都没了。修法：换一个不在默认表里的键（可以用 <code>/hotkeys</code> 查），并同步改文件头注释。注意别换成编辑器在用的非保留键（例如 <code>ctrl+a</code> 是行首）：那种情况扩展会胜出并给出警告（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L705"><code>runner.ts:705</code></a>），原来的编辑功能就没了。模拟器里输入键名可以逐个试。</div>
+
+<div class="callout"><b>切换的结果会被 themeMap 在下次 session_start 改回去。</b>每次切换都写全局 <code>settings.theme</code>，看起来会“记住”。但第 171 行的 <code>applyExtensionDefaults</code> 在每次 session_start（启动、/reload、/new、/resume）都按 themeMap 设主题：<code>just ext-theme-cycler</code> 里本扩展是第一个 <code>-e</code>，于是每次都被改回 synthwave，并且再写一次设置文件。只有当别的扩展排在前面时，本扩展的 <code>applyExtensionDefaults</code> 才什么都不做（同样会被那个扩展的主题覆盖）。场景 B 演示了 /reload 之后的变化。另外设置文件是全局的：在这里切主题，会影响其他项目里下一次启动的 Pi。</div>
+
+<div class="callout"><b>和 minimal 一起用，状态行看不到。</b>本扩展的 <code>setStatus("theme", …)</code> 写法是对的（对比第 05 篇少传 key 的写法），但扩展状态只由内置页脚绘制（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/footer.ts#L290"><code>footer.ts:290</code></a>）。<code>just ext-theme-cycler</code> 同时装了 minimal，它用 <code>setFooter</code> 换掉了内置页脚，于是 “🎨 名字” 永远不显示，只能靠 notify 和色块知道当前主题。这是页脚槽位的取舍，不是本扩展写错。</div>
+
+<div class="callout"><b>小处。</b>闭包变量 <code>currentCtx</code>（第 25 行）被赋值了 4 次，从来没被读过。<code>/theme</code> 的列表里，<code>t.path ? t.path : "built-in"</code> 只有 system 主题会显示 “built-in”：内置的 dark / light 也有文件路径（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/theme/theme.ts#L418"><code>theme.ts:418</code></a>）。当前主题不在列表里时（第 92 行）index 取 0，再 ±1，第一个主题会被跳过。色块定时器在 <code>session_shutdown</code> 里清掉，避免旧 ctx 在会话切换后还被调用，这是值得照抄的写法。</div>
+
+<h2 id="sum">小结</h2>
+<p>theme-cycler 补齐了扩展的第三种入口：<code>registerShortcut</code>。按键在编辑器里就被拦下，handler 拿到现拼的 ctx，和 <code>/theme</code> 命令一样完全在双循环之外。它改的是渲染和全局设置，不碰 LLM 上下文；它最大的坑也在入口处：Ctrl+X 撞上了 Pi 的保留键，在绑定阶段就被静默跳过（只在启动时的 Extension issues 里留一条警告）。下一篇 <code>system-select.ts</code> 回到循环：在 <code>before_agent_start</code> 改系统提示词，第一次真正改动“安装”这一段。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [5, ' *   Ctrl+X          — Cycle theme forward', 'l3', '⚠ 在 Pi 1.4.0 里不生效：ctrl+x 是保留键（复制上一条回复），见 ③。'],
+  [25, '	let currentCtx: ExtensionContext | undefined;', 'l3', '赋值 4 次，从未读取：死变量。'],
+  [26, '	let swatchTimer: ReturnType<typeof setTimeout> | null = null;', 'l3', '色块的 3 秒定时器，session_shutdown 时清掉。'],
+  [31, '		ctx.ui.setStatus("theme", `🎨 ${name}`);', 'l4', 'key 写对了。→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2302"><code>setExtensionStatus</code></a>。只在内置页脚里显示。'],
+  [42, '		ctx.ui.setWidget(', 'l4', '同 key 先移除旧的再挂新的（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2412"><code>interactive-mode.ts:2412</code></a>），所以连按几次只会有一个色块。'],
+  [46, '				render(width: number): string[] {', 'hit', '每帧调用，与循环异步。用 theme.fg 画色块，颜色跟随当前主题。'],
+  [63, '			{ placement: "belowEditor" },', 'l4', '放在编辑器下方，和第 03 篇的 aboveEditor 不是同一个容器。'],
+  [66, '		swatchTimer = setTimeout(() => {', 'l3', '3 秒后摘掉色块。每次切换都先清掉旧定时器（第 37–40 行），所以最后一次切换后满 3 秒才消失。'],
+  [73, '		return ctx.ui.getAllThemes();', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/theme/theme.ts#L403"><code>getAvailableThemesWithPaths</code></a>：system 在前，其余按名字排序。'],
+  [92, '		if (index === -1) index = 0;', 'l3', '当前主题不在列表里时从 0 开始，再 ±1：第一个主题会被跳过。'],
+  [94, '		index = (index + direction + themes.length) % themes.length;', 'l3', '首尾循环。'],
+  [96, '		const result = ctx.ui.setTheme(theme.name);', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2670"><code>interactive-mode.ts:2670</code></a>：换主题，成功后写全局 <code>settings.theme</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2677"><code>:2677</code></a>）。'],
+  [101, '			ctx.ui.notify(`${theme.name} (${index + 1}/${themes.length})`, "info");', 'l4', '聊天区提示，带序号。装了 minimal 时这是唯一的文字反馈。'],
+  [109, '	pi.registerShortcut("ctrl+x", {', 'hit', '⚠ <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L323"><code>loader.ts:323</code></a> 只是登记；交互模式绑定时 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L697"><code>getShortcuts</code></a> 发现它是保留键，跳过。'],
+  [111, '		handler: async (ctx) => {', 'l2', '快捷键 handler 的 ctx 由交互模式现拼（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2248"><code>interactive-mode.ts:2248</code></a>）。这一条因为被跳过，永远不会被调用。'],
+  [117, '	pi.registerShortcut("ctrl+q", {', 'hit', 'macOS / Linux 上 ctrl+q 不在默认表里，可以用。按下时 <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/custom-editor.ts#L90"><code>custom-editor.ts:90</code></a> 先于编辑器的其他处理调到这里。与循环异步。'],
+  [127, '	pi.registerCommand("theme", {', 'hit', '命令，和第 07 篇同一条路：<code>prompt()</code> 入口截走，循环外执行。Pi 没有内置的 /theme，不冲突。'],
+  [137, '				const result = ctx.ui.setTheme(arg);', 'l4', '<code>/theme 名字</code>：直接按名字切。'],
+  [154, '			const selected = await ctx.ui.select("Select Theme", items);', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2635"><code>showExtensionSelector</code></a>：选择框，await 到用户选择或取消。'],
+  [157, '			const selectedName = selected.split(/\\s/)[0];', 'l3', '从 “名字 (active) — 路径” 里取第一个词。主题名里没有空格，所以够用。'],
+  [169, '	pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。'],
+  [171, '		applyExtensionDefaults(import.meta.url, ctx);', 'l3', '是第一个 -e 时按 themeMap 设 synthwave：每次 session_start 都会覆盖用户上次切到的主题。'],
+  [175, '	pi.on("session_shutdown", async () => {', 'hit', '走读里第一次出现。/reload（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3723"><code>agent-session.ts:3723</code></a>）、换会话、退出时发出，循环外。这里只清定时器。'],
+];
+WT.source(SRC);
+
+// ─────────── Pi 1.4.0 默认快捷键（macOS），由 keybindings.ts 抽取 ───────────
+// 平台条件已按 macOS 取值（windowsKeybindings = false，platform = darwin）
+const KEYBINDINGS_MAC = {"app.interrupt": ["escape"], "app.clear": ["ctrl+c"], "app.exit": ["ctrl+d"], "app.suspend": ["ctrl+z"], "app.thinking.cycle": ["shift+tab"], "app.thinking.save": ["ctrl+s"], "app.model.cycleForward": ["ctrl+p"], "app.model.cycleBackward": ["shift+ctrl+p"], "app.model.select": ["ctrl+l"], "app.tools.expand": ["ctrl+o"], "app.thinking.toggle": ["ctrl+t"], "app.session.toggleNamedFilter": ["ctrl+n"], "app.editor.external": ["ctrl+g"], "app.message.copy": ["ctrl+x"], "app.message.followUp": ["alt+enter"], "app.message.dequeue": ["alt+up"], "app.clipboard.pasteImage": ["ctrl+v"], "app.session.new": [], "app.session.tree": [], "app.session.fork": [], "app.session.resume": [], "app.tree.foldOrUp": ["alt+left", "ctrl+left"], "app.tree.unfoldOrDown": ["alt+right", "ctrl+right"], "app.tree.editLabel": ["shift+l"], "app.tree.toggleLabelTimestamp": ["shift+t"], "app.session.togglePath": ["ctrl+p"], "app.session.toggleSort": ["ctrl+s"], "app.session.rename": ["ctrl+r"], "app.session.delete": ["ctrl+d"], "app.session.deleteNoninvasive": ["ctrl+backspace"], "app.models.save": ["ctrl+s"], "app.models.enableAll": ["ctrl+a"], "app.models.clearAll": ["ctrl+x"], "app.models.toggleProvider": ["ctrl+p"], "app.models.reorderUp": ["alt+up"], "app.models.reorderDown": ["alt+down"], "app.tree.filter.default": ["ctrl+d"], "app.tree.filter.noTools": ["ctrl+t"], "app.tree.filter.userOnly": ["ctrl+u"], "app.tree.filter.labeledOnly": ["ctrl+l"], "app.tree.filter.all": ["ctrl+a"], "app.tree.filter.cycleForward": ["ctrl+o"], "app.tree.filter.cycleBackward": ["shift+ctrl+o"], "tui.editor.cursorUp": ["up"], "tui.editor.cursorDown": ["down"], "tui.editor.historyPrevious": [], "tui.editor.historyNext": [], "tui.editor.cursorLeft": ["left", "ctrl+b"], "tui.editor.cursorRight": ["right", "ctrl+f"], "tui.editor.cursorWordLeft": ["alt+left", "ctrl+left", "alt+b"], "tui.editor.cursorWordRight": ["alt+right", "ctrl+right", "alt+f"], "tui.editor.cursorLineStart": ["home", "ctrl+a"], "tui.editor.cursorLineEnd": ["end", "ctrl+e"], "tui.editor.jumpForward": ["ctrl+]"], "tui.editor.jumpBackward": ["ctrl+alt+]"], "tui.editor.pageUp": ["pageUp", "ctrl+pageUp"], "tui.editor.pageDown": ["pageDown", "ctrl+pageDown"], "tui.editor.deleteCharBackward": ["backspace"], "tui.editor.deleteCharForward": ["delete", "ctrl+d"], "tui.editor.deleteWordBackward": ["ctrl+w", "alt+backspace"], "tui.editor.deleteWordForward": ["alt+d", "alt+delete"], "tui.editor.deleteToLineStart": ["ctrl+u"], "tui.editor.deleteToLineEnd": ["ctrl+k"], "tui.editor.yank": ["ctrl+y"], "tui.editor.yankPop": ["alt+y"], "tui.editor.undo": ["ctrl+-"], "tui.input.newLine": ["shift+enter", "ctrl+j"], "tui.input.submit": ["enter"], "tui.input.tab": ["tab"], "tui.input.copy": ["ctrl+c"], "tui.select.up": ["up"], "tui.select.down": ["down"], "tui.select.pageUp": ["pageUp"], "tui.select.pageDown": ["pageDown"], "tui.select.confirm": ["enter"], "tui.select.cancel": ["escape", "ctrl+c"], "tui.altScreen.pageUp": ["pageUp"], "tui.altScreen.pageDown": ["pageDown"], "tui.altScreen.halfPageUp": [], "tui.altScreen.halfPageDown": [], "tui.altScreen.lineUp": [], "tui.altScreen.lineDown": [], "tui.altScreen.previousPrompt": ["ctrl+shift+up", "ctrl+up"], "tui.altScreen.nextPrompt": ["ctrl+shift+down", "ctrl+down"], "tui.altScreen.search": ["ctrl+shift+f"], "tui.altScreen.searchNext": ["enter", "ctrl+g"], "tui.altScreen.searchPrevious": ["shift+enter", "ctrl+shift+g"], "tui.altScreen.searchClose": ["escape"], "tui.altScreen.top": ["ctrl+home"], "tui.altScreen.bottom": ["ctrl+end"]};
+const RESERVED = ['app.interrupt', 'app.clear', 'app.exit', 'app.suspend', 'app.thinking.cycle', 'app.model.cycleForward', 'app.model.cycleBackward', 'app.model.select', 'app.tools.expand', 'app.thinking.toggle', 'app.editor.external', 'app.message.copy', 'app.message.followUp', 'tui.input.submit', 'tui.select.confirm', 'tui.select.cancel', 'tui.input.copy', 'tui.editor.deleteToLineEnd'];
+// runner.ts:120–140 buildBuiltinKeybindings + :697–712 的判定
+function resolveShortcut(key) {
+  const k = key.trim().toLowerCase();
+  let hit = null;
+  for (const [action, keys] of Object.entries(KEYBINDINGS_MAC)) {
+    if (!keys.map(x => x.toLowerCase()).includes(k)) continue;
+    const restrict = RESERVED.includes(action);
+    if (hit?.restrict && !restrict) continue;
+    hit = { action, restrict };
+  }
+  const all = Object.entries(KEYBINDINGS_MAC).filter(([, keys]) => keys.map(x => x.toLowerCase()).includes(k)).map(([a]) => a);
+  return { hit, all };
+}
+const THEMES = ['system', 'catppuccin-mocha', 'cyberpunk', 'dark', 'dracula', 'everforest', 'gruvbox', 'light', 'midnight-ocean', 'nord', 'ocean-breeze', 'rose-pine', 'synthwave', 'tokyo-night'];
+const SW = { synthwave: ['#72f1b8', '#36f9f6', '#ff8b39', '#fede5d', '#fede5d'], dracula: ['#50fa7b', '#bd93f9', '#ffb86c', '#6272a4', '#6272a4'], nord: ['#a3be8c', '#88c0d0', '#ebcb8b', '#4c566a', '#616e88'], gruvbox: ['#b8bb26', '#fabd2f', '#fe8019', '#928374', '#a89984'] };
+const swatchOf = n => SW[n] || ['#7ec699', '#7aa2f7', '#e0af68', '#6b7089', '#8a8fa8'];
+
+// ─────────── 双循环动画 ───────────
+// 状态：theme（当前主题）、settings（settings.theme）、swatch（色块剩余秒数，0 = 没挂）、chat（聊天区最后一条）、minimal（是否装了 minimal）
+const SCN = {
+  keys: [
+    ['session', 'session_start', '', { theme: 'synthwave', settings: 'synthwave', chat: '[Extension issues] Extension shortcut \'ctrl+x\' … conflicts with built-in shortcut. Skipping.' }, '绑定时 getShortcuts 已经把 ctrl+x 跳过；themeMap 设 synthwave，状态写 🎨 synthwave'],
+    ['input', 'input', '', {}, '用户提问'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_update ×N', 'inner', {}, '流式输出中'],
+    ['msg', '⌨ Ctrl+Q → shortcut handler', '', { theme: 'rose-pine', settings: 'rose-pine', swatch: 3, chat: 'rose-pine (12/14)' }, '与循环异步：编辑器先查扩展快捷键 → cycleTheme(-1) → setTheme 写设置 → 全屏重绘'],
+    ['msg', '⌨ Ctrl+X → app.message.copy', '', { chat: '（复制了上一条回复：不是本扩展）' }, 'ctrl+x 不在扩展快捷键表里，交给 Pi 内置动作'],
+    ['tools', 'tool_execution_end', 'inner', { swatch: 1 }, '循环照常转；色块还剩约 1 秒'],
+    ['tend', 'turn_end', 'inner', { swatch: 0 }, '3 秒到：setWidget("theme-swatch", undefined)'],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳。快捷键全程没有进入循环'],
+  ],
+  cmd: [
+    ['session', 'session_start', '', { theme: 'synthwave', settings: 'synthwave' }, ''],
+    ['input', 'prompt("/theme") → 命令', '', { chat: '（选择框：Select Theme）' }, 'prompt() 入口截走，await ctx.ui.select'],
+    ['input', '选中 nord', '', { theme: 'nord', settings: 'nord', swatch: 3, chat: 'Theme: nord' }, 'setTheme("nord")：重绘 + 写全局 settings.theme = nord'],
+    ['session', '/reload → session_shutdown', '', { swatch: 0 }, 'agent-session.ts:3723：清掉色块定时器'],
+    ['session', 'session_start (reload)', '', { theme: 'synthwave', settings: 'synthwave', chat: '（themeMap 把主题改回 synthwave）' }, 'applyExtensionDefaults：本扩展是第一个 -e → setTheme("synthwave")，设置文件又被改回'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintRows(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    r.forEach(([t, color]) => { const s = document.createElement('span'); s.textContent = t; if (color) s.style.color = color; el.appendChild(s); });
+    if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+function bottomRows(st, withMinimal) {
+  const c = swatchOf(st.theme), rows = [];
+  rows.push([[' ' + (st.chat || ''), '#bbb']]);
+  rows.push([[' ─'.repeat(30), c[3]]], [[' > ', c[1]]], [[' ─'.repeat(30), c[3]]]);
+  if (st.swatch) rows.push([['  🎨 ', c[1]], [st.theme + '  ', c[4]], ...c.map(x => ['███ ', x])]);
+  if (withMinimal) rows.push([[' gpt-5.5-codex' + ' '.repeat(28) + '[##--------] 18%', c[3]]]);
+  else rows.push([[' ~/repo (main)   ↑3.2k ↓410   18.0%/200k   ', c[3]], ['🎨 ' + st.theme, c[1]]]);
+  return rows;
+}
+WT.loops({
+  hit: ['session', 'input'],
+  sub: { session: 'session_start / _shutdown', input: 'prompt() 截走 /theme' },
+  legend: [
+    '橙框 = theme-cycler 用到的位置：session 格是 session_start 和 session_shutdown，input 格是 /theme 命令。',
+    '快捷键 handler 不在图里：编辑器收到按键时调用，与循环异步；色块 widget 的 render() 每帧调用。',
+  ],
+  scenes: SCN,
+  state: () => ({ theme: 'synthwave', settings: 'synthwave', swatch: 0, chat: '' }),
+  logTag: s => /Ctrl\+Q|\/theme|nord|session/.test(s.event) ? '<span class="tag hit">本扩展</span>' : /Ctrl\+X/.test(s.event) ? '<span class="tag off">内置</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    paintRows(foot1, bottomRows(st, true));
+    WT.flash(foot1);
+    rc.textContent = `当前主题 ${st.theme} · settings.theme = ${st.settings} · 装了 minimal：页脚里没有 “🎨 ${st.theme}”`;
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 快捷键链 ───────────
+const CHIPS = {
+  bind:    ['setupExtensionShortcuts', 110, 160, 51, 1],
+  diag:    ['[Extension issues]', 282, 120, 51, 1],
+  editor:  ['editor.handleInput（custom-editor:90）', 414, 230, 51, 1],
+  redraw:  ['invalidate → 全屏重绘', 656, 145, 51, 1],
+  tmap:    ['applyExtensionDefaults（themeMap）', 110, 240, 147, 1],
+  cycle:   ['cycleTheme（82–105）', 362, 140, 147, 1],
+  swatch:  ['status + swatch（28–70）', 514, 160, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  regsc:   ['pi.registerShortcut ×2', 222, 145, 243, 1],
+  regcmd:  ['registerCommand', 379, 110, 243, 1],
+  getsc:   ['runner.getShortcuts', 501, 125, 243, 1],
+  ctxui:   ['ctx.ui.setTheme', 638, 110, 243, 1],
+  sess:    ['AgentSession', 110, 100, 339, 1],
+  start:   ['session_start', 222, 100, 339, 1],
+  settings:['settingsManager.setTheme', 334, 160, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/theme-cycler.ts -e extensions/minimal.ts</code> 创建 AgentSession。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），第 24 行。'],
+  ['regsc', '<span class="tag l2">L2</span> 第 109、117 行：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L323"><code>loader.ts:323</code></a> 把 ctrl+x、ctrl+q 存进 <code>ext.shortcuts</code>。此时还不检查冲突。'],
+  ['regcmd', '<span class="tag l2">L2</span> 第 127 行：登记 <code>/theme</code>（同第 07 篇）。'],
+  ['getsc', '<span class="tag l2">L2</span> 交互模式绑定扩展时调 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L680"><code>runner.getShortcuts</code></a>：ctrl+x 对应保留动作 app.message.copy → 记警告并跳过（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L697"><code>:697</code></a>）；ctrl+q 没有冲突，保留。'],
+  ['bind', '<span class="tag l4">L4</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2243"><code>setupExtensionShortcuts</code></a> 把剩下的快捷键挂到默认编辑器的 <code>onExtensionShortcut</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2284"><code>:2284</code></a>）；冲突警告显示在启动区的 “[Extension issues]”（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1948"><code>:1948</code></a>）。'],
+  ['tmap', '<span class="tag l3">L3</span> <code>session_start</code>（第 169 行）：<code>applyExtensionDefaults</code> 设 synthwave，<code>updateStatus</code> 写状态。<br><b>启动链到此结束。下面是一次 Ctrl+Q。</b>'],
+  ['editor', '<span class="tag l4">L4</span> 用户按 Ctrl+Q：<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/custom-editor.ts#L90"><code>custom-editor.ts:90</code></a> 先问扩展快捷键，匹配上就返回，编辑器不再处理这个键。'],
+  ['bind', '<span class="tag l4">L4</span> 现拼一个 ctx（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2248"><code>interactive-mode.ts:2248</code></a>），<code>Promise.resolve(handler(ctx))</code> 不等待（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2289"><code>:2289</code></a>）。'],
+  ['cycle', '<span class="tag l3">L3</span> 第 117–122 行 → <code>cycleTheme(ctx, -1)</code>：取主题列表、算上一个 index。'],
+  ['ctxui', '<span class="tag l2">L2</span> <code>ctx.ui.setTheme(name)</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2670"><code>interactive-mode.ts:2670</code></a>。'],
+  ['settings', '<span class="tag l1">L1</span> 主题换成功后写全局设置（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2677"><code>:2677</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/settings-manager.ts#L754"><code>settings-manager.ts:754</code></a>）。'],
+  ['redraw', '<span class="tag l4">L4</span> 主题控制器 <code>invalidate</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/theme/theme-controller.ts#L250"><code>theme-controller.ts:250</code></a>）：全局 theme 是 Proxy，所有用 theme.fg 的组件下一帧换色。'],
+  ['swatch', '<span class="tag l3">L3</span> <code>updateStatus</code>、<code>showSwatch</code>、notify：状态、色块、聊天区提示；3 秒后定时器摘掉色块。全程没有碰到 <code>prompt()</code> 和双循环。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+['ctrl+x', 'ctrl+q', 'ctrl+a', 'ctrl+t', 'alt+t', 'ctrl+shift+t'].forEach(k => {
+  const b = document.createElement('button'); b.textContent = k;
+  b.onclick = () => { $('m-key').value = k; drawKey(); };
+  $('m-keys').appendChild(b);
+});
+THEMES.forEach(t => { const o = document.createElement('option'); o.value = o.textContent = t; $('m-cur').appendChild(o); });
+$('m-cur').value = 'synthwave';
+function drawKey() {
+  const k = $('m-key').value;
+  const { hit, all } = resolveShortcut(k);
+  const rows = [];
+  if (!hit) rows.push([[` '${k}' 不在默认快捷键表里 → 扩展注册成功，按下就调 handler`, '#72f1b8']]);
+  else if (hit.restrict) rows.push([[` '${k}' = ${hit.action}（保留）→ “conflicts with built-in shortcut. Skipping.”`, '#ff8b39']], [['   扩展的 handler 永远不会被调用；按下执行的是 Pi 内置动作', '#bbb']]);
+  else rows.push([[` '${k}' = ${hit.action}（非保留）→ 扩展胜出，并警告 “Using <扩展路径>”`, '#fede5d']], [['   原来的内置功能在编辑器里失效', '#bbb']]);
+  if (all.length > 1) rows.push([[`   这个键在默认表里还用于：${all.filter(a => a !== hit?.action).join('、')}`, '#888']]);
+  paintRows($('m-kout'), rows);
+  WT.flash($('m-kout'));
+}
+function cycle(dir) {
+  const cur = $('m-cur').value;
+  let index = THEMES.indexOf(cur);
+  if (index === -1) index = 0;
+  index = (index + dir + THEMES.length) % THEMES.length;
+  $('m-cur').value = THEMES[index];
+  const c = swatchOf(THEMES[index]);
+  paintRows($('m-tout'), [[['  🎨 ', c[1]], [THEMES[index] + '  ', c[4]], ...c.map(x => ['███ ', x])], [[` notify: ${THEMES[index]} (${index + 1}/${THEMES.length}) · settings.theme ← ${THEMES[index]}`, '#bbb']]]);
+  WT.flash($('m-tout'));
+}
+$('m-back').onclick = () => { cycle(-1); };
+$('m-fwd').onclick = () => {
+  const { hit } = resolveShortcut('ctrl+x');
+  if (hit?.restrict) { paintRows($('m-tout'), [[[' Ctrl+X → app.message.copy：复制上一条回复。主题没变。', '#ff8b39']]]); WT.flash($('m-tout')); $('m-note').textContent = '已提交版本里 Ctrl+X 被跳过，只能用 Ctrl+Q 往回切；想往前只能绕一圈'; return; }
+  cycle(1);
+};
+$('m-key').addEventListener('input', drawKey);
+drawKey();
+cycle(0);
+$('m-note').textContent = '色块颜色只对几个主题做了近似，其余主题用同一组示意色';
+</script>
+</body>
+</html>
