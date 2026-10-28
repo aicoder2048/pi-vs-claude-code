@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>damage-control-continue.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+<script src="assets/damage-control-sim.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 06</div>
+<h1>damage-control-continue.ts</h1>
+<p class="subtitle">和 damage-control 用同一份 YAML 规则、同一段检查代码，只改了“拦下之后”：不再调 <code>ctx.abort()</code>，而是把一段可操作的反馈写进被拦工具的结果里，让 agent 在<b>同一个 run</b> 里读到它、换条路继续干活。256 行，订阅 <code>session_start</code> 和 <code>tool_call</code>。上一篇的返回值只是“拦”，这一篇的返回值同时是一段写给模型的提示词。<br>运行：<code>just ext-damage-control-continue</code>（同时加载 minimal 和 theme-cycler）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。第 135–226 行的检查逻辑和第 05 篇逐行相同（只删了注释），这里只收和上一篇不同的行：第 36–54 行的反馈模板，以及第 228–254 行的判决。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+回调点和第 05 篇一样：<code>session_start</code> 在循环外，<code>tool_call</code> 在 <b>run 内循环</b>每个工具执行前。区别在拦下之后循环怎么走：没有 abort，被拦的调用变成一条 isError 的 toolResult，<code>hasMoreToolCalls</code> 仍为 true（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L281"><code>agent-loop.ts:281</code></a>），<b>内循环转下一个 turn</b>，模型读到反馈。外循环什么也没发生，不需要新的 run。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="adapt">场景 A：读 .env 被拦，模型改为假设 key 存在，继续完成任务</option>
+    <option value="stop">场景 B：rm -rf 被拦，模型照反馈停下来问用户</option>
+    <option value="evade">场景 C：rm -rf 被拦，模型换成 find -delete，规则没拦住</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">本 run 里模型依次读到的 toolResult（实时）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 读 YAML 规则</td></tr>
+<tr><td><code>input</code> · <code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>:1935</code></a></td><td>–</td></tr>
+<tr><td><code>agent_start</code> · <code>agent_end</code></td><td><span class="tag outer">外</span> 每 run</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>:329</code></a></td><td>–（拦截不会多出 run）</td></tr>
+<tr><td><code>agent_before_settle</code> · <code>agent_settled</code></td><td><span class="tag outer">外</span> 出口</td><td>≤ N · 1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2017"><code>agent-session.ts:2017</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1084"><code>:1084</code></a></td><td>–</td></tr>
+<tr><td><code>turn_*</code> · <code>context</code></td><td><span class="tag inner">内</span> 每 turn</td><td>M（每次拦截通常多 1 个 turn）</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>agent-loop.ts:216</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L400"><code>:400</code></a></td><td>–</td></tr>
+<tr class="hl"><td><code>tool_call</code>（可拦截）</td><td><span class="tag inner">内</span> 每个工具，执行前</td><td>K</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>agent-loop.ts:739</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L668"><code>agent-session.ts:668</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a></td><td>✔ 检查规则，block 时返回反馈</td></tr>
+<tr><td><code>tool_execution_end</code></td><td><span class="tag inner">内</span> 每个工具，执行后</td><td>K（被拦的也发）</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L931"><code>agent-loop.ts:931</code></a></td><td>–</td></tr>
+</tbody></table></div>
+
+<div class="tbl"><table>
+<thead><tr><th>拦下之后</th><th>damage-control（第 05 篇）</th><th>damage-control-continue（本篇）</th></tr></thead>
+<tbody>
+<tr><td>返回值</td><td><code>ctx.abort()</code> + <code>{ block, reason }</code></td><td>只有 <code>{ block, reason: continueFeedback(…) }</code></td></tr>
+<tr><td><code>prepareToolCall</code> 走哪个分支</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L748"><code>:748</code></a> aborted → “Operation aborted”</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L755"><code>:755</code></a> block → reason 成为 toolResult 正文（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L756"><code>:756</code></a>）</td></tr>
+<tr><td>同一批的其他工具</td><td>没开跑的也变成 Operation aborted</td><td>照常执行</td></tr>
+<tr><td>run 内循环</td><td>下一个 turn 请求即被中止，run 结束</td><td>转下一个 turn，模型读到反馈</td></tr>
+<tr><td>settle 外循环</td><td>不续跑，停稳</td><td>不受影响：仍是同一个 run</td></tr>
+<tr><td>模型读到反馈的时机</td><td>从不（只读到 Operation aborted）</td><td>紧接着的下一个 turn</td></tr>
+</tbody></table></div>
+<p class="small muted">源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–8 步是启动链（循环外），和第 05 篇一样。第 9–17 步是一次被拦下的调用：判决之后没有反向打断 L1，而是把 L3 生成的反馈顺着返回值交给 L1，由 L1 写成 toolResult，在下一个 turn 送回 LLM。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、拦截反馈链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 17</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–8 步在双循环启动之前；第 9 步起是 run 内循环里一次被拦下、又被模型读到的工具调用。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>damage-control-continue 仍站在<b>控制</b>这一段，但它比上一篇多做了一件事：往上下文里<b>写字</b>。被拦工具的 toolResult 正文完全由 <code>continueFeedback</code> 生成，约 1 千字符的英文指令，告诉模型先判断自己的意图是不是破坏性的，再决定“假设数据存在继续干”还是“停下问用户”。这条 toolResult 和其他消息一样落盘、进历史，之后每个 turn 都会被装配进请求。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 360" role="img" aria-label="提示词上下文：被拦的 toolResult 成为写给模型的指令">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">安装 · 谁放进来</text>
+  <text class="bt" x="262" y="24" font-size="13" style="fill:var(--accent)">控制 · 谁能改</text>
+  <text class="bt" x="560" y="24" font-size="13" style="fill:var(--accent)">装配 · 怎么拼</text>
+
+  <g class="chip"><rect x="16" y="40" width="210" height="34" rx="7"/><text x="26" y="62" font-size="11.5"><tspan class="mono">system</tspan> · 工具列表不变</text><title>不注册、不移除工具，也不改系统提示词</title></g>
+  <g class="chip"><rect x="16" y="88" width="210" height="34" rx="7"/><text x="26" y="110" font-size="11.5"><tspan class="mono">assistant</tspan> · toolCall(read .env)</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M226,105 L256,105"/>
+  <g class="chip hit"><rect x="258" y="84" width="240" height="42" rx="7"/><text class="mono" x="268" y="101" font-size="11.5">tool_call · continue</text><text x="268" y="117" font-size="10" style="fill:var(--inner)">返回 { block, reason }，不 abort</text><title>damage-control-continue.ts:250</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M378,126 L378,148"/>
+  <g class="chip hit"><rect x="258" y="150" width="240" height="56" rx="7"/><text class="mono" x="268" y="168" font-size="11">continueFeedback(…)</text><text class="mut" x="268" y="184" font-size="10">约 1k 字符：Attempted + 两种处理办法</text><text class="mut" x="268" y="198" font-size="10">非破坏 → 假设存在；破坏 → 停下问</text><title>damage-control-continue.ts:36–54</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M498,178 L558,178"/>
+  <g class="chip"><rect x="560" y="152" width="180" height="50" rx="7"/><text x="570" y="171" font-size="11.5"><tspan class="mono">toolResult</tspan>（isError）</text><text class="mut" x="570" y="190" font-size="10">正文 = 反馈全文</text><title>agent-loop.ts:756 createErrorToolResult(reason)</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M650,202 L650,226"/>
+  <g class="chip"><rect x="560" y="228" width="180" height="44" rx="7"/><text class="mono" x="570" y="246" font-size="11">transformContext</text><text class="mono" x="570" y="262" font-size="11">→ convertToLlm</text><title>agent-loop.ts:400 / 404</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M740,250 L756,250"/>
+  <g class="chip"><rect x="758" y="228" width="50" height="44" rx="7"/><text x="783" y="255" text-anchor="middle" font-size="12" font-weight="700">LLM</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M783,228 L783,105 L228,105"/>
+  <text class="mut" x="560" y="92" font-size="10">同一个 run 的下一个 turn：模型换条路</text>
+  <text class="mut" x="560" y="290" font-size="10">之后每个 turn 都会带上这条（直到 compaction）</text>
+
+  <g class="chip"><rect x="16" y="300" width="210" height="42" rx="7"/><text class="mono" x="26" y="317" font-size="11">pi.appendEntry(...log)</text><text class="mut" x="26" y="333" font-size="10">CustomEntry · 不进上下文</text><title>session-manager.ts:125</title></g>
+  <g class="chip"><rect x="258" y="300" width="240" height="42" rx="7"/><text x="268" y="317" font-size="11">notify：“agent will adapt and continue”</text><text class="mut" x="268" y="333" font-size="10">setStatus 仍少 key，不显示</text></g>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>写进上下文的东西</th><th>来源</th><th>大小</th><th>寿命</th></tr></thead>
+<tbody>
+<tr class="hl"><td>被拦调用的 toolResult</td><td><code>continueFeedback</code>（第 36–54 行）</td><td>约 1k 字符 + <code>invocation</code> 的长度</td><td>落盘进历史（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1165"><code>agent-session.ts:1165</code></a>），之后每个 turn 都在请求里</td></tr>
+<tr><td><code>Attempted: …</code></td><td>bash 是命令原文；其他工具是 <code>JSON.stringify(event.input)</code>（第 229 行）</td><td>write 时包含整个文件内容</td><td>同上</td></tr>
+<tr><td>审计日志</td><td><code>pi.appendEntry</code></td><td>–</td><td>只在会话文件里，不进上下文（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L125"><code>session-manager.ts:125</code></a>）</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器复刻了检查逻辑（和第 05 篇共用 <code>assets/damage-control-sim.js</code>）和 <code>continueFeedback</code>。上面填模型的第一次调用，下面填它读到反馈后改用的调用，看两次各自的判决，以及模型实际读到的完整反馈。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">第 1 次 <select id="m-tool1"><option>bash</option><option>read</option><option>write</option><option>edit</option><option>grep</option><option>find</option><option>ls</option></select></label>
+    <input id="m-in1" type="text" value="rm -rf build" style="flex:1;min-width:200px;font-family:var(--mono)">
+  </div>
+  <div class="controls">
+    <label class="small">第 2 次 <select id="m-tool2"><option>bash</option><option>read</option><option>write</option><option>edit</option><option>grep</option><option>find</option><option>ls</option></select></label>
+    <input id="m-in2" type="text" value="find build -delete" style="flex:1;min-width:200px;font-family:var(--mono)">
+  </div>
+  <div class="controls" id="m-presets"></div>
+  <div class="controls">
+    <label class="small">write 的文件内容 <input type="range" id="m-kb" min="0" max="200" value="0"> <span class="counter" id="m-kbv">0 KB</span></label>
+    <label class="small">ask 规则时用户 <select id="m-ans"><option value="no">选 No / 超时</option><option value="yes">选 Yes</option></select></label>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：同第 05 篇（简化的 POSIX path，bash 模式只收了 14 条）；token 数按“字符数 ÷ 4”粗估，真实值取决于模型的 tokenizer。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>读规则</td><td>同第 05 篇（第 106–133 行）</td><td><code>pi.on("session_start")</code></td><td>–</td><td><code>notify</code> 报规则数</td><td>循环外</td></tr>
+<tr><td>判决</td><td>第 135–226 行，与第 05 篇逐行相同</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a></td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L718"><code>prepareToolCall</code></a></td><td>–</td><td><span class="tag inner">内</span> 每个工具执行前</td></tr>
+<tr class="hl"><td>反馈</td><td><code>continueFeedback</code> 拼出指令文本（第 36–54 行）</td><td>作为 <code>reason</code> 返回（第 241、250 行）</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L756"><code>createErrorToolResult(reason)</code></a> → toolResult</td><td>工具结果组件显示同一段文字</td><td><span class="tag inner">内</span> 同一个工具</td></tr>
+<tr class="hl"><td>继续</td><td>不调 <code>ctx.abort()</code></td><td>–</td><td><code>terminate</code> 未设 → <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L281"><code>hasMoreToolCalls = true</code></a> → <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L305"><code>:305</code></a> 进下一个 turn</td><td>–</td><td><span class="tag inner">内</span> 紧接着的 turn</td></tr>
+<tr><td>问用户</td><td>ask 规则（第 231–245 行）；拒绝也返回反馈</td><td><code>ctx.ui.confirm(…, { timeout: 30000 })</code></td><td>await 期间工具阶段停住</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2755"><code>showExtensionConfirm</code></a></td><td><span class="tag inner">内</span> 阻塞到选择</td></tr>
+<tr><td>审计日志</td><td><code>{ tool, input, rule, action }</code></td><td><code>pi.appendEntry</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1290"><code>appendCustomEntry</code></a></td><td>–</td><td>每次拦截 / 确认</td></tr>
+<tr><td>主题</td><td><code>themeMap.ts</code> 里没有 <code>damage-control-continue</code></td><td><code>hasUI</code>；只有第一个 <code>-e</code> 设主题</td><td>–</td><td>回落到 synthwave</td><td>循环外</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>和第 05 篇同一个 bug：<code>setStatus</code> 少了 key。</b>第 132、239、248 行都只传了一个字符串，签名是 <code>setStatus(key, text)</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L166"><code>types.ts:166</code></a>），text 是 <code>undefined</code>，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L147"><code>footer-data-provider.ts:147</code></a> 把它当成删除，状态行从不显示。修法：<code>ctx.ui.setStatus("damage-control", `…`)</code>。</div>
+
+<div class="callout warn"><b>检查逻辑原样继承了第 05 篇的问题。</b>bash 的只读检查遇到空格就成立（第 195 行），<code>cat package-lock.json</code> 也会被拦；bash 的敏感路径检查用字面 <code>includes</code>（第 186 行），<code>*.pem</code> 这类通配规则在 bash 里永远匹配不上。在这一篇里后果更明显：模型会在同一个 run 里再试一次，误拦会多耗 turn，漏检会让第二次尝试直接通过。修法见第 05 篇。</div>
+
+<div class="callout"><b>“继续”让绕过多了一次机会。</b>第 05 篇的 abort 本意是让 run 停下（虽然它把 reason 丢了）；本篇让模型在同一个 run 里接着想办法。反馈里写了“DESTRUCTIVE → STOP”“Do not retry this exact call”，但只能约束<b>听话</b>的模型：<code>rm -rf build</code> 被拦后，换成 <code>find build -delete</code>，规则里没有对应模式，就会直接执行（场景 C，模拟器里也能复现）。这是设计取舍：用防线的严密换 agent 的连续性，规则表得覆盖到“同一效果的其他写法”。</div>
+
+<div class="callout"><b>没有次数上限。</b>每次拦截只换来一条 toolResult 和一个新 turn，扩展不记录本 run 已经拦了几次，Pi 也没有为被拦调用设上限。模型如果一直换写法、一直被拦，内循环会一直转下去，直到它自己放弃或用户按 Esc。想加保护，可以在闭包里按 run 计数（在 <code>agent_start</code> 清零），超过阈值后改返回 <code>terminate: true</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L1462"><code>types.ts:1462</code></a>）。</div>
+
+<div class="callout"><b>反馈会把 write 的整个文件内容再抄一遍。</b>第 229 行：不是 bash 的工具，<code>invocation</code> 是 <code>JSON.stringify(event.input)</code>。往只读路径 write 一个 100 KB 的文件被拦时，反馈里的 <code>Attempted:</code> 就是这 100 KB 加上 JSON 转义，而 assistant 的 toolCall 里已经有一份，于是同样的内容在上下文里出现两次，之后每个 turn 都要带着。只截取前几百个字符就够模型认出是哪次调用。模拟器里拖动“write 的文件内容”能看到反馈变长。</div>
+
+<div class="callout"><b>“非破坏性就假设数据存在”是一条提示词策略。</b>反馈让模型自己判断意图，非破坏性的情况（如读 .env 确认某个 key）直接假设数据存在、继续干。这能让 agent 不卡住，代价是模型会在没有核实的前提下往前走。扩展本身不判断意图，判断交给了模型。</div>
+
+<div class="callout"><b>和第 05 篇同时装：谁先 <code>-e</code> 谁说了算。</b><code>runner.emitToolCall</code> 按加载顺序问，第一个返回 block 的生效，后面的不再被调用（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1259"><code>runner.ts:1259</code></a>）。damage-control 在前，就会先 abort，本篇的反馈根本没机会生成。两者规则相同，同时装没有意义。另外 <code>just ext-damage-control-continue</code> 叠加的 minimal 会换掉内置页脚，所以即使修好 <code>setStatus</code> 也看不到状态（同第 05 篇）。</div>
+
+<h2 id="sum">小结</h2>
+<p>damage-control-continue 证明了 <code>tool_call</code> 的 <code>reason</code> 不只是一句报错：它就是下一个 turn 的输入。去掉 <code>ctx.abort()</code> 之后，拦截不再打断 run，被拦的调用变成一条写给模型的指令，run 内循环照常往下转，外循环毫无察觉。代价是模型有机会换条路，规则表得经得起“同一效果的其他写法”。下一篇 <code>session-replay.ts</code> 换个方向：第一次注册命令，用自定义 UI 回放会话历史。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [8, ' *   - We do NOT call ctx.abort(), so the agent\'s turn continues and can', 'l3', '文件头说明了和第 05 篇唯一的行为差别。注释说“turn continues”，准确地说是这个 turn 结束后<b>内循环继续转下一个 turn</b>。'],
+  [36, 'function continueFeedback(toolName: string, violationReason: string, invocation: string): string {', 'l3', '模块级函数：生成被拦工具的 toolResult 正文。这是一段写给模型的提示词，不是给人看的报错。'],
+  [40, '		`Attempted: ${invocation}`,', 'l3', '把原调用抄回去，让模型知道是哪一次被拦。write 时 invocation 是整个 input 的 JSON，含文件内容。'],
+  [42, '		`Don\'t call ${toolName} directly like this. Decide which case you\'re in and continue:`,', 'l3', '让模型自己判断意图：扩展只知道命中了哪条规则，不知道模型想干什么。'],
+  [44, '		`→ NON-DESTRUCTIVE (e.g. reading .env to verify a key, listing a protected dir, peeking at config):`,', 'l3', '非破坏性：假设数据存在，跳过核实步骤继续干。'],
+  [49, '		`→ DESTRUCTIVE (delete, overwrite, force-push, drop, rm, truncate, sudo, kill, etc.):`,', 'l3', '破坏性：停下来问用户，不要换写法达成同一效果。'],
+  [53, '		`Pick the right path above and continue working. Do not retry this exact call.`,', 'l3', '只禁止“完全相同的调用”。换一种写法不在字面禁令内，靠模型自觉。'],
+  [57, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调 1 次。下面到第 104 行的路径函数和第 05 篇相同。'],
+  [106, '	pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。读 YAML 的逻辑同第 05 篇。'],
+  [107, '		applyExtensionDefaults(import.meta.url, ctx);', 'l3', 'themeMap.ts 里没有 damage-control-continue 这一项，主题回落到 synthwave，不是 damage-control 的 gruvbox。'],
+  [132, '		ctx.ui.setStatus(`🛡️ Damage-Control (continue): ${total} Rules`);', 'l4', '⚠ 少了 key，和第 05 篇同一个 bug：什么也不显示。'],
+  [135, '	pi.on("tool_call", async (event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>agent-loop.ts:739</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L668"><code>agent-session.ts:668</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a>。<span class="tag inner">run 内循环</span>每个工具执行前 1 次。第 136–226 行的检查和第 05 篇逐行相同。'],
+  [229, '			const invocation = isToolCallEventType("bash", event) ? event.input.command : JSON.stringify(event.input);', 'l3', 'bash 用命令原文，其他工具把整个 input 序列化。write / edit 时这会很长。'],
+  [232, '				const confirmed = await ctx.ui.confirm(', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2755"><code>showExtensionConfirm</code></a>：Yes / No，30 秒超时算 No。'],
+  [241, '					return { block: true, reason: continueFeedback(event.toolName, `${violationReason} (user denied)`, invocation) };', 'hit', '用户拒绝：同样返回反馈，模型继续。和第 05 篇的区别：这里前面没有 <code>ctx.abort()</code>。'],
+  [244, '					return { block: false };', 'hit', '用户同意：放行，工具照常执行。'],
+  [247, '				ctx.ui.notify(`🛑 Damage-Control: Blocked ${event.toolName} (${violationReason}) — agent will adapt and continue.`);', 'l4', '聊天区提示：告诉用户 agent 会自己调整。'],
+  [248, '				ctx.ui.setStatus(`⚠️ Last Violation: ${violationReason.slice(0, 30)}...`);', 'l4', '⚠ 同第 132 行，少了 key。'],
+  [249, '				pi.appendEntry("damage-control-log", { tool: event.toolName, input: event.input, rule: violationReason, action: "blocked" });', 'l2', 'CustomEntry，不进上下文（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L125"><code>session-manager.ts:125</code></a>）。'],
+  [250, '				return { block: true, reason: continueFeedback(event.toolName, violationReason, invocation) };', 'hit', '本篇的关键行。没有 abort，所以 <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L755"><code>agent-loop.ts:755</code></a> 的 block 分支生效，reason 成为 toolResult 正文（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L756"><code>:756</code></a>）。没设 <code>terminate</code>，内循环继续下一个 turn。'],
+  [254, '		return { block: false };', 'l3', '没有违规：放行。'],
+];
+WT.source(SRC);
+
+// ─────────── continueFeedback 复刻（第 36–54 行） ───────────
+function continueFeedback(toolName, why, invocation) {
+  return [
+    `🛡️ Damage-Control: ${toolName} blocked — ${why}`, ``, `Attempted: ${invocation}`, ``,
+    `Don't call ${toolName} directly like this. Decide which case you're in and continue:`, ``,
+    `→ NON-DESTRUCTIVE (e.g. reading .env to verify a key, listing a protected dir, peeking at config):`,
+    `   Assume the data is present and correct. Skip the verification step and move on with the task.`,
+    `   Example: if you were reading .env to confirm a key exists, just assume it does — the user has`,
+    `   configured their environment. If you actually need a value, ask the user for it explicitly.`, ``,
+    `→ DESTRUCTIVE (delete, overwrite, force-push, drop, rm, truncate, sudo, kill, etc.):`,
+    `   STOP. Tell the user exactly what you need to ship this task and ask how they want to proceed.`,
+    `   Do not invent a workaround that achieves the same destructive effect.`, ``,
+    `Pick the right path above and continue working. Do not retry this exact call.`,
+  ].join('\n');
+}
+// 本文件的检查行号（检查逻辑在 assets/damage-control-sim.js，与第 05 篇共用）
+const L06 = { zapPath: '第 141–144 行', bashPattern: '第 175–181 行', bashZap: '第 185–189 行', bashRo: '第 194–198 行', bashNoDelete: '第 203–211 行', roPath: '第 216–222 行' };
+
+// ─────────── 双循环动画 ───────────
+// 状态：results = 本 run 里模型读到的 toolResult [工具, 摘要, 类型]；blocks = 拦截次数
+// 补丁 { res: [tool, text, kind] } 由 onStep 追加；{ blocks } 直接合并
+const SCN = {
+  adapt: [
+    ['session', 'session_start', '', {}, '读规则；notify “Loaded 187 rules … Blocks deliver feedback …”'],
+    ['input', 'input', '', {}, '用户：把 API 地址改成从 OPENAI_BASE_URL 读'],
+    ['bas', 'before_agent_start', 'outer', {}, '未订阅'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：read .env（想先确认 key 在不在）'],
+    ['tools', 'tool_call (read .env) → block', 'inner', { blocks: 1, res: ['read', 'Damage-Control: read blocked — Access to zero-access path restricted: .env …（反馈全文）', 'fb'] }, '命中 zeroAccessPaths ".env"；没有 abort → reason 成为 toolResult 正文'],
+    ['tend', 'turn_end', 'inner', {}, 'terminate 未设 → hasMoreToolCalls = true → 下一 turn'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2（同一个 run）', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '请求里带着刚才的反馈'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“按反馈：非破坏性，假设 OPENAI_BASE_URL 已配置” → toolCall：edit src/config.ts'],
+    ['tools', 'tool_call (edit) → 放行 → 执行', 'inner', { res: ['edit', 'Successfully replaced 1 occurrence in src/config.ts', 'ok'] }, ''],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 3', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“已改好；我没有读 .env，假设 key 已配置。”没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, 'run 结束'],
+    ['aend', 'agent_end', 'outer', {}, 'run #1 结束：拦截没有多出 run'],
+    ['post', '_handlePostAgentRun', 'outer', {}, ''],
+    ['settle', 'agent_before_settle', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳：1 个 run、3 个 turn，其中 1 个 turn 花在“被拦 → 读反馈”上'],
+  ],
+  stop: [
+    ['session', 'session_start', '', {}, ''],
+    ['input', 'input', '', {}, '用户：清理一下构建产物'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：bash "rm -rf build"'],
+    ['tools', 'tool_call (bash) → block', 'inner', { blocks: 1, res: ['bash', 'Damage-Control: bash blocked — rm with recursive or force flags …（反馈全文）', 'fb'] }, '命中 bashToolPatterns'],
+    ['tend', 'turn_end', 'inner', {}, '下一 turn'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“这是破坏性操作，被 Damage-Control 拦了。要删 build/ 的话请你手动执行，或告诉我怎么处理。”没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, 'run 结束'],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['post', '_handlePostAgentRun', 'outer', {}, ''],
+    ['settle', 'agent_before_settle', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳。和第 05 篇的结局一样是“停下”，但这次模型知道原因，能告诉用户'],
+  ],
+  evade: [
+    ['session', 'session_start', '', {}, ''],
+    ['input', 'input', '', {}, '用户：清理一下构建产物'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：bash "rm -rf build"'],
+    ['tools', 'tool_call (bash) → block', 'inner', { blocks: 1, res: ['bash', 'Damage-Control: bash blocked — rm with recursive or force flags …（反馈全文）', 'fb'] }, ''],
+    ['tend', 'turn_end', 'inner', {}, '下一 turn'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, '模型没听反馈：toolCall bash "find build -delete"'],
+    ['tools', 'tool_call (bash) → 放行 → 执行', 'inner', { res: ['bash', '（build/ 已被删除）', 'bad'] }, '没有命中任何规则：没有 find -delete 的模式，"build " 也不含 "build/"'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 3', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“已清理。”'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['post', '_handlePostAgentRun', 'outer', {}, ''],
+    ['settle', 'agent_before_settle', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳。防线的严密取决于规则表，“继续”给了模型第二次机会'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+WT.loops({
+  hit: ['session', 'tools'],
+  sub: { tools: 'tool_call（执行前，可 block）' },
+  legend: [
+    '橙框 = damage-control-continue 用到的回调。tools 格的副标题换成了真正订阅的 tool_call。',
+    '被拦之后走“下一 turn”箭头回到 turn_start：内循环继续，外循环不知道发生过拦截。',
+  ],
+  scenes: SCN,
+  state: () => ({ results: [], blocks: 0 }),
+  onStep(st, s) { if (s.patch.res) st.results = [...st.results, s.patch.res]; },
+  logTag: s => /tool_call/.test(s.event) ? '<span class="tag hit">本扩展</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    if (!st.results.length) foot1.textContent = '（本 run 还没有 toolResult）';
+    else paintLines(foot1, st.results.map(([t, txt, k]) => [` [${t}${k === 'fb' ? ', isError' : ''}] ${txt}`, k === 'fb' ? 'sw-ok' : k === 'bad' ? 'sw-wrn' : 'dim']));
+    WT.flash(foot1);
+    rc.textContent = `本 run 拦截 ${st.blocks} 次；没有 ctx.abort()，每次拦截都变成一条模型会读到的 toolResult`;
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 拦截反馈链 ───────────
+const CHIPS = {
+  bind:    ['bindCurrentSessionExtensions', 110, 190, 51, 1],
+  notify:  ['showExtensionNotify', 312, 130, 51, 1],
+  confirm: ['showExtensionConfirm（Yes/No）', 454, 185, 51, 1],
+  toolui:  ['tool 结果组件 · isError', 651, 145, 51, 1],
+  tmap:    ['applyExtensionDefaults（themeMap）', 110, 240, 147, 1],
+  load:    ['YAML 规则（106–133）', 362, 132, 147, 1],
+  check:   ['规则检查（135–226）', 506, 120, 147, 1],
+  fb:      ['continueFeedback（36–54）', 638, 165, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  on:      ['pi.on ×2', 222, 65, 243, 1],
+  emit:    ['runner.emit', 299, 85, 243, 1],
+  emittc:  ['runner.emitToolCall', 396, 130, 243, 1],
+  ctxui:   ['ctx.ui.*', 538, 65, 243, 1],
+  append:  ['pi.appendEntry', 615, 100, 243, 1],
+  sess:    ['AgentSession', 110, 100, 339, 1],
+  loop:    ['runLoop · executeToolCalls', 222, 185, 339, 1],
+  prep:    ['prepareToolCall', 419, 110, 339, 1],
+  btc:     ['_beforeToolCall', 541, 110, 339, 1],
+  next:    ['turn 2 · convertToLlm', 663, 145, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/damage-control-continue.ts -e minimal.ts -e theme-cycler.ts</code> 创建 AgentSession。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），第 57 行：规则先是空的。'],
+  ['on', '<span class="tag l2">L2</span> 登记 <code>session_start</code> 和 <code>tool_call</code>。'],
+  ['bind', '<span class="tag l4">L4</span> 交互模式绑定 UI 上下文（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1973"><code>interactive-mode.ts:1973</code></a>）。'],
+  ['emit', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 发出 <code>session_start</code>，调到第 106 行。'],
+  ['tmap', '<span class="tag l3">L3</span> <code>applyExtensionDefaults</code>：THEME_MAP 里没有本扩展，回落到 synthwave。'],
+  ['load', '<span class="tag l3">L3</span> 第 108–120 行：读 YAML，存进闭包。'],
+  ['notify', '<span class="tag l4">L4</span> notify 报规则数，并说明“Blocks deliver feedback so the agent can adapt”；setStatus 因为少了 key 不显示。<br><b>启动链到此结束。下面是一次被拦下、又被模型读到的调用。</b>'],
+  ['loop', '<span class="tag l1">L1</span> <span class="tag inner">run 内循环</span>：assistant 带 toolCall（read .env），进入 <code>executeToolCalls</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L279"><code>agent-loop.ts:279</code></a>）。'],
+  ['prep', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L718"><code>prepareToolCall</code></a> 调 <code>beforeToolCall</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>:739</code></a>）。'],
+  ['btc', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L658"><code>_beforeToolCall</code></a> 组装 tool_call 事件（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L668"><code>:668</code></a>）。'],
+  ['emittc', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a> 调到第 135 行。'],
+  ['check', '<span class="tag l3">L3</span> 第 139–149 行：<code>.env</code> 命中 zeroAccessPaths。'],
+  ['fb', '<span class="tag l3">L3</span> 第 229 行算出 invocation，第 250 行用 <code>continueFeedback</code> 拼出反馈，作为 <code>reason</code> 返回。之前的 notify、appendEntry 照做，<b>不调 abort</b>。'],
+  ['append', '<span class="tag l2">L2</span> <code>pi.appendEntry</code> 记一条审计日志（不进上下文）；runner 见到 block 立刻返回（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1259"><code>runner.ts:1259</code></a>）。'],
+  ['prep', '<span class="tag l1">L1</span> 回到 <code>prepareToolCall</code>：signal 没中止，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L755"><code>agent-loop.ts:755</code></a> 的 block 分支生效，<code>createErrorToolResult(reason)</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L756"><code>:756</code></a>）。toolResult 发出并落盘，UI 的工具结果组件显示同一段文字。'],
+  ['next', '<span class="tag l1">L1</span> 没有 terminate：<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L281"><code>hasMoreToolCalls = true</code></a>，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L305"><code>:305</code></a> 进下一个 turn；<code>convertToLlm</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L404"><code>:404</code></a>）把反馈装进请求，模型读到它、决定怎么继续。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器：两次调用 + 反馈全文 ───────────
+const $ = id => document.getElementById(id);
+const PRESETS = [
+  ['bash', 'rm -rf build', 'bash', 'find build -delete', 'rm → find -delete'],
+  ['read', '.env', 'bash', 'grep OPENAI .env', 'read .env → grep'],
+  ['read', '.env', 'bash', 'printenv OPENAI_BASE_URL', 'read .env → printenv'],
+  ['bash', 'git checkout -- .', 'bash', 'git restore .', 'ask 规则 → 同义命令'],
+  ['write', 'package-lock.json', 'bash', 'npm install', '写锁文件 → npm install'],
+  ['bash', 'cat package-lock.json', 'read', 'package-lock.json', '只读误拦 → 改用 read'],
+];
+PRESETS.forEach(([t1, i1, t2, i2, tag]) => {
+  const b = document.createElement('button');
+  b.textContent = tag;
+  b.onclick = () => { $('m-tool1').value = t1; $('m-in1').value = i1; $('m-tool2').value = t2; $('m-in2').value = i2; drawSim(); };
+  $('m-presets').appendChild(b);
+});
+function invocationOf(tool, input, kb) {
+  if (tool === 'bash') return input;
+  // 只放 path（write 再加 content）：其他字段因工具而异，这里省略
+  const obj = { path: input };
+  if (tool === 'write') obj.content = 'x'.repeat(kb * 1024);
+  return JSON.stringify(obj);
+}
+// 返回 [行数组, 判决]；判决：'pass' | 'block' | 'ask-yes'
+function verdict(n, tool, input, kb, ans) {
+  const r = DC.check(tool, input, L06);
+  const rows = [[`第 ${n} 次：${tool} ${input}`, 'acc']];
+  if (!r.reason) { rows.push(['  ✔ 没有命中 → { block: false }，照常执行', 'sw-ok']); return [rows, 'pass', null]; }
+  rows.push([`  ✖ ${r.reason}`, 'sw-wrn'], [`    ${r.step}`, 'dim']);
+  if (r.ask && ans === 'yes') { rows.push(['  ask: true，用户选 Yes → { block: false }，照常执行', 'sw-ok']); return [rows, 'pass', null]; }
+  const why = r.ask ? `${r.reason} (user denied)` : r.reason;
+  const fb = continueFeedback(tool, why, invocationOf(tool, input, kb));
+  rows.push([`  → { block: true, reason: continueFeedback(…) }，toolResult ${fb.length.toLocaleString()} 字符（约 ${Math.round(fb.length / 4).toLocaleString()} token）`, 'dim']);
+  return [rows, 'block', fb];
+}
+function drawSim() {
+  const kb = Number($('m-kb').value); $('m-kbv').textContent = `${kb} KB`;
+  const ans = $('m-ans').value;
+  const [r1, v1, fb1] = verdict(1, $('m-tool1').value, $('m-in1').value, kb, ans);
+  const [r2, v2] = verdict(2, $('m-tool2').value, $('m-in2').value, kb, ans);
+  const rows = [...r1];
+  if (v1 === 'block') {
+    rows.push(['', ''], ['  模型下一个 turn 读到的 toolResult：', 'dim']);
+    fb1.split('\n').forEach(l => rows.push(['  │ ' + (l.length > 110 ? l.slice(0, 110) + `…（共 ${l.length.toLocaleString()} 字符）` : l), 'sw-ok']));
+    rows.push(['', '']);
+  }
+  rows.push(...r2);
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  const notes = [];
+  if (v1 === 'pass') notes.push('第 1 次没被拦，模型不会收到反馈，第 2 次只是假设');
+  else if (v2 === 'pass') notes.push('第 2 次换了写法后放行：如果它达成的是同一个破坏性效果，防线就被绕过了');
+  else notes.push('第 2 次也被拦：又多一条反馈、又多一个 turn，扩展不计次数');
+  if ($('m-tool1').value === 'write' && kb > 0) notes.push(`write 时 Attempted 抄了整个 content：${kb} KB 在上下文里出现两次（toolCall 一次、反馈一次）`);
+  $('m-note').textContent = notes.join(' · ');
+}
+['m-tool1', 'm-in1', 'm-tool2', 'm-in2', 'm-kb', 'm-ans'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>

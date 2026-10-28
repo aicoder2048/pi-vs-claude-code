@@ -14,6 +14,7 @@
       { n: "03", title: "tool-counter-widget.ts", href: "tool-counter-widget.html" },
       { n: "04", title: "tool-counter.ts", href: "tool-counter.html" },
       { n: "05", title: "damage-control.ts", href: "damage-control.html" },
+      { n: "06", title: "damage-control-continue.ts", href: "damage-control-continue.html" },
     ],
     lessons: [
       { n: "01", title: "循环骨架与插口", href: LESSONS + "0001-loop-skeleton-and-sockets.html" },
