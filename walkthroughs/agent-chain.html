@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-chain.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 14</div>
+<h1>agent-chain.ts</h1>
+<p class="subtitle">把几个子 agent 串成固定的流水线（定义在 <code>.pi/agents/agent-chain.yaml</code>）：主 agent 调一次 <code>run_chain</code>，扩展依次起每一步的 <code>pi</code> 子进程，上一步的输出替换进下一步提示词里的 <code>$INPUT</code>。797 行，订阅 <code>session_start</code>、<code>before_agent_start</code>，注册 1 个工具、2 个命令。和第 13 篇的区别：主 agent <b>保留</b>自己的工具，子进程是<b>串行</b>的，数据在步骤之间流动。<br>运行：<code>just ext-agent-chain</code>（同时加载 theme-cycler）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。起子进程、解析事件流、网格这几块和第 13 篇几乎一样；本篇只收不同的地方：YAML 流水线的解析（第 67–131 行）、<code>runChain</code> 的串行循环（第 442–504 行），以及 <code>before_agent_start</code> 的提示词。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+挂点和第 13 篇一样：<code>before_agent_start</code> 在外循环入口换提示词，<code>run_chain</code> 在内循环的工具阶段执行。不同的是一次 <code>run_chain</code> 里<b>依次</b>跑 N 个子进程：主进程的那一个 <code>await</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a>）要等 N 个子 settle 全部跑完。主 agent 的这个 turn 在此期间完全停住。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：plan-build-review 三步流水线</option>
+    <option value="abort">场景 B：第 1 步跑着时按 Esc</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">编辑器上方的流水线卡片（实时，简化）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 删 chain-* 子会话、载流水线、默认第一条</td></tr>
+<tr class="hl"><td><code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a></td><td>✔ 首次补挂网格；整个替换系统提示词</td></tr>
+<tr class="hl"><td><code>run_chain</code> 工具 <code>execute</code></td><td><span class="tag inner">内</span> 工具阶段</td><td>调用次数</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a></td><td>✔ 串行起 N 个子进程</td></tr>
+<tr><td><code>input</code> · <code>agent_*</code> · <code>turn_*</code> · <code>message_*</code></td><td>外 / 内</td><td>1 / N / M</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a></td><td>–</td></tr>
+<tr class="hl"><td>子进程的事件流</td><td>与主循环异步（子进程自己的循环）</td><td>每一步一个子进程</td><td>子进程 <code>--mode json</code> 输出</td><td>✔ 只看 text_delta</td></tr>
+<tr class="hl"><td>每秒定时器 / 卡片 <code>render</code></td><td>与循环异步</td><td>运行中每秒</td><td><code>setInterval</code>；<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔ 重装卡片 widget</td></tr>
+</tbody></table></div>
+<p class="small muted">主 agent 的工具没有被收走：<code>run_chain</code> 注册后和 read / bash / edit / write 并列（第 761 行的注释说的就是这个），调度提示词也写明“简单的事自己做，大活再走流水线”。子进程的命令行和第 13 篇相同，只是会话文件名带 <code>chain-</code> 前缀（第 342 行），所以两个扩展的子会话不会互删。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–5 步是启动链：载入流水线，但卡片要等第一次提问才挂上。第 6–14 步是一次 <code>run_chain</code>：L3 的 <code>runChain</code> 是一个 for 循环，每一圈都穿到 L1 起一个子进程，再把它的输出带回 L3 填进下一步的模板。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、流水线链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 14</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–5 步在循环外；第 6 步起是主进程工具阶段里的一次 run_chain。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>agent-chain 的提示词工作分两层。主进程：<code>before_agent_start</code> 整个替换系统提示词（同第 13 篇，没接 <code>event.systemPrompt</code>），但工具没收走，所以工具<b>声明</b>还在，丢掉的是默认提示词里关于工具用法的说明、项目上下文和 skills。子进程之间：每一步的 user 消息由 YAML 模板拼出来，<code>$INPUT</code> 是上一步的全部输出，<code>$ORIGINAL</code> 是主 agent 传给 <code>run_chain</code> 的 task（不一定是用户原话）。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 330" role="img" aria-label="提示词上下文：模板串联">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <g class="chip"><rect x="16" y="20" width="230" height="56" rx="7"/><text x="26" y="38" font-size="11">主 agent：run_chain(task)</text><text class="mut" x="26" y="54" font-size="10">task 是主 agent 自己写的，</text><text class="mut" x="26" y="68" font-size="10">它就是 $ORIGINAL</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M246,48 L276,48"/>
+  <g class="chip hit"><rect x="278" y="14" width="250" height="68" rx="7"/><text class="mono" x="288" y="32" font-size="10.5">步骤 1 planner</text><text class="mut" x="288" y="48" font-size="10">"Plan the implementation for: $INPUT"</text><text class="mut" x="288" y="62" font-size="10">$INPUT = task</text><text class="mut" x="288" y="76" font-size="10">tools: read,grep,find,ls</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M528,48 L558,48"/>
+  <g class="chip"><rect x="560" y="20" width="248" height="56" rx="7"/><text x="570" y="38" font-size="11">输出 = 子进程所有 text_delta 拼接</text><text class="mut" x="570" y="54" font-size="10">包括中途的“我先看看…”</text><text class="mut" x="570" y="68" font-size="10">不同 turn 之间没有分隔</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M684,76 L684,104 L403,104 L403,118"/>
+
+  <g class="chip hit"><rect x="278" y="120" width="250" height="68" rx="7"/><text class="mono" x="288" y="138" font-size="10.5">步骤 2 builder</text><text class="mut" x="288" y="154" font-size="10">"Implement the following plan:\n\n$INPUT"</text><text class="mut" x="288" y="168" font-size="10">$INPUT = 步骤 1 的输出（字符串替换）</text><text class="mut" x="288" y="182" font-size="10">tools: read,write,edit,bash,…</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M403,188 L403,214"/>
+  <g class="chip hit"><rect x="278" y="216" width="250" height="56" rx="7"/><text class="mono" x="288" y="234" font-size="10.5">步骤 3 reviewer</text><text class="mut" x="288" y="250" font-size="10">"Review this implementation…\n\n$INPUT"</text><text class="mut" x="288" y="264" font-size="10">只看得到 builder 说了什么，看不到计划</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M278,244 L248,244"/>
+  <g class="chip"><rect x="16" y="216" width="230" height="56" rx="7"/><text x="26" y="234" font-size="11">主 agent 的 toolResult</text><text class="mut" x="26" y="250" font-size="10">只有最后一步的输出（≤ 8000 字）</text><text class="mut" x="26" y="264" font-size="10">前面几步的结果主 agent 看不到</text></g>
+
+  <g class="chip"><rect x="560" y="120" width="248" height="152" rx="7"/></g>
+  <text x="570" y="140" font-size="11">每一步都是独立进程：</text>
+  <text class="mut" x="570" y="158" font-size="10">· 系统提示词 = Pi 默认 + 成员正文</text>
+  <text class="mut" x="570" y="174" font-size="10">· user 消息 = 模板展开后的文字</text>
+  <text class="mut" x="570" y="190" font-size="10">· 会话文件 chain-成员名.json</text>
+  <text class="mut" x="570" y="206" font-size="10">· 同一成员在后面再出现 → -c 续用</text>
+  <text class="mut" x="570" y="222" font-size="10">  同一个会话，自己上一步的输出</text>
+  <text class="mut" x="570" y="238" font-size="10">  已经在上下文里，又被当 $INPUT</text>
+  <text class="mut" x="570" y="254" font-size="10">  再塞一遍</text>
+  <text class="mut" x="16" y="300" font-size="10">流水线只传“上一步的话”：没有结构化数据，也没有共享状态；每一步看到的世界只有模板 + 上一步的文字 + 自己的会话历史。</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>东西</th><th>哪个进程</th><th>怎么进上下文</th><th>寿命</th></tr></thead>
+<tbody>
+<tr class="hl"><td>流水线提示词</td><td>主</td><td>强制提示词，整个替换</td><td>每次 settle 重新生成</td></tr>
+<tr><td>run_chain 工具</td><td>主</td><td>和默认工具并列声明</td><td>加载时注册</td></tr>
+<tr class="hl"><td>步骤模板展开结果</td><td>子</td><td>user 消息</td><td>写进该成员的 chain-*.json</td></tr>
+<tr><td>成员会话</td><td>子</td><td><code>-c</code> 续用</td><td>跨步骤、跨 run_chain 累积；主进程 session_start 时删除</td></tr>
+<tr><td>最后一步的输出</td><td>主</td><td>toolResult（≤ 8000 字）</td><td>落盘，之后每个 turn 都在</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器直接运行第 469–471 行的替换原码，配合本仓库 <code>agent-chain.yaml</code> 里的流水线。选一条流水线、写主 agent 传入的 task，再编辑“上一步的输出”，看每一步实际收到的提示词，以及哪一步会用 <code>-c</code> 续上同一个会话。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">流水线 <select id="m-chain"></select></label>
+    <input id="m-task" type="text" value="add rate limiting to /login" style="flex:1;min-width:200px;font-family:var(--mono)">
+  </div>
+  <div class="controls">
+    <label class="small">每一步的输出（模拟）</label>
+    <input id="m-out1" type="text" value="Plan: use a token bucket; cost is $$5/month. Run: echo $HOME" style="flex:1;min-width:260px;font-family:var(--mono)">
+  </div>
+  <div class="controls" id="m-presets"></div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：每一步的“输出”都用同一段文字加上步骤号；真实情况下是子进程所有 text_delta 的拼接。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>载流水线</td><td>手写 YAML 解析（第 67–131 行），默认第一条</td><td><code>pi.on("session_start")</code></td><td>–</td><td>notify 流程；卡片延后到第一次提问</td><td>每次 session_start</td></tr>
+<tr class="hl"><td>换提示词</td><td>流水线说明 + 每步成员的完整正文（第 645–722 行）</td><td><code>before_agent_start</code> → <code>forceSystemPrompt</code></td><td>本次 settle 有效（第 10 篇）</td><td>首次时补挂卡片（第 647–657 行）</td><td><span class="tag outer">外</span> 每次 settle</td></tr>
+<tr class="hl"><td>跑流水线</td><td><code>runChain</code>：for 循环，失败即停（第 464–501 行）</td><td><code>registerTool("run_chain")</code></td><td>工具阶段 await 整条流水线</td><td><code>renderResult</code>：running… / ✓ 链名 秒数</td><td><span class="tag inner">内</span> 每次调用</td></tr>
+<tr class="hl"><td>串数据</td><td><code>$INPUT</code> / <code>$ORIGINAL</code> 字符串替换（第 469–471 行）</td><td>–</td><td>–</td><td>–</td><td>每一步开始前</td></tr>
+<tr><td>子进程</td><td>只解析 text_delta（第 388–396 行）</td><td>–</td><td><code>spawn("pi", …)</code>，会话 <code>chain-名字.json</code></td><td>卡片：状态、秒数、最后一行</td><td>子进程每个事件</td></tr>
+<tr><td>页脚</td><td>模型 · 链名 · 上下文条</td><td><code>setFooter</code></td><td><code>getContextUsage</code></td><td>替换内置页脚</td><td>每帧</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：<code>$INPUT</code> 替换把上一步的输出当成替换模板。</b>第 470 行 <code>.replace(/\$INPUT/g, input)</code> 的替换值是字符串，JS 会解释其中的 <code>$$</code>、<code>$&amp;</code>、<code>$`</code>、<code>$'</code>（和第 08 篇 cross-agent 同一类问题）。子 agent 的输出里经常有 <code>$</code>：shell 的 <code>$$</code>、价格、LaTeX 的 <code>$$…$$</code>，下一步收到的就被改过了。第 471 行又在<b>替换后的结果</b>上找 <code>$ORIGINAL</code>，上一步输出里如果提到了这个占位符，也会被换掉。修法：<code>step.prompt.replace(/\$(INPUT|ORIGINAL)/g, (_, k) =&gt; k === "INPUT" ? input : originalPrompt)</code>，一次替换、用函数取值。模拟器默认的输出里就带 <code>$$5</code>。</div>
+
+<div class="callout warn"><b>Bug：按 Esc 停不下流水线，剩下的步骤会全部跑完。</b>和第 13 篇一样，第 516 行丢掉了 <code>_signal</code>，<code>runAgent</code> 不会 kill 子进程。这里更糟：<code>runChain</code> 的 for 循环（第 464 行）也不检查中止，第 1 步跑完后照样起第 2、3 步。plan-build-review 里第 2 步是有写权限的 builder，用户按 Esc 想阻止的修改仍会发生。修法：把 signal 传进 <code>runChain</code>，每一步开始前检查 <code>signal.aborted</code>，并在 abort 时 kill 当前子进程。场景 B 演示了这个过程。</div>
+
+<div class="callout warn"><b>Bug：页脚上下文条和第 01 篇同一个越界。</b>第 780–781 行 <code>Math.round(pct / 10)</code> 没有上限，pct ≥ 105 时 <code>"-".repeat(负数)</code> 抛 RangeError。</div>
+
+<div class="callout"><b>“输出”是整个子会话所有文字的拼接。</b>第 391 行把每个 <code>text_delta</code> 推进 <code>textChunks</code>，从不在消息边界清空。子 agent 跑了 5 个 turn，<code>$INPUT</code> 就是 5 条 assistant 消息的文字首尾相接（“…I'll check the routes.The plan is:…”，中间没有换行），中途的自言自语也一起传给下一步。只想要结论的话，应该在 <code>message_end</code> 时只保留最后一条 assistant 消息的文字。第 13 篇 agent-team 的写法相同，同样有这个问题。</div>
+
+<div class="callout"><b>同一成员出现多次，会共用一个会话。</b>会话按成员名存（第 341–343 行）。<code>scout-flow</code> 连用三次 scout、<code>plan-review-plan</code> 两次用 planner，后面的步骤会 <code>-c</code> 续上前面的会话：自己上一步的输出已经在上下文里，又被当成 <code>$INPUT</code> 原样塞一遍，上下文翻倍。另一方面，“请复核下面的分析”这种指令，交给一个记得自己写过这份分析的 agent，复核效果也打折扣。模拟器里选 <code>scout-flow</code> 能看到每一步的 <code>-c</code> 标记。</div>
+
+<div class="callout"><b>整个替换系统提示词，但工具没收。</b>第 688 行没有拼 <code>event.systemPrompt</code>。和第 13 篇不同的是本扩展让主 agent 保留 read / bash 等工具，提示词里也鼓励它“简单的事自己做”，但 Pi 默认提示词里关于这些工具怎么用的说明、AGENTS.md 等项目上下文被一起换掉了（工具声明本身仍在，见第 10 篇的投影）。另外提示词里塞了每个成员的完整正文（第 683 行），流水线长时，主 agent 每个请求都要带着这些它并不执行的指令。</div>
+
+<h2 id="sum">小结</h2>
+<p>agent-chain 和 agent-team 挂在同样的位置：<code>before_agent_start</code> 换提示词，一个工具在 run 内循环的工具阶段起子进程。区别在工具内部：<code>runChain</code> 是一个串行的 for 循环，每一圈起一个完整的子 settle，用字符串模板把上一步的文字交给下一步。数据只靠字符串在步骤之间流动，所以替换规则、输出怎么截取、会话怎么复用，都直接决定下一步看到什么。下一篇 <code>pi-pi.ts</code> 是“元 agent”：用同样的子进程手法，让一组专家 agent 帮你写 Pi 扩展。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [7, ' * the output becomes $INPUT for step 2\'s prompt template, and so on.', 'l3', '核心约定：上一步的输出就是下一步的 $INPUT。'],
+  [67, 'function parseChainYaml(raw: string): ChainDef[] {', 'l3', '手写的 YAML 解析：只认 “名字:”、“description:”、“- agent:”、“prompt:” 几种行，prompt 必须写在一行里，用 \\n 表示换行（第 120 行）。'],
+  [190, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调用。'],
+  [196, '	const agentSessions: Map<string, string | null> = new Map();', 'l3', '成员名 → 会话文件。按成员名存，所以同一成员在流水线里出现多次时共用一个会话。'],
+  [200, '	let pendingReset = false;', 'l3', 'session_start 时置 true：卡片先不挂，等第一次 before_agent_start 再挂。'],
+  [342, '		const agentSessionFile = join(sessionDir, `chain-${agentKey}.json`);', 'l3', '带 chain- 前缀：和第 13 篇 agent-team 的子会话分开，两个扩展不会互删。'],
+  [356, '		if (hasSession) {', 'l3', '这个成员之前成功跑过（本条流水线的前面步骤，或以前的 run_chain）：<code>-c</code> 续上。'],
+  [367, '			const proc = spawn("pi", args, {', 'hit', '起子进程（同第 13 篇）：它有自己完整的双循环。'],
+  [391, '								textChunks.push(delta.delta || "");', 'l3', '所有 assistant 消息的文字都推进同一个数组，不在消息边界分隔。最后 join("") 就是这一步的“输出”。'],
+  [423, '					agentSessions.set(agentKey, agentSessionFile);', 'l3', '成功才记下会话文件，下次 -c 续上。'],
+  [442, '	async function runChain(', 'l3', '流水线本体。'],
+  [464, '		for (let i = 0; i < activeChain.steps.length; i++) {', 'l3', '⚠ 串行循环，不检查中止：Esc 之后剩下的步骤照样跑。'],
+  [470, '				.replace(/\\$INPUT/g, input)', 'l3', '⚠ 字符串替换值：上一步输出里的 $$、$&amp; 等会被 JS 当成特殊模式。'],
+  [471, '				.replace(/\\$ORIGINAL/g, originalPrompt);', 'l3', '⚠ 在已经替换过 $INPUT 的结果上再找 $ORIGINAL：上一步输出里的同名占位符也会被换掉。'],
+  [485, '			const result = await runAgent(agentDef, resolvedPrompt, i, ctx);', 'l3', '一次只跑一步：主进程工具阶段的 await 要等所有步骤。'],
+  [487, '			if (result.exitCode !== 0) {', 'l3', '任何一步失败，整条流水线停下，返回错误。'],
+  [500, '			input = result.output;', 'l3', '这一步的全部文字成为下一步的 $INPUT。'],
+  [508, '	pi.registerTool({', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>：登记 run_chain，和默认工具并列。'],
+  [516, '		async execute(_toolCallId, params, _signal, onUpdate, ctx) {', 'hit', '<span class="tag inner">run 内循环</span>工具阶段（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a>）。⚠ 丢掉了 _signal。'],
+  [528, '			const truncated = result.output.length > 8000', 'l3', '主 agent 只拿到最后一步的输出，截到 8000 字。'],
+  [645, '	pi.on("before_agent_start", async (_event, _ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a>，<span class="tag outer">settle 外循环</span>入口。'],
+  [647, '		if (pendingReset && activeChain) {', 'l3', '第一次提问时才把卡片挂上：所以刚启动时编辑器上方是空的。'],
+  [683, '					return `### ${displayName(agentDef.name)}\\n${agentDef.description}\\n**Tools:** ${agentDef.tools}\\n**Role:** ${agentDef.systemPrompt}`;', 'l3', '每个成员的完整正文都塞进主 agent 的提示词。'],
+  [688, '			systemPrompt: `You are an agent with a sequential pipeline called "${activeChain.name}" at your disposal.${desc}', 'hit', '整个替换系统提示词（没接 event.systemPrompt）。'],
+  [689, 'You have full access to your own tools AND the run_chain tool to delegate to your team.', 'l3', '和第 13 篇不同：主 agent 保留自己的工具。'],
+  [726, '	pi.on("session_start", async (_event, _ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。'],
+  [744, '					if (f.startsWith("chain-") && f.endsWith(".json")) {', 'l3', '只删本扩展的子会话。'],
+  [759, '		activateChain(chains[0]);', 'l3', '默认第一条流水线：本仓库是 plan-build-review。'],
+  [780, '				const filled = Math.round(pct / 10);', 'l3', '⚠ 同第 01 篇：pct ≥ 105 时下一行抛 RangeError。'],
+];
+WT.source(SRC);
+
+// ─────────── 流水线 / 替换 复刻 ───────────
+const CHAINS = { // .pi/agents/agent-chain.yaml
+  'plan-build-review': [['planner', 'Plan the implementation for: $INPUT'], ['builder', 'Implement the following plan:\n\n$INPUT'], ['reviewer', 'Review this implementation for bugs, style, and correctness:\n\n$INPUT']],
+  'plan-build': [['planner', 'Plan the implementation for: $INPUT'], ['builder', 'Based on this plan, implement:\n\n$INPUT']],
+  'scout-flow': [['scout', 'Explore the codebase and investigate: $INPUT\n\nReport your findings with structure, key files, and patterns.'], ['scout', 'Validate and cross-check the following analysis. Look for anything missed, incorrect, or incomplete:\n\n$INPUT\n\nOriginal request: $ORIGINAL'], ['scout', 'Final review pass. Verify the analysis below is accurate and complete. Add any missing details or corrections:\n\n$INPUT\n\nOriginal request: $ORIGINAL']],
+  'plan-review-plan': [['planner', 'Create a detailed implementation plan for: $INPUT'], ['plan-reviewer', 'Critically review this implementation plan. Challenge assumptions, find gaps, and suggest improvements:\n\n$INPUT\n\nOriginal request: $ORIGINAL'], ['planner', 'Revise and improve your implementation plan based on this critique. Address every issue raised and incorporate the recommendations:\n\nOriginal request: $ORIGINAL\n\nCritique:\n$INPUT']],
+  'full-review': [['scout', 'Explore the codebase and identify: $INPUT'], ['planner', 'Based on this analysis, create a plan:\n\n$INPUT'], ['builder', 'Implement this plan:\n\n$INPUT'], ['reviewer', 'Review this implementation:\n\n$INPUT']],
+};
+function resolveOrig(prompt, input, originalPrompt) { return prompt.replace(/\$INPUT/g, input).replace(/\$ORIGINAL/g, originalPrompt); } // 第 469–471 行原码
+function resolveFixed(prompt, input, originalPrompt) { return prompt.replace(/\$(INPUT|ORIGINAL)/g, (_, k) => k === 'INPUT' ? input : originalPrompt); }
+
+// ─────────── 双循环动画 ───────────
+// 状态：steps = [{agent, status, secs, work}]；补丁 { set: [i, status, secs, work] } / { boot } / { mount }
+const SCN = {
+  normal: [
+    ['session', 'session_start', '', { boot: true }, '删 chain-* 子会话，载 5 条流水线，默认 plan-build-review；卡片延后'],
+    ['input', 'input', '', {}, '用户：给 /login 加限流'],
+    ['bas', 'before_agent_start', 'outer', { mount: true }, '首次：挂上卡片；返回流水线提示词（整个替换）'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“这是实打实的改动，走流水线”→ toolCall：run_chain("add rate limiting to /login")'],
+    ['tools', 'execute → runChain：步骤 1', 'inner', { set: [0, 'running', 0, ''] }, 'planner：$INPUT = task'],
+    ['tools', '子进程 planner：settle', '', { set: [0, 'done', 18, 'Plan: token bucket in middleware'] }, '与主循环异步：子进程自己的双循环'],
+    ['tools', 'runChain：步骤 2', 'inner', { set: [1, 'running', 0, ''] }, 'builder：$INPUT = planner 的全部文字'],
+    ['tools', '子进程 builder：settle（改文件）', '', { set: [1, 'done', 52, 'Added limiter.ts; tests pass'] }, ''],
+    ['tools', 'runChain：步骤 3', 'inner', { set: [2, 'running', 0, ''] }, 'reviewer：$INPUT = builder 的全部文字（看不到计划）'],
+    ['tools', '子进程 reviewer：settle', '', { set: [2, 'done', 24, 'LGTM, one nit on headers'] }, ''],
+    ['tools', 'toolResult：[chain:plan-build-review] done in 94s', 'inner', {}, '主 agent 只看到 reviewer 的输出'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '总结给用户'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '主进程 2 个 turn；第 1 个 turn 的工具阶段里依次嵌了 3 个子 settle'],
+  ],
+  abort: [
+    ['session', 'session_start', '', { boot: true }, ''],
+    ['input', 'input', '', {}, '用户：重写 auth 模块'],
+    ['bas', 'before_agent_start', 'outer', { mount: true }, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：run_chain("rewrite auth")'],
+    ['tools', '步骤 1 planner 运行中', 'inner', { set: [0, 'running', 6, 'reading src/auth'] }, ''],
+    ['tools', '用户按 Esc → signal aborted', '', {}, '用户看了计划的开头，不想改了'],
+    ['tools', '步骤 1 照常结束', '', { set: [0, 'done', 20, 'Plan ready'] }, '_signal 被丢掉，没人 kill 子进程'],
+    ['tools', 'runChain 进入步骤 2：builder', '', { set: [1, 'running', 0, ''] }, 'for 循环不检查中止'],
+    ['tools', 'builder 改写文件', '', { set: [1, 'done', 70, 'Rewrote 6 files'] }, '用户想阻止的修改发生了'],
+    ['tools', '步骤 3 reviewer', '', { set: [2, 'done', 25, 'Reviewed'] }, ''],
+    ['tend', 'turn_end', 'inner', {}, 'execute 这才返回，主 run 以 aborted 收尾'],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, 'Esc 之后又跑了约 2 分钟、两个子进程'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+WT.loops({
+  hit: ['session', 'bas', 'tools'],
+  sub: { bas: '整个替换 systemPrompt', tools: 'run_chain → N 个子进程（串行）' },
+  legend: [
+    '橙框 = agent-chain 用到的回调：session_start 载流水线，before_agent_start 换提示词并补挂卡片，tools 格里执行 run_chain。',
+    '标“外部”的步骤是各个子进程自己的双循环，依次发生在主进程的同一个工具阶段里。',
+  ],
+  scenes: SCN,
+  state: () => ({ steps: [], mounted: false }),
+  onStep(st, s) {
+    if (s.patch.boot) { st.steps = CHAINS['plan-build-review'].map(([a]) => ({ agent: a, status: 'pending', secs: 0, work: '' })); st.mounted = false; }
+    if (s.patch.mount) st.mounted = true;
+    if (s.patch.set) { const [i, status, secs, work] = s.patch.set; Object.assign(st.steps[i], { status, secs, work }); }
+  },
+  logTag: s => s.node === 'session' || s.node === 'bas' || /execute|runChain/.test(s.event) ? '<span class="tag hit">本扩展</span>' : /子进程|Esc|步骤|builder|reviewer/.test(s.event) ? '<span class="tag off">外部</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    if (!st.mounted) { foot1.textContent = st.steps.length ? '（卡片要等第一次提问才挂上：pendingReset）' : '（还没载入流水线）'; rc.textContent = ''; return; }
+    const icon = { pending: '○', running: '●', done: '✓', error: '✗' };
+    const cards = st.steps.map(x => [`┌${'─'.repeat(20)}┐`, `│ ${x.agent.padEnd(19)}│`, `│ ${(icon[x.status] + ' ' + x.status + (x.status !== 'pending' ? ' ' + x.secs + 's' : '')).padEnd(19)}│`, `│ ${(x.work || '—').slice(0, 19).padEnd(19)}│`, `└${'─'.repeat(20)}┘`]);
+    const rows = [];
+    for (let l = 0; l < 5; l++) rows.push([' ' + cards.map(c => c[l]).join(l === 2 ? ' → ' : '   '), l === 2 ? 'sw-acc' : 'dim']);
+    paintLines(foot1, rows);
+    WT.flash(foot1);
+    const run = st.steps.findIndex(x => x.status === 'running');
+    rc.textContent = run >= 0 ? `正在跑第 ${run + 1} 步：pi … --session .pi/agent-sessions/chain-${st.steps[run].agent}.json` : '';
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 流水线链 ───────────
+const CHIPS = {
+  cards:   ['setWidget 卡片（首次提问时）', 110, 190, 51, 1],
+  render:  ['renderResult（running… / ✓）', 312, 190, 51, 1],
+  load:    ['parseChainYaml + activateChain', 110, 210, 147, 1],
+  loop:    ['runChain for 循环（464–501）', 332, 185, 147, 1],
+  subst:   ['$INPUT / $ORIGINAL 替换（469–471）', 529, 230, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  reg:     ['registerTool · on ×2 · cmd ×2', 222, 190, 243, 1],
+  bas:     ['before_agent_start', 424, 125, 243, 1],
+  sess:    ['AgentSession', 110, 100, 339, 1],
+  exec:    ['executePreparedToolCall（await）', 222, 210, 339, 1],
+  child:   ['spawn("pi") 第 i 步：自己的双循环', 444, 220, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/agent-chain.ts -e extensions/theme-cycler.ts</code>。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），第 190 行。'],
+  ['reg', '<span class="tag l2">L2</span> 登记 run_chain 工具（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>）、<code>/chain</code>、<code>/chain-list</code>、两个事件。不调 setActiveTools，主 agent 的工具都还在。'],
+  ['load', '<span class="tag l3">L3</span> <code>session_start</code>：删 chain-* 子会话，扫描成员，解析 agent-chain.yaml（5 条），激活第一条；<code>pendingReset = true</code>，卡片先不挂。'],
+  ['bas', '<span class="tag l2">L2</span> 用户第一次提问：<code>before_agent_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a>）补挂卡片，返回流水线提示词。'],
+  ['cards', '<span class="tag l4">L4</span> 编辑器上方出现 3 张卡片：planner → builder → reviewer，全是 pending。<br><b>下面是一次 run_chain。</b>'],
+  ['exec', '<span class="tag l1">L1</span> 模型调用 run_chain：<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a> 开始 await，第 516 行的 execute 调 <code>runChain</code>。'],
+  ['loop', '<span class="tag l3">L3</span> 第 464 行进入 for 循环，第 1 步。'],
+  ['subst', '<span class="tag l3">L3</span> 第 469–471 行：模板里的 <code>$INPUT</code> 换成 task（第 1 步）或上一步的输出（之后的步骤）。'],
+  ['child', '<span class="tag l1">L1</span> <code>runAgent</code> 起子进程（第 367 行），会话 <code>chain-planner.json</code>。子进程跑完自己完整的 settle。'],
+  ['loop', '<span class="tag l3">L3</span> 第 485 行的 await 返回：退出码 0 → 这一步 done，<code>input = result.output</code>（第 500 行），进入下一圈。'],
+  ['cards', '<span class="tag l4">L4</span> 卡片随子进程的 text_delta 和每秒定时器刷新：✓ planner → ● builder → ○ reviewer。'],
+  ['child', '<span class="tag l1">L1</span> 第 2、3 步依次重复：每一步都是一个新的子进程，主进程的工具阶段一直停在同一个 await 上。'],
+  ['render', '<span class="tag l4">L4</span> 最后一步结束，execute 返回最后输出的前 8000 字；renderResult 显示 “✓ plan-build-review 94s”，主 agent 下一个 turn 读到结果。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+Object.keys(CHAINS).forEach(c => { const o = document.createElement('option'); o.value = o.textContent = c; $('m-chain').appendChild(o); });
+[
+  ['plan-build-review', 'Plan: use a token bucket; cost is $$5/month. Run: echo $HOME', '$$ 被吞'],
+  ['scout-flow', 'Found $& in templates; see $ORIGINAL usage in docs', '$& 与 $ORIGINAL'],
+  ['plan-review-plan', 'Plan v1: add middleware', '同成员续会话'],
+].forEach(([c, o, tag]) => {
+  const b = document.createElement('button'); b.textContent = tag;
+  b.onclick = () => { $('m-chain').value = c; $('m-out1').value = o; drawSim(); };
+  $('m-presets').appendChild(b);
+});
+function drawSim() {
+  const steps = CHAINS[$('m-chain').value], task = $('m-task').value, out = $('m-out1').value;
+  const rows = [], seen = new Set();
+  let input = task, inputFixed = task, mismatch = 0;
+  steps.forEach(([agent, tpl], i) => {
+    const got = resolveOrig(tpl, input, task), want = resolveFixed(tpl, inputFixed, task);
+    const cont = seen.has(agent); seen.add(agent);
+    rows.push([` 步骤 ${i + 1} ${agent}${cont ? '  -c（续用 chain-' + agent + '.json：自己上一步的输出已在上下文里）' : ''}`, cont ? 'sw-wrn' : 'acc']);
+    got.split('\n').forEach(l => rows.push(['   │ ' + l, got === want ? 'dim' : 'sw-wrn']));
+    if (got !== want) { mismatch++; rows.push(['   期望：', 'dim']); want.split('\n').forEach(l => rows.push(['   │ ' + l, 'sw-ok'])); }
+    input = `${out} (step ${i + 1})`; inputFixed = input;
+  });
+  rows.push(['', ''], [` 主 agent 收到：[chain:${$('m-chain').value}] done … + 最后一步的输出`, 'dim']);
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  const notes = [];
+  if (mismatch) notes.push(`${mismatch} 步收到的提示词被 $ 特殊模式改过`);
+  if (seen.size < steps.length) notes.push('有成员在同一条流水线里出现多次，后面的步骤续用同一个会话');
+  $('m-note').textContent = notes.join(' · ');
+}
+['m-chain', 'm-task', 'm-out1'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>

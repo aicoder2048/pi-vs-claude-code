@@ -22,6 +22,7 @@
       { n: "11", title: "purpose-gate.ts", href: "purpose-gate.html" },
       { n: "12", title: "tilldone.ts", href: "tilldone.html" },
       { n: "13", title: "agent-team.ts", href: "agent-team.html" },
+      { n: "14", title: "agent-chain.ts", href: "agent-chain.html" },
     ],
     lessons: [
       { n: "01", title: "循环骨架与插口", href: LESSONS + "0001-loop-skeleton-and-sockets.html" },
