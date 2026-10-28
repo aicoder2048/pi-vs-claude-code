@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cross-agent.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 08</div>
+<h1>cross-agent.ts</h1>
+<p class="subtitle">加载时扫描 <code>.claude/</code>、<code>.gemini/</code>、<code>.codex/</code>（项目和家目录）下的 commands、skills、agents，把命令和 skill 注册成 Pi 的斜杠命令。命令被调用时，把 Markdown 正文展开参数后用 <code>pi.sendUserMessage</code> 发出去。292 行，订阅 <code>session_start</code>（启动通知）。上一篇的命令只开一个浮层；这一篇的命令<b>发起</b>一次完整的 settle。<br>运行：<code>just ext-cross-agent</code>（同时加载 minimal）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。三段：第 55–142 行是解析和扫描函数；第 153–204 行在<b>工厂函数里同步</b>扫描并注册命令；第 208–291 行在 <code>session_start</code> 里排一条启动通知。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+用户输入 <code>/prime</code> 时，<code>prompt()</code> 照上一篇的路径把它截成命令（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2101"><code>agent-session.ts:2101</code></a>），handler 在循环外执行。不同的是 handler 里调了 <code>pi.sendUserMessage</code>：它<b>再调一次</b> <code>prompt()</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2453"><code>:2453</code></a>），这回不再试命令，走完 <code>input</code> → <code>_startRun</code>，双循环开始转。命令本身仍在循环外，它发出的消息进了循环。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="idle">场景 A：空闲时 /prime → 展开成用户消息 → 一次 settle</option>
+    <option value="busy">场景 B：agent 正在跑时 /prime → sendUserMessage 抛错</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">聊天区（实时，简化）</div><div class="term" id="foot1"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td>工厂函数（扫描 + 注册）</td><td>循环外，加载时</td><td>0（进程启动 1 次；/reload 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a></td><td>✔ 读文件，<code>registerCommand</code> ×N</td></tr>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 主题；100ms 后 notify</td></tr>
+<tr class="hl"><td>命令 handler（<code>/prime</code> 等）</td><td>循环外（截在 <code>prompt()</code> 入口）</td><td>每次用户输入该命令 1 次</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2193"><code>agent-session.ts:2193</code></a></td><td>✔ <code>sendUserMessage</code></td></tr>
+<tr><td><code>input</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a></td><td>– 第二次 prompt 会触发，<code>source: "extension"</code></td></tr>
+<tr><td><code>before_agent_start</code> · <code>agent_*</code> · <code>turn_*</code> · <code>tool_*</code></td><td>外 / 内</td><td>1 / N / M / K</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>:216</code></a></td><td>–（由它发起，但不订阅）</td></tr>
+</tbody></table></div>
+<p class="small muted">两次 <code>prompt()</code> 的区别：用户回车的那次 <code>expandPromptTemplates</code> 默认为 true，所以先试命令；<code>sendUserMessage</code> 那次固定传 false（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2454"><code>:2454</code></a>），不会再被当成命令，也不展开 Pi 自己的 <code>/skill:</code> 和提示词模板。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–6 步是启动链：扫描和注册都在工厂函数里同步完成，<code>session_start</code> 只负责通知。第 7–15 步是一次 <code>/prime</code>：前半段和上一篇一样在 L1 入口被截到 L2；L3 展开模板后，经 L2 的 <code>sendUserMessage</code> 回到 L1，第二次进入 <code>prompt()</code>，这次一路走到 <code>_startRun</code>。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、命令发起 settle 的链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 15</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–6 步在双循环启动之前；第 7 步起是一次 /prime，到第 15 步双循环才开始转。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>cross-agent 站在<b>安装</b>这一段：它不改系统提示词，而是把别的 agent 的命令文件当成一条 <b>user 消息</b>塞进上下文。和用户亲手输入的消息没有区别：同样经过 <code>input</code> 订阅者、同样落盘、之后每个 turn 都在请求里。模型看到的是展开后的全文，看不到 <code>/prime</code> 这几个字。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 340" role="img" aria-label="提示词上下文：命令文件变成 user 消息">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">安装 · 谁放进来</text>
+  <text class="bt" x="300" y="24" font-size="13" style="fill:var(--accent)">控制 · 谁能改</text>
+  <text class="bt" x="572" y="24" font-size="13" style="fill:var(--accent)">装配 · 怎么拼</text>
+
+  <g class="chip hit"><rect x="16" y="40" width="250" height="56" rx="7"/><text class="mono" x="26" y="58" font-size="11">.claude/commands/prime.md</text><text class="mut" x="26" y="74" font-size="10">frontmatter 只取 description（列表用）</text><text class="mut" x="26" y="88" font-size="10">正文 body = 命令内容</text><title>scanCommands（第 79–95 行），加载时读入内存</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M141,96 L141,118"/>
+  <g class="chip hit"><rect x="16" y="120" width="250" height="44" rx="7"/><text class="mono" x="26" y="138" font-size="11">expandArgs(body, args)</text><text class="mut" x="26" y="154" font-size="10">$ARGUMENTS / $@ / $1…$n（第 69–77 行）</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M141,164 L141,186"/>
+  <g class="chip hit"><rect x="16" y="188" width="250" height="44" rx="7"/><text class="mono" x="26" y="206" font-size="11">pi.sendUserMessage(text)</text><text class="mut" x="26" y="222" font-size="10">→ prompt(text, source: "extension")</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M266,210 L298,210"/>
+
+  <g class="chip"><rect x="300" y="188" width="240" height="44" rx="7"/><text class="mono" x="310" y="206" font-size="11">input · before_agent_start</text><text x="310" y="222" font-size="10" style="fill:var(--outer)">其他扩展照常能改它</text><title>agent-session.ts:2117 / 1935：本扩展不订阅，但别的扩展（如 purpose-gate）能看到并改写这条消息</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M540,210 L570,210"/>
+  <g class="chip"><rect x="572" y="188" width="236" height="44" rx="7"/><text class="mono" x="582" y="206" font-size="11">user 消息 → 落盘 → 每 turn</text><text class="mut" x="582" y="222" font-size="10">transformContext → convertToLlm → LLM</text></g>
+
+  <g class="chip"><rect x="300" y="40" width="240" height="56" rx="7"/><text x="310" y="58" font-size="11">被忽略的 frontmatter</text><text class="mut" x="310" y="74" font-size="10">model / allowed-tools / argument-hint …</text><text class="mut" x="310" y="88" font-size="10">只解析，不生效</text><title>parseFrontmatter 拿到了 fields，但命令只用 description 和 body</title></g>
+  <g class="chip"><rect x="572" y="40" width="236" height="56" rx="7"/><text x="582" y="58" font-size="11">skill：整份 SKILL.md 原文</text><text class="mut" x="582" y="74" font-size="10">含 frontmatter，没有 location</text><text class="mut" x="582" y="88" font-size="10">Pi 自己的 /skill: 会包成 &lt;skill&gt; 块</text><title>第 110、200 行；对比 agent-session.ts:2224</title></g>
+
+  <g class="chip"><rect x="16" y="262" width="250" height="44" rx="7"/><text x="26" y="280" font-size="11">agents/*.md：只列名字（@name）</text><text class="mut" x="26" y="296" font-size="10">不注册命令，也不进上下文</text></g>
+  <g class="chip"><rect x="300" y="262" width="240" height="44" rx="7"/><text x="310" y="280" font-size="11">启动通知（notify）</text><text class="mut" x="310" y="296" font-size="10">聊天区一段彩色文字，不进上下文</text></g>
+  <text class="mut" x="572" y="280" font-size="10">/prime 这几个字本身：不进上下文</text>
+  <text class="mut" x="572" y="296" font-size="10">（命令在 input 之前就被截走了）</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>来源</th><th>怎么变成上下文</th><th>和原工具里的语义差在哪</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>commands/*.md</code></td><td>正文展开参数后作为 user 消息</td><td>frontmatter 里的 <code>model</code>、<code>allowed-tools</code>、<code>argument-hint</code> 都不生效；正文里的 <code>!`命令`</code>、<code>@文件</code> 之类写法原样发给模型（推断：Pi 不认这些语法，代码里也没有处理）</td></tr>
+<tr><td><code>skills/&lt;name&gt;/SKILL.md</code></td><td>整份原文（含 frontmatter）作为 user 消息，后面接 <code>Task: …</code></td><td>没有告诉模型 skill 在哪个目录。SKILL.md 里的相对路径（比如本仓库 ext-walkthrough 的 <code>references/source-anchors.md</code>）会被当成相对于 cwd。Pi 自己的 <code>/skill:</code> 会写明 location 和 baseDir（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2224"><code>agent-session.ts:2224</code></a>）</td></tr>
+<tr><td><code>agents/*.md</code></td><td>不进上下文</td><td>只在启动通知里显示为 <code>@name</code>，没有任何调用方式</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>下面的模拟器直接运行第 69–77 行的 <code>expandArgs</code> 原码（浏览器和 Pi 用的是同一套 JS 字符串替换规则），再按 agent 当前是否在跑，复刻 <code>sendUserMessage</code> → <code>prompt()</code> 的走向。模板默认是本仓库的 <code>.claude/commands/plan_w_team.md</code> 里用到参数的那两行。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">模板 <select id="m-tpl">
+      <option value="plan">plan_w_team.md（$1 / $2）</option>
+      <option value="args">$ARGUMENTS</option>
+      <option value="ten">$1 … $10</option>
+    </select></label>
+    <input id="m-args" type="text" value="build a login page" style="flex:1;min-width:220px;font-family:var(--mono)">
+  </div>
+  <div class="controls" id="m-presets"></div>
+  <div class="controls">
+    <label class="small"><input type="checkbox" id="m-busy"> agent 正在跑（isStreaming）</label>
+    <label class="small"><input type="checkbox" id="m-fix"> 套用修法（deliverAs: "followUp"）</label>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>扫描</td><td>3 个工具 × 项目 / 家目录 + <code>.pi/agents</code>（第 153–177 行），用 <code>process.cwd()</code></td><td>工厂函数体内，同步</td><td>–</td><td>–</td><td>加载时（/reload 重扫）</td></tr>
+<tr class="hl"><td>注册命令</td><td>同名只注册第一个（<code>seenCmds</code>，第 180–204 行）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L306"><code>registerCommand</code></a>；跨扩展重名时 runner 给每一个都加序号后缀 <code>:1</code>、<code>:2</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L832"><code>runner.ts:832</code></a>）</td><td>–</td><td>编辑器 <code>/</code> 补全，描述带 <code>[.claude]</code> 前缀</td><td>加载时</td></tr>
+<tr class="hl"><td>执行命令</td><td><code>expandArgs</code>（第 69–77 行）</td><td><code>pi.sendUserMessage</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3457"><code>agent-session.ts:3457</code></a>，错误交给 <code>emitError</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2429"><code>sendUserMessage</code></a> → <code>prompt()</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2172"><code>_startRun</code></a></td><td>用户消息气泡显示展开后的全文</td><td>用户输入命令时；空闲才能起 run</td></tr>
+<tr><td>skill 命令</td><td><code>skill:名字</code>，发 SKILL.md 原文 + <code>Task:</code></td><td>同上</td><td>扩展命令先于 Pi 的 <code>_expandSkillCommand</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2132"><code>:2132</code></a>），重名时扩展的赢</td><td>–</td><td>同上</td></tr>
+<tr><td>启动通知</td><td>按来源分组，每组最多 3 行（第 223–285 行）</td><td><code>pi.on("session_start")</code> + <code>setTimeout(100)</code></td><td>–</td><td><code>ctx.ui.notify(…, "info")</code> → 聊天区状态行</td><td>session_start 后 100ms</td></tr>
+<tr><td>主题</td><td><code>themeMap.ts</code>：ocean-breeze</td><td>同上</td><td><code>settings.theme</code> 写盘</td><td><code>setTheme</code> / <code>setTitle</code></td><td>循环外</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：agent 正在跑时执行这些命令会报错，消息丢失。</b>上一篇讲过，扩展命令在 streaming 时也会立即执行。第 188、200 行的 <code>pi.sendUserMessage(text)</code> 没传 <code>deliverAs</code>，于是 <code>prompt()</code> 发现 <code>isStreaming</code> 又没有 <code>streamingBehavior</code>，抛出 “Agent is already processing. Specify streamingBehavior…”（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2140"><code>agent-session.ts:2140</code></a>）。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3458"><code>:3458</code></a> 把它转给 <code>emitError</code>，聊天区显示一条扩展错误（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2037"><code>interactive-mode.ts:2037</code></a>），展开好的命令内容不会排队。修法：<code>pi.sendUserMessage(text, { deliverAs: "followUp" })</code>，空闲时这个选项不起作用，在跑时会排到本次 settle 之后。场景 B 和模拟器都能复现。</div>
+
+<div class="callout warn"><b>Bug：<code>expandArgs</code> 把用户参数当成替换模板。</b>第 72、74 行用字符串做 <code>replace</code> / <code>replaceAll</code> 的替换值，JS 会解释其中的 <code>$$</code>、<code>$&amp;</code>、<code>$`</code>、<code>$'</code>：参数里写 <code>$$5</code> 会变成 <code>$5</code>，写 <code>$&amp;</code> 会变成 <code>$ARGUMENTS</code>。另外先替换 <code>$ARGUMENTS</code> 再替换 <code>$1…</code>，用户参数里的 <code>$1</code> 会被再替换一次；<code>$1</code> 也会命中 <code>$10</code> 的前两个字符，第 10 个参数永远取不到。修法：用函数形式 <code>replace(re, () =&gt; args)</code> 避开特殊模式，并一次性用 <code>/\$(ARGUMENTS|@|\d+)/g</code> 替换。模拟器的预设能逐个复现。</div>
+
+<div class="callout warn"><b>Bug：启动通知的“… N more”算错了。</b>第 274 行用 <code>totalItems - 15</code>，15 是个和实际显示无关的常数：前 3 行显示了多少项取决于终端宽度和名字长度。只有 16 项时显示 “1 more”，可能其实藏了 10 项；不到 15 项被截时显示 “more more”（<code>"more"</code> 后面又接了 <code>" more"</code>）。修法：统计前 3 行里出现的名字数，用总数减去它。</div>
+
+<div class="callout"><b>注释说的“在 session_start 里注册会被静默丢掉”，在 1.4.0 里找不到依据。</b>第 147–150 行说 <code>registerCommand</code> 必须在加载时同步调用。但 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L306"><code>loader.ts:306</code></a> 只做 <code>assertActive</code>，没有“加载阶段已结束”的检查；<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L864"><code>getCommand</code></a> 每次都实时遍历 <code>ext.commands</code>。也许是旧版本的限制，或者补全列表不刷新（推断，未验证）。在工厂里同步注册本身没问题，只是理由不确定。另外用 <code>process.cwd()</code> 代替 <code>ctx.cwd</code> 的前提是“Pi 总在项目根启动”，不在根目录启动时就扫错地方。</div>
+
+<div class="callout"><b>扫的目录不一定是那些工具真正放命令的地方。</b>扫描对三个工具一视同仁：<code>commands/*.md</code>、<code>skills/</code>、<code>agents/*.md</code>。这是 Claude Code 的布局。按各工具的公开文档（页面外的知识，没有在本仓库验证），Gemini CLI 的自定义命令是 <code>.gemini/commands/*.toml</code>，Codex 的自定义提示在 <code>~/.codex/prompts/</code>，这两处用 <code>.md</code> + <code>commands/</code> 的规则大多扫不到。</div>
+
+<div class="callout"><b>位置参数按空白切分。</b><code>/plan_w_team build a login page</code>：<code>$1</code> 是 <code>build</code>，<code>$2</code> 是 <code>a</code>，后面的词没有占位符可去，丢了。这个仓库的 <code>plan_w_team.md</code> 正是用 <code>USER_PROMPT: $1</code> 接一整句需求，在 Pi 里只剩第一个词。模拟器默认就是这个例子。</div>
+
+<h2 id="sum">小结</h2>
+<p>cross-agent 把命令和 settle 连了起来：命令 handler 仍在循环外，但它调 <code>pi.sendUserMessage</code>，让 <code>prompt()</code> 再走一遍，这次走到 <code>input</code> 和 <code>_startRun</code>，双循环才开始转。它往上下文里放的是一条普通的 user 消息，所以其他扩展的 <code>input</code> 订阅者也能看到和改写它。下一篇 <code>theme-cycler.ts</code> 回到 UI：命令加快捷键切换主题，第一次用到 <code>registerShortcut</code>。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [4, ' * Scans .claude/, .gemini/, .codex/ directories (project + global) for:', 'l3', '三个工具共用一套扫描规则：commands/*.md、skills/、agents/*.md。'],
+  [56, '	const match = raw.match(/^---\\s*\\n([\\s\\S]*?)\\n---\\s*\\n([\\s\\S]*)$/);', 'l3', '手写的 frontmatter 解析：只认 “key: value” 单行字段，多行值、列表都不支持。'],
+  [69, 'function expandArgs(template: string, args: string): string {', 'l3', '参数展开。模拟器运行的就是这几行原码。'],
+  [72, '	result = result.replace(/\\$ARGUMENTS|\\$@/g, args);', 'l3', '⚠ 字符串作为替换值：args 里的 <code>$$</code>、<code>$&amp;</code> 等会被 JS 当成特殊模式。'],
+  [74, '		result = result.replaceAll(`$${i + 1}`, parts[i]);', 'l3', '⚠ 在已经展开过 $ARGUMENTS 的文本上再替换：用户参数里的 <code>$1</code> 会被替换；<code>$1</code> 还会命中 <code>$10</code>。'],
+  [89, '				description: description || body.split("\\n").find((l) => l.trim())?.trim() || "",', 'l3', '没有 description 时用正文第一行非空文字（常常是一个 “# 标题”）。'],
+  [110, '					content: raw,', 'l3', 'skill 存的是整份原文，包括 frontmatter；命令（第 90 行）存的是去掉 frontmatter 的 body。'],
+  [135, '				name: fields.name || basename(file, ".md"),', 'l3', 'agents 只取名字和描述，后面只用于启动通知。'],
+  [144, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调用。下面的扫描、注册都在这里同步完成：在循环外，甚至在 session_start 之前。'],
+  [147, '	// registerCommand() must be called synchronously during extension load —', 'l3', '这条注释的理由在 1.4.0 源码里找不到依据，见 ③ 的说明。'],
+  [154, '	const cwd = process.cwd();', 'l3', '工厂里还没有 ctx，用进程的 cwd。不在项目根启动 Pi 时会扫错目录。'],
+  [160, '			[join(cwd, `.${p}`), `.${p}`],', 'l3', '先项目、后家目录；claude 在 gemini、codex 之前。下面的 seenCmds 让排在前面的同名命令胜出。'],
+  [174, '	const localAgents = scanAgents(join(cwd, ".pi", "agents"));', 'l3', '顺带扫 Pi 自己的 .pi/agents（本仓库的 agent-team 用的那批）。'],
+  [185, '			pi.registerCommand(cmd.name, {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L306"><code>loader.ts:306</code></a> 存进 <code>extension.commands</code>。不同扩展注册同名命令时，runner 给每一个都加序号：<code>/prime:1</code>、<code>/prime:2</code>，原名 <code>/prime</code> 就不再可用（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L832"><code>runner.ts:832</code></a>）。'],
+  [186, '				description: `[${g.source}] ${cmd.description}`.slice(0, 120),', 'l4', '补全列表里的描述，带来源前缀，截到 120 字符。'],
+  [187, '				handler: async (args) => {', 'hit', '用户输入 /名字 时，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2193"><code>agent-session.ts:2193</code></a> 调用。循环外。没用第二个参数 ctx。'],
+  [188, '					pi.sendUserMessage(expandArgs(cmd.content, args || ""));', 'hit', '本篇的关键行。<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2429"><code>sendUserMessage</code></a> → <code>prompt(text, { expandPromptTemplates: false, source: "extension" })</code> → 空闲时 <code>_startRun</code>，双循环开始转。⚠ 没传 deliverAs：agent 在跑时会抛错。'],
+  [196, '			pi.registerCommand(cmdName, {', 'hit', '命令名是 <code>skill:名字</code>，和 Pi 自己的 <code>/skill:</code> 写法相同；扩展命令先被检查，重名时扩展的赢。'],
+  [200, '					pi.sendUserMessage(task ? `${skill.content}\\n\\nTask: ${task}` : skill.content);', 'hit', '发整份 SKILL.md 原文。⚠ 同第 188 行，没传 deliverAs。'],
+  [208, '	pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。只做主题和启动通知。'],
+  [214, '		setTimeout(() => {', 'l3', '延迟 100ms，注释说是为了不被 system-select 的启动提示盖掉。回调在 session_start 返回之后才执行。'],
+  [263, '				const wrapped = wrapTextWithAnsi(body, innerWidth);', 'l4', 'pi-tui 的折行函数，保留 ANSI 颜色码。每组最多显示 3 行。'],
+  [274, '					const overflow = dim(`  ... ${totalItems - 15 > 0 ? totalItems - 15 : "more"} more`);', 'l3', '⚠ 15 是写死的常数，和实际显示了几项无关；不足 15 项时会显示 “more more”。'],
+  [289, '			ctx.ui.notify(lines.join("\\n"), "info");', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2916"><code>showExtensionNotify</code></a>，在聊天区显示，不进上下文。'],
+];
+WT.source(SRC);
+
+// ─────────── expandArgs 原码（第 69–77 行） ───────────
+function expandArgs(template, args) {
+  const parts = args.split(/\s+/).filter(Boolean);
+  let result = template;
+  result = result.replace(/\$ARGUMENTS|\$@/g, args);
+  for (let i = 0; i < parts.length; i++) {
+    result = result.replaceAll(`$${i + 1}`, parts[i]);
+  }
+  return result;
+}
+// 修法：一次性替换，替换值用函数，避开 $ 特殊模式
+function expandArgsFixed(template, args) {
+  const parts = args.split(/\s+/).filter(Boolean);
+  return template.replace(/\$(ARGUMENTS|@|\d+)/g, (m, k) => k === 'ARGUMENTS' || k === '@' ? args : (parts[Number(k) - 1] ?? m));
+}
+
+// ─────────── 双循环动画 ───────────
+// 状态：chat = 聊天区行 [文字, 类名]；补丁 { say: [文字, 类名] } 由 onStep 追加
+const SCN = {
+  idle: [
+    ['session', '工厂函数（加载时）', '', { say: ['（扫描 .claude / .gemini / .codex，注册 /prime、/plan_w_team、/skill:ext-walkthrough …）', 'dim'] }, '在 session_start 之前：读文件、registerCommand ×N'],
+    ['session', 'session_start', '', {}, '设主题 ocean-breeze，排一个 100ms 的定时器'],
+    ['session', 'setTimeout 100ms → notify', '', { say: ['  .claude  (1 skill) (2 commands)', 'acc'] }, '启动通知：聊天区彩色文字'],
+    ['input', 'prompt("/prime") → 命令', '', {}, '第一次 prompt：截成命令，执行 handler（循环外）'],
+    ['input', 'sendUserMessage(展开后的 prime.md)', '', { say: ['你：# Purpose\\n Orient yourself in pi-vs-cc …（prime.md 正文）', ''] }, '第二次 prompt：expandPromptTemplates = false，source = "extension"'],
+    ['input', 'input（source: extension）', '', {}, '其他扩展的 input 订阅者能看到这条展开后的消息'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1：命令发起的 settle', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '模型看到的是 prime.md 正文，看不到 “/prime”'],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：bash "git ls-files …"'],
+    ['tools', 'tool_execution_end', 'inner', {}, ''],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', { say: ['助手：这个仓库是 Pi 扩展的合集……', 'dim'] }, '没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['post', '_handlePostAgentRun', 'outer', {}, ''],
+    ['settle', 'agent_before_settle', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳：一次命令 = 一次 settle'],
+  ],
+  busy: [
+    ['session', '工厂函数 + session_start', '', {}, ''],
+    ['input', 'input', '', { say: ['你：帮我重构 auth 模块', ''] }, '用户的普通提问'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_update ×N', 'inner', {}, '正在流式输出'],
+    ['input', 'prompt("/prime", steer) → 命令', '', {}, '用户这时输入 /prime：命令照样立即执行'],
+    ['input', 'sendUserMessage → prompt()', '', { say: ['✖ Extension error (<runtime>): Agent is already processing. Specify streamingBehavior (\'steer\' or \'followUp\') to queue the message.', 'sw-wrn'] }, 'agent-session.ts:2140 抛错 → :3458 emitError → 聊天区显示错误。prime.md 的内容没有排队'],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'run 照常继续，好像什么都没发生'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳。修法 deliverAs: "followUp" 的话，/prime 会在这里起下一个 run'],
+  ],
+};
+const foot1 = document.getElementById('foot1');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+WT.loops({
+  hit: ['session', 'input'],
+  sub: { session: '加载时注册 · session_start', input: '命令 → sendUserMessage' },
+  legend: [
+    '橙框 = cross-agent 用到的位置。session 格包含工厂函数里的扫描注册和 session_start；input 格换成了 “命令 → sendUserMessage”。',
+    '命令 handler 本身不在任何循环里；它发出的用户消息从 input 进入外循环，之后的节点都不是本扩展的回调。',
+  ],
+  scenes: SCN,
+  state: () => ({ chat: [] }),
+  onStep(st, s) { if (s.patch.say) st.chat = [...st.chat, [s.patch.say[0].replace(/\\n/g, ' '), s.patch.say[1]]]; },
+  logTag: s => s.node === 'session' || (s.node === 'input' && s.event !== 'input') ? '<span class="tag hit">本扩展</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    if (!st.chat.length) foot1.textContent = '（聊天区还是空的）';
+    else paintLines(foot1, st.chat.slice(-5).map(([t, c]) => [' ' + t, c]));
+    WT.flash(foot1);
+  },
+  idle() { foot1.textContent = '（还没启动）'; },
+});
+
+// ─────────── 四层：启动链 + 命令发起 settle 的链 ───────────
+const CHIPS = {
+  editor:  ['/prime 回车', 110, 90, 51, 1],
+  notify:  ['notify（setTimeout 100ms）', 212, 160, 51, 1],
+  errui:   ['showExtensionError', 384, 125, 51, 1],
+  bubble:  ['用户消息气泡（展开全文）', 521, 160, 51, 1],
+  scan:    ['扫描 .claude/.gemini/.codex（153–177）', 110, 250, 147, 1],
+  tmap:    ['themeMap', 372, 70, 147, 1],
+  expand:  ['expandArgs（69–77）', 454, 130, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  reg:     ['pi.registerCommand ×N', 222, 145, 243, 1],
+  on:      ['pi.on', 379, 50, 243, 1],
+  getcmd:  ['runner.getCommand', 441, 118, 243, 1],
+  sendum:  ['pi.sendUserMessage', 571, 125, 243, 1],
+  sess:    ['AgentSession', 110, 100, 339, 1],
+  prompt1: ['prompt("/prime")', 222, 115, 339, 1],
+  tryexec: ['_tryExecuteExtensionCommand', 349, 180, 339, 1],
+  prompt2: ['prompt(展开文本)', 541, 115, 339, 1],
+  start:   ['input → _startRun', 668, 125, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/cross-agent.ts -e extensions/minimal.ts</code> 创建 AgentSession。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），进入第 144 行。'],
+  ['scan', '<span class="tag l3">L3</span> 第 153–177 行：用 <code>process.cwd()</code> 和家目录拼出 6 个目录，再加 <code>.pi/agents</code>，同步读出所有 .md。本仓库能扫到 <code>.claude/commands</code> 的 prime、plan_w_team，<code>.claude/skills</code> 的 ext-walkthrough，以及 <code>.pi/agents</code> 下的 agent。'],
+  ['reg', '<span class="tag l2">L2</span> 第 180–204 行：每个命令、每个 skill 调一次 <code>registerCommand</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L306"><code>loader.ts:306</code></a>），handler 都还没执行。'],
+  ['on', '<span class="tag l2">L2</span> 登记 <code>session_start</code>；<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 发出时设主题 ocean-breeze（<code>themeMap</code>），排一个 100ms 的定时器。'],
+  ['notify', '<span class="tag l4">L4</span> 100ms 后拼好分组列表，<code>ctx.ui.notify(…, "info")</code> 显示在聊天区。<br><b>启动链到此结束。下面是一次 /prime。</b>'],
+  ['editor', '<span class="tag l4">L4</span> 用户输入 <code>/prime</code> 回车，交互模式调 <code>session.prompt("/prime")</code>。'],
+  ['prompt1', '<span class="tag l1">L1</span> 第一次 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2092"><code>prompt()</code></a>：<code>/</code> 开头，先试扩展命令（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2101"><code>:2101</code></a>）。'],
+  ['tryexec', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2180"><code>_tryExecuteExtensionCommand</code></a> 拆出命令名 prime、参数为空。'],
+  ['getcmd', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L863"><code>runner.getCommand("prime")</code></a> 找到第 185 行注册的命令，调用它的 handler（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2193"><code>:2193</code></a>）。'],
+  ['expand', '<span class="tag l3">L3</span> 第 188 行：<code>expandArgs(prime.md 正文, "")</code>。'],
+  ['sendum', '<span class="tag l2">L2</span> <code>pi.sendUserMessage(text)</code>：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L389"><code>loader.ts:389</code></a> → 会话绑定的实现（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3457"><code>agent-session.ts:3457</code></a>），不等结果，出错交给 <code>emitError</code>。handler 随即返回，第一次 <code>prompt()</code> 以 “handled” 结束。'],
+  ['prompt2', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2429"><code>sendUserMessage</code></a> 第二次调 <code>prompt()</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2453"><code>:2453</code></a>）：<code>expandPromptTemplates: false</code>，跳过命令检查；<code>source: "extension"</code>。'],
+  ['start', '<span class="tag l1">L1</span> 走普通路径：<code>input</code> 事件（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>:2117</code></a>）→ streaming 检查（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2137"><code>:2137</code></a>，在跑就抛错）→ <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2172"><code>_startRun</code></a>：<b>settle 外循环开始。</b>'],
+  ['bubble', '<span class="tag l4">L4</span> 聊天区出现一条用户消息，内容是 prime.md 展开后的全文；之后的 run 和用户亲手输入时一模一样。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+const TPL = {
+  plan: 'USER_PROMPT: $1\nORCHESTRATION_PROMPT: $2 - (Optional) Guidance for team assembly',
+  args: 'Review this change: $ARGUMENTS',
+  ten: 'first=$1 tenth=$10',
+};
+const PRESETS = [
+  ['plan', 'build a login page', '多词需求只剩 $1'],
+  ['args', 'price is $$5', '$$ 被吞成 $'],
+  ['args', 'keep $& literal', '$& 变成匹配文字'],
+  ['args', 'rename $1 to foo', '参数里的 $1 被再替换'],
+  ['ten', 'a b c d e f g h i j', '$10 取不到'],
+];
+PRESETS.forEach(([t, a, tag]) => {
+  const b = document.createElement('button'); b.textContent = tag;
+  b.onclick = () => { $('m-tpl').value = t; $('m-args').value = a; drawSim(); };
+  $('m-presets').appendChild(b);
+});
+function drawSim() {
+  const tpl = TPL[$('m-tpl').value], args = $('m-args').value, busy = $('m-busy').checked, fix = $('m-fix').checked;
+  const out = expandArgs(tpl, args), good = expandArgsFixed(tpl, args);
+  const rows = [['模板：', 'dim'], ...tpl.split('\n').map(l => ['  ' + l, 'dim']), ['', ''], ['expandArgs 原码展开：', 'acc'], ...out.split('\n').map(l => ['  ' + l, out === good ? 'sw-ok' : 'sw-wrn'])];
+  if (out !== good) rows.push(['期望（一次性替换、函数替换值）：', 'dim'], ...good.split('\n').map(l => ['  ' + l, 'sw-ok']));
+  rows.push(['', '']);
+  if (!busy) rows.push(['sendUserMessage → prompt() → input → _startRun：起一个新的 settle', 'sw-ok']);
+  else if (fix) rows.push(['sendUserMessage(text, { deliverAs: "followUp" }) → _queueFollowUp：排到本次 settle 之后', 'sw-ok']);
+  else rows.push(['sendUserMessage(text) → prompt() 抛错：Agent is already processing. Specify streamingBehavior …', 'sw-wrn'], ['  → emitError：聊天区一条扩展错误，展开的内容丢失', 'sw-wrn']);
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  const notes = [];
+  const parts = args.split(/\s+/).filter(Boolean);
+  const maxN = Math.max(0, ...[...tpl.matchAll(/\$(\d+)/g)].map(m => Number(m[1])));
+  if (maxN && parts.length > maxN) notes.push(`参数有 ${parts.length} 个词，模板只到 $${maxN}：后面 ${parts.length - maxN} 个词被丢掉`);
+  if (out !== good) notes.push('原码结果和期望不同');
+  $('m-note').textContent = notes.join(' · ');
+}
+['m-tpl', 'm-args', 'm-busy', 'm-fix'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>
