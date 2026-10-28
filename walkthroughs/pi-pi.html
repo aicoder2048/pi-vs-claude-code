@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi-pi.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 15</div>
+<h1>pi-pi.ts</h1>
+<p class="subtitle">“造 Pi 的 Pi”：主 agent 负责写文件，遇到不懂的就调 <code>query_experts</code>，一次把问题<b>并行</b>派给几位领域专家（扩展、主题、skills、TUI……）。每位专家是一个没有会话的 <code>pi</code> 子进程，先抓最新文档再回答。633 行，订阅 <code>session_start</code>、<code>before_agent_start</code>，注册 1 个工具、2 个命令。前两篇的子进程一次一个；这一篇在<b>一个工具调用里同时起多个</b>。<br>运行：<code>just ext-pi-pi</code>（同时加载 theme-cycler）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。子进程和网格的写法与第 13 篇相同，这里只收不同之处：专家从专用目录加载（第 104–131 行），子进程不带会话（第 279–289 行），工具里用 <code>Promise.allSettled</code> 并行（第 427 行），系统提示词来自模板文件（第 557–580 行）。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+挂点和第 13、14 篇相同：<code>before_agent_start</code> 换提示词，<code>query_experts</code> 在工具阶段执行。区别在工具内部的形状：第 13 篇一个工具一个子进程，第 14 篇一个工具串行 N 个，这一篇一个工具<b>并行</b> N 个，主进程的 <code>await</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a>）等的是最慢的那一个。主 agent 拿到所有专家的答案后，在下一个 turn 里自己动手写文件。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：问 3 位专家（并行），然后主 agent 写扩展</option>
+    <option value="dup">场景 B：同一批里问了两次 ext-expert</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">专家网格（实时，简化）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 载专家、挂网格和页脚</td></tr>
+<tr class="hl"><td><code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a></td><td>✔ 读模板文件，整个替换系统提示词</td></tr>
+<tr class="hl"><td><code>query_experts</code> 工具 <code>execute</code></td><td><span class="tag inner">内</span> 工具阶段</td><td>调用次数</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a></td><td>✔ 并行起 N 个子进程，等全部结束</td></tr>
+<tr><td><code>input</code> · <code>agent_*</code> · <code>turn_*</code> · <code>message_*</code></td><td>外 / 内</td><td>1 / N / M</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a></td><td>–</td></tr>
+<tr class="hl"><td>子进程事件流 × N</td><td>与主循环异步（各自的循环）</td><td>每位专家一个子进程</td><td>子进程 <code>--mode json</code> 输出</td><td>✔ 更新各自的卡片</td></tr>
+<tr class="hl"><td>每秒定时器 / 网格 <code>render</code></td><td>与循环异步</td><td>运行中每秒 × N</td><td><code>setInterval</code>；<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔ 彩色卡片</td></tr>
+</tbody></table></div>
+<p class="small muted">两层并发：Pi 默认就会并行执行同一条回复里的多个工具调用（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L656"><code>agent-loop.ts:656</code></a>）；本扩展在<b>一个</b>工具调用内部再用 <code>Promise.allSettled</code> 并行。前者由模型决定发几个调用，后者由 <code>queries</code> 数组决定起几个进程。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–5 步是启动链：从 <code>.pi/agents/pi-pi/</code> 载入专家（第 13 篇 agent-team 扫不到的就是这个目录）。第 6–13 步是一次 <code>query_experts</code>：L3 把一组问题同时变成 N 个子进程，全部结束后拼成一条 toolResult。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、并行查询链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 13</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–5 步在循环外；第 6 步起是主进程工具阶段里的一次并行查询。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>主进程的系统提示词不写在代码里，而是每次 settle 时读 <code>.pi/agents/pi-pi/pi-orchestrator.md</code>，把 <code>{{EXPERT_COUNT}}</code> 等占位符换成实际的专家名单，再整个替换掉默认提示词（同第 13、14 篇，没接 <code>event.systemPrompt</code>）。主 agent 保留全部工具，是唯一负责写文件的。专家子进程没有会话，每次都从零开始：先按自己正文里的指令抓上游文档，再回答这一个问题。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 340" role="img" aria-label="提示词上下文：模板提示词与无会话的专家">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">主进程（写文件的人）</text>
+  <g class="chip"><rect x="16" y="38" width="250" height="56" rx="7"/><text class="mono" x="26" y="56" font-size="11">pi-orchestrator.md（模板）</text><text class="mut" x="26" y="72" font-size="10">{{EXPERT_COUNT}} {{EXPERT_NAMES}}</text><text class="mut" x="26" y="86" font-size="10">{{EXPERT_CATALOG}}</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M266,66 L296,66"/>
+  <g class="chip hit"><rect x="298" y="38" width="240" height="56" rx="7"/><text class="mono" x="308" y="56" font-size="11">before_agent_start（第 557 行）</text><text class="mut" x="308" y="72" font-size="10">String.replace 各换一次</text><text class="mut" x="308" y="86" font-size="10">读不到文件 → 一行错误文字</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M538,66 L568,66"/>
+  <g class="chip"><rect x="570" y="38" width="238" height="56" rx="7"/><text x="580" y="56" font-size="11">强制提示词（本次 settle）</text><text class="mut" x="580" y="72" font-size="10">默认提示词、AGENTS.md、skills 被替换</text><text class="mut" x="580" y="86" font-size="10">工具声明：默认工具 + query_experts</text></g>
+
+  <g class="chip hit"><rect x="16" y="112" width="250" height="44" rx="7"/><text class="mono" x="26" y="130" font-size="11">query_experts({ queries: [...] })</text><text class="mut" x="26" y="146" font-size="10">工具描述里列了专家名单（第 377 行）</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M266,134 L296,134"/>
+  <g class="chip"><rect x="298" y="112" width="510" height="44" rx="7"/><text x="308" y="130" font-size="11">toolResult：各专家答案用 “## [✓] Ext Expert (34s)” 分段拼接</text><text class="mut" x="308" y="146" font-size="10">每位最多 12000 字（第 430 行），N 位就是最多 N × 12000 字一次塞进主上下文</text></g>
+
+  <text class="bt" x="20" y="186" font-size="13" style="fill:var(--accent)">子进程（每位专家，每次查询都是新的）</text>
+  <g class="chip"><rect x="16" y="200" width="250" height="70" rx="7"/><text class="mono" x="26" y="218" font-size="11">--no-session（第 282 行）</text><text class="mut" x="26" y="234" font-size="10">没有会话文件，不记得上一次问过什么</text><text class="mut" x="26" y="248" font-size="10">对比第 13、14 篇的 --session + -c</text><text class="mut" x="26" y="262" font-size="10">每次查询都重新抓文档</text></g>
+  <g class="chip"><rect x="298" y="200" width="240" height="70" rx="7"/><text class="mono" x="308" y="218" font-size="11">--append-system-prompt 专家正文</text><text class="mut" x="308" y="234" font-size="10">“回答前必须先抓最新文档”：</text><text class="mut" x="308" y="248" font-size="10">firecrawl / curl 上游 main 分支的</text><text class="mut" x="308" y="262" font-size="10">docs/*.md → /tmp</text></g>
+  <g class="chip"><rect x="570" y="200" width="238" height="70" rx="7"/><text class="mono" x="580" y="218" font-size="11">--tools read,grep,find,ls,bash</text><text class="mut" x="580" y="234" font-size="10">文件头说专家“只读”，</text><text class="mut" x="580" y="248" font-size="10">但有 bash：只读靠提示词约束，</text><text class="mut" x="580" y="262" font-size="10">没有工具层面的保证</text></g>
+  <text class="mut" x="16" y="300" font-size="10">专家读的是上游 main 分支的最新文档，而本机装的是 Pi 1.4.0：两者不一定一致。主 agent 写出来的扩展要以本机版本为准。</text>
+  <text class="mut" x="16" y="318" font-size="10">主进程看到的只有专家的最终文字；它们抓了什么文档、读了哪些本地文件，都不进主上下文。</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>东西</th><th>哪个进程</th><th>怎么进上下文</th><th>寿命</th></tr></thead>
+<tbody>
+<tr class="hl"><td>编排提示词</td><td>主</td><td>模板文件 + 占位符替换，强制提示词</td><td>每次 settle 重读文件</td></tr>
+<tr><td>query_experts 工具描述</td><td>主</td><td>工具声明（含专家名单）</td><td>加载时注册</td></tr>
+<tr class="hl"><td>专家答案</td><td>主</td><td>一条 toolResult，最多 N × 12000 字</td><td>落盘，之后每个 turn 都在</td></tr>
+<tr><td>专家正文</td><td>子</td><td><code>--append-system-prompt</code></td><td>每次查询重新传</td></tr>
+<tr><td>专家的工作过程</td><td>子</td><td>子进程自己的上下文</td><td>进程结束即消失（<code>--no-session</code>）</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器复刻了 <code>query_experts</code> 的并行调度（第 407–473 行）和单个专家的重入检查（第 254–260 行）。勾选这一批要问的专家，可以让同一位专家出现两次，看哪些子进程真正启动、总耗时由谁决定、这条 toolResult 最多有多大。</p>
+<div class="card">
+  <div class="controls" id="m-experts"></div>
+  <div class="controls">
+    <label class="small"><input type="checkbox" id="m-dup"> 同一批里再问一次 ext-expert</label>
+    <label class="small"><input type="checkbox" id="m-nofile"> pi-orchestrator.md 找不到（不在项目根启动）</label>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：每位专家的耗时是示意值（按领域给了不同的秒数）；字数按 12000 字上限估算，真实答案通常更短。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>载专家</td><td>只读 <code>.pi/agents/pi-pi/*.md</code>，跳过 orchestrator（第 104–131 行）</td><td><code>pi.on("session_start")</code></td><td>–</td><td>notify 专家名单、状态 “Pi Pi (9 experts)”</td><td>每次 session_start</td></tr>
+<tr class="hl"><td>换提示词</td><td>读模板 + 3 个占位符（第 564–577 行）</td><td><code>before_agent_start</code> → <code>forceSystemPrompt</code></td><td>本次 settle 有效（第 10 篇）</td><td>–</td><td><span class="tag outer">外</span> 每次 settle</td></tr>
+<tr class="hl"><td>并行查询</td><td><code>Promise.allSettled</code>（第 427 行），一位失败不影响其他</td><td><code>registerTool("query_experts")</code></td><td>工具阶段 await 最慢的那个</td><td>renderResult：每位一行 ✓/✗ + 秒数</td><td><span class="tag inner">内</span> 每次调用</td></tr>
+<tr><td>单个专家</td><td>同一位正在查时拒绝（第 254 行）</td><td>–</td><td><code>spawn("pi", … --no-session …)</code></td><td>彩色卡片（第 83–93 行的配色）</td><td>子进程每个事件</td></tr>
+<tr><td>页脚</td><td>模型 · 进行中 / 完成数 · 上下文条</td><td><code>setFooter</code></td><td><code>getContextUsage</code></td><td>替换内置页脚</td><td>每帧</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：按 Esc 停不下任何一个专家。</b>第 407 行同样丢掉了 <code>_signal</code>（第 13、14 篇的同一个问题）。这里一次起的是 N 个进程，Esc 之后它们全部继续抓文档、调模型，主进程要等最慢的那个结束才收尾。修法：把 signal 传进 <code>queryExpert</code>，abort 时 kill 所有子进程。</div>
+
+<div class="callout warn"><b>Bug：页脚上下文条和第 01 篇同一个越界。</b>第 612–613 行 <code>Math.round(pct / 10)</code> 没有上限，pct ≥ 105 时 <code>"-".repeat(负数)</code> 抛 RangeError。</div>
+
+<div class="callout"><b>找不到模板文件时，系统提示词只剩一句报错。</b>第 564 行按 <code>ctx.cwd</code> 拼模板路径，读失败就把 <code>systemPrompt</code> 设成 “Error: Could not load pi-orchestrator.md…”（第 576 行），而且照样整个替换。不在项目根目录启动 Pi 时，主 agent 拿到的系统提示词就是这一行：没有角色、没有专家目录、没有 Pi 默认的工具说明。比较稳的做法是读失败时返回 <code>undefined</code>，保持默认提示词，并 notify 用户。</div>
+
+<div class="callout"><b>专家每次都从零开始。</b><code>--no-session</code>（第 282 行）让每次查询都是一个全新的进程：文件头说“第一次查询时抓文档”，实际上每次查询都会按专家正文的指令重新抓一遍。另外文档来自上游仓库 main 分支，而本机是 Pi 1.4.0，专家讲的 API 可能比本机新；主 agent 照着写出来的扩展，需要以本机源码为准再核对一遍。</div>
+
+<div class="callout"><b>“只读专家”只是约定。</b>文件头写“Experts are read-only researchers. The primary agent is the only writer.”，但本仓库每位专家的 <code>tools</code> 都包含 <code>bash</code>（抓文档要用），有 bash 就能写文件。只读靠的是专家正文里的指令，不是工具清单。另外工具描述（第 377–389 行）列了 8 位专家，参数说明（第 397 行）只列了 7 位，目录里实际有 9 位（多出 cli-expert）；系统提示词里的目录是按实际加载的生成的，所以模型最终还是能看到全部。</div>
+
+<div class="callout"><b>和其他扩展叠加。</b>和第 13、14 篇一样整个替换系统提示词（没接 <code>event.systemPrompt</code>），排在前面的扩展加的提示词会被丢掉。第 572–574 行的 <code>String.replace</code> 用字符串作替换值，和第 08 篇是同一类写法；本仓库专家描述里出现的 <code>$1</code>、<code>$@</code> 恰好不是 JS 的特殊模式，所以目前没出问题，但描述里一旦出现 <code>$&amp;</code> 或 <code>$$</code> 就会被改写。</div>
+
+<h2 id="sum">小结</h2>
+<p>pi-pi 是第 13、14 篇子进程手法的第三种形状：一个工具调用内部并行起 N 个无会话的子进程，<code>Promise.allSettled</code> 等齐，再拼成一条结果交给负责写文件的主 agent。三篇放在一起看，挂点完全相同（<code>before_agent_start</code> + 工具阶段），差别只在工具内部怎么组织子进程：单个、串行、并行。下一篇 <code>subagent-widget.ts</code> 换一种方式：子代理在后台跑，结果用 <code>sendMessage</code> 送回主会话，不再卡住主 agent 的工具阶段。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [8, ' * Each expert fetches fresh Pi documentation via firecrawl on first query.', 'l3', '“第一次查询时抓文档”：因为子进程不带会话，实际上每次查询都会重新抓。'],
+  [9, ' * Experts are read-only researchers. The primary agent is the only writer.', 'l3', '只读是约定：专家的 tools 里有 bash。'],
+  [83, 'const EXPERT_COLORS: Record<string, { bg: string; br: string }> = {', 'l4', '每位专家一种卡片底色，写死的真彩 RGB，不跟主题变。'],
+  [99, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调用。'],
+  [106, '		const piPiDir = join(cwd, ".pi", "agents", "pi-pi");', 'l3', '专用目录：第 13 篇 agent-team 的扫描不进子目录，所以它的 pi-pi 团队是空的；这里直接读。'],
+  [114, '				if (file === "pi-orchestrator.md") continue;', 'l3', 'orchestrator 不是专家，是主 agent 的提示词模板。'],
+  [254, '		if (state.status === "researching") {', 'l3', '同一位专家正在查：直接返回错误，不再起第二个进程。'],
+  [279, '		const args = [', 'l3', '子进程命令行，和第 13 篇的区别是下一行。'],
+  [282, '			"--no-session",', 'l3', '不保存会话：每次查询都是全新的专家，不记得上一次。'],
+  [294, '			const proc = spawn("pi", args, {', 'hit', '起子进程：它有自己完整的双循环。同一批里有几个查询就同时起几个。'],
+  [374, '	pi.registerTool({', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>：登记 query_experts，和默认工具并列（不调 setActiveTools）。'],
+  [377, '		description: `Query one or more Pi domain experts IN PARALLEL. All experts run simultaneously as concurrent subprocesses.', 'l3', '工具描述本身就是给模型的说明书，里面列了 8 位专家（目录里实际有 9 位）。'],
+  [394, '			queries: Type.Array(', 'l2', '参数是一个数组：一次调用可以问多位专家。'],
+  [407, '		async execute(_toolCallId, params, _signal, onUpdate, ctx) {', 'hit', '<span class="tag inner">run 内循环</span>工具阶段（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a>）。⚠ 丢掉了 _signal。'],
+  [427, '			const settled = await Promise.allSettled(', 'l3', '所有专家同时启动，等全部结束；用 allSettled 而不是 all，一位失败不会丢掉其他人的结果。'],
+  [430, '					const truncated = result.output.length > 12000', 'l3', '每位最多 12000 字，N 位合起来进同一条 toolResult。'],
+  [466, '			return {', 'l3', '各专家答案用 “## [✓] 名字 (秒)” 分段，--- 分隔，拼成一段文字。'],
+  [557, '	pi.on("before_agent_start", async (_event, _ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a>，<span class="tag outer">settle 外循环</span>入口。每次都重读模板文件。'],
+  [564, '		const orchestratorPath = join(_ctx.cwd, ".pi", "agents", "pi-pi", "pi-orchestrator.md");', 'l3', '按 cwd 找模板：不在项目根启动就找不到。'],
+  [571, '			systemPrompt = template', 'l3', '三个占位符各用 String.replace 换一次（只换第一处）。'],
+  [576, '			systemPrompt = "Error: Could not load pi-orchestrator.md. Make sure it exists in .pi/agents/pi-pi/.";', 'l3', '读失败时系统提示词就是这一句，照样整个替换。'],
+  [579, '		return { systemPrompt };', 'hit', '整个替换系统提示词（没接 event.systemPrompt）→ forceSystemPrompt。'],
+  [584, '	pi.on("session_start", async (_event, _ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。和第 13、14 篇不同，这里不删任何会话文件（专家本来就没有会话）。'],
+  [612, '				const filled = Math.round(pct / 10);', 'l3', '⚠ 同第 01 篇：pct ≥ 105 时下一行抛 RangeError。'],
+];
+WT.source(SRC);
+
+// ─────────── 并行查询复刻 ───────────
+const EXPERTS = { // .pi/agents/pi-pi/*-expert.md；秒数为示意
+  'ext-expert': [34, '#d24155'], 'theme-expert': [18, '#d237a0'], 'skill-expert': [22, '#28afc3'], 'config-expert': [15, '#37af5a'],
+  'tui-expert': [41, '#5578d2'], 'prompt-expert': [12, '#d79628'], 'agent-expert': [20, '#466ed2'], 'keybinding-expert': [16, '#9150dc'], 'cli-expert': [14, '#a0d237'],
+};
+function runBatch(queries) { // 第 427–458 行 + 第 254–260 行
+  const running = new Set(), results = [];
+  queries.forEach(name => {
+    if (running.has(name)) { results.push({ name, status: 'error', secs: 0, msg: 'already researching. Wait for it to finish.' }); return; }
+    running.add(name);
+    results.push({ name, status: 'done', secs: EXPERTS[name][0], msg: '' });
+  });
+  return results;
+}
+
+// ─────────── 双循环动画 ───────────
+// 状态：cards = { name: {status, secs} }；补丁 { set: [name, status, secs] } / { boot }
+const SCN = {
+  normal: [
+    ['session', 'session_start', '', { boot: true }, '从 .pi/agents/pi-pi/ 载入 9 位专家，挂彩色网格和页脚'],
+    ['input', 'input', '', {}, '用户：帮我写一个显示 git 状态的页脚扩展'],
+    ['bas', 'before_agent_start', 'outer', {}, '读 pi-orchestrator.md，替换占位符，整个替换系统提示词'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：query_experts([ext-expert, tui-expert, config-expert])'],
+    ['tools', 'execute → allSettled：3 个 spawn', 'inner', { set: [['ext-expert', 'researching', 0], ['tui-expert', 'researching', 0], ['config-expert', 'researching', 0]] }, '三个子进程同时启动，各自先抓上游文档'],
+    ['tools', 'config-expert 结束', '', { set: [['config-expert', 'done', 15]] }, '最快的先完成，但工具还没返回'],
+    ['tools', 'ext-expert 结束', '', { set: [['ext-expert', 'done', 34]] }, ''],
+    ['tools', 'tui-expert 结束', '', { set: [['tui-expert', 'done', 41]] }, '最慢的结束：allSettled 才 resolve。工具阶段总共约 41 秒'],
+    ['tools', 'toolResult：3 段答案拼接', 'inner', {}, '最多 3 × 12000 字'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：write .pi/extensions/git-footer.ts（主 agent 自己写）'],
+    ['tools', 'tool_execution_end (write)', 'inner', {}, '默认工具都还在'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 3', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '总结'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '一个 run；第 1 个 turn 的工具阶段里并行嵌了 3 个子 settle'],
+  ],
+  dup: [
+    ['session', 'session_start', '', { boot: true }, ''],
+    ['input', 'input', '', {}, '用户：给扩展加一个命令和一个快捷键'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'query_experts([ext-expert: "命令怎么注册", ext-expert: "快捷键怎么注册"])'],
+    ['tools', 'allSettled：第 1 个 ext-expert', 'inner', { set: [['ext-expert', 'researching', 0]] }, '同步部分把状态设为 researching'],
+    ['tools', '第 2 个 ext-expert → 拒绝', 'inner', {}, '第 254 行：already researching，直接返回错误，没起进程'],
+    ['tools', '第 1 个结束', '', { set: [['ext-expert', 'done', 34]] }, ''],
+    ['tools', 'toolResult：[✓] Ext Expert / [✗] Ext Expert', 'inner', {}, 'details.status = "partial"'],
+    ['tend', 'turn_end', 'inner', {}, '模型下一个 turn 再单独问一次，或者改问 keybinding-expert'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintRows(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    r.forEach(([t, color]) => { const s = document.createElement('span'); s.textContent = t; if (color) s.style.color = color; el.appendChild(s); });
+    if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+function gridRows(cards) {
+  const names = Object.keys(cards), rows = [];
+  const icon = { idle: '○', researching: '●', done: '✓', error: '✗' };
+  for (let i = 0; i < names.length; i += 3) {
+    const row = names.slice(i, i + 3);
+    rows.push(row.map(n => [` ${n.padEnd(18)}`, EXPERTS[n][1]]));
+    rows.push(row.map(n => { const c = cards[n]; return [` ${(icon[c.status] + ' ' + c.status + (c.status !== 'idle' ? ' ' + c.secs + 's' : '')).padEnd(18)}`, c.status === 'idle' ? '#888' : '#ddd']; }));
+  }
+  return rows;
+}
+WT.loops({
+  hit: ['session', 'bas', 'tools'],
+  sub: { bas: '读模板，整个替换', tools: 'query_experts → N 个子进程（并行）' },
+  legend: [
+    '橙框 = pi-pi 用到的回调：session_start 载专家，before_agent_start 读模板换提示词，tools 格里执行 query_experts。',
+    '标“外部”的步骤是各专家子进程：同时启动，各自跑完自己的双循环，工具阶段等最慢的那个。',
+  ],
+  scenes: SCN,
+  state: () => ({ cards: {} }),
+  onStep(st, s) {
+    if (s.patch.boot) { st.cards = {}; Object.keys(EXPERTS).forEach(n => st.cards[n] = { status: 'idle', secs: 0 }); }
+    if (s.patch.set) s.patch.set.forEach(([n, status, secs]) => Object.assign(st.cards[n], { status, secs }));
+  },
+  logTag: s => s.node === 'session' || s.node === 'bas' || /execute|allSettled|拒绝/.test(s.event) ? '<span class="tag hit">本扩展</span>' : /结束/.test(s.event) && !s.loop ? '<span class="tag off">外部</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    if (!Object.keys(st.cards).length) { foot1.textContent = '（还没载入专家）'; rc.textContent = ''; return; }
+    paintRows(foot1, gridRows(st.cards));
+    WT.flash(foot1);
+    const r = Object.entries(st.cards).filter(([, c]) => c.status === 'researching').map(([n]) => n);
+    rc.textContent = r.length ? `正在并行运行 ${r.length} 个子进程：${r.join('、')}（pi --mode json -p --no-session …）` : '';
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 并行查询链 ───────────
+const CHIPS = {
+  grid:    ['setWidget 彩色网格 + setFooter', 110, 200, 51, 1],
+  render:  ['renderResult（✓ / ✗ 每位一行）', 322, 200, 51, 1],
+  load:    ['loadExperts（104–131）', 110, 150, 147, 1],
+  tpl:     ['读模板 + 占位符（557–580）', 272, 170, 147, 1],
+  all:     ['Promise.allSettled（427）', 454, 165, 147, 1],
+  join:    ['拼答案（461–472）', 631, 120, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  reg:     ['registerTool · on ×2 · cmd ×2', 222, 190, 243, 1],
+  bas:     ['before_agent_start', 424, 125, 243, 1],
+  sess:    ['AgentSession', 110, 100, 339, 1],
+  exec:    ['executePreparedToolCall（await）', 222, 210, 339, 1],
+  child:   ['spawn("pi") × N：各自的双循环', 444, 200, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/pi-pi.ts -e extensions/theme-cycler.ts</code>。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），第 99 行。'],
+  ['reg', '<span class="tag l2">L2</span> 登记 query_experts（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>）、<code>/experts</code>、<code>/experts-grid</code>、两个事件。'],
+  ['load', '<span class="tag l3">L3</span> <code>session_start</code>：读 <code>.pi/agents/pi-pi/*.md</code>，跳过 orchestrator，得到 9 位专家。'],
+  ['grid', '<span class="tag l4">L4</span> 挂彩色网格（3 列）和页脚，notify 专家名单。<br><b>下面是一次提问里的并行查询。</b>'],
+  ['bas', '<span class="tag l2">L2</span> <code>before_agent_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a>）调到第 557 行。'],
+  ['tpl', '<span class="tag l3">L3</span> 读 pi-orchestrator.md，换掉 3 个占位符，作为 <code>systemPrompt</code> 返回（整个替换）。'],
+  ['exec', '<span class="tag l1">L1</span> 模型调用 query_experts：<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a> 开始 await，进入第 407 行。'],
+  ['all', '<span class="tag l3">L3</span> 第 427 行：<code>queries.map(queryExpert)</code> 全部同时调用，<code>Promise.allSettled</code> 等齐。'],
+  ['child', '<span class="tag l1">L1</span> 每个 queryExpert 起一个 <code>pi --mode json -p --no-session …</code>（第 294 行）：N 个进程同时跑各自的双循环，各自先抓文档再回答。'],
+  ['grid', '<span class="tag l4">L4</span> 子进程的事件流和每秒定时器更新各自的卡片：● researching 12s → ✓ done 34s。'],
+  ['join', '<span class="tag l3">L3</span> 全部结束后，每位截到 12000 字，用 “## [✓] 名字 (秒)” 分段拼成一条文字。'],
+  ['render', '<span class="tag l4">L4</span> execute 返回，renderResult 每位一行 ✓/✗；主 agent 下一个 turn 读到全部答案，自己用 write / edit 写文件。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+Object.keys(EXPERTS).forEach((n, i) => {
+  const l = document.createElement('label'); l.className = 'small';
+  const c = document.createElement('input'); c.type = 'checkbox'; c.value = n; c.checked = i < 3; c.addEventListener('input', drawSim);
+  l.appendChild(c); l.appendChild(document.createTextNode(' ' + n)); $('m-experts').appendChild(l);
+});
+function drawSim() {
+  const picked = [...document.querySelectorAll('#m-experts input:checked')].map(c => c.value);
+  if ($('m-dup').checked) picked.push('ext-expert');
+  const rows = [];
+  if ($('m-nofile').checked) rows.push([[' 系统提示词：Error: Could not load pi-orchestrator.md. Make sure it exists in .pi/agents/pi-pi/.', '#ff8b39']], [['', '']]);
+  if (!picked.length) { rows.push([[' queries 为空 → “No queries provided.”', '#ff8b39']]); paintRows($('m-out'), rows); $('m-note').textContent = ''; return; }
+  const res = runBatch(picked);
+  const max = Math.max(...res.map(r => r.secs)), sum = res.reduce((a, r) => a + r.secs, 0);
+  rows.push([[` query_experts：${picked.length} 个查询，起 ${res.filter(r => r.status === 'done').length} 个子进程`, '#36f9f6']]);
+  res.forEach(r => {
+    const bar = r.status === 'done' ? '█'.repeat(Math.round(r.secs / 2)) : '';
+    rows.push([[`  ${r.status === 'done' ? '✓' : '✗'} ${r.name.padEnd(18)}`, r.status === 'done' ? EXPERTS[r.name][1] : '#ff8b39'], [r.status === 'done' ? `${bar} ${r.secs}s` : r.msg, r.status === 'done' ? '#bbb' : '#ff8b39']]);
+  });
+  const ok = res.filter(r => r.status === 'done').length;
+  rows.push([['', '']], [[` 工具阶段耗时 ≈ ${max}s（最慢的那位）；若串行（第 14 篇的写法）≈ ${sum}s`, '#72f1b8']]);
+  rows.push([[` toolResult 最多 ≈ ${(ok * 12000).toLocaleString()} 字（约 ${Math.round(ok * 12000 / 4).toLocaleString()} token）一次进主上下文`, ok >= 4 ? '#ff8b39' : '#bbb']]);
+  paintRows($('m-out'), rows);
+  WT.flash($('m-out'));
+  const notes = [];
+  if ($('m-dup').checked) notes.push('同一位专家在同一批里出现两次：第二个被拒，details.status = "partial"');
+  if ($('m-nofile').checked) notes.push('模板读不到时仍整个替换，主 agent 失去全部角色说明');
+  $('m-note').textContent = notes.join(' · ');
+}
+['m-dup', 'm-nofile'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>
