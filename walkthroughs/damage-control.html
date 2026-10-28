@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>damage-control.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 05</div>
+<h1>damage-control.ts</h1>
+<p class="subtitle">按 YAML 规则检查每一次工具调用，命中就拦下来：危险的 bash 命令、敏感路径、只读路径、不许删的路径。232 行，订阅 <code>session_start</code> 和 <code>tool_call</code>。前四篇都只是“看”，这一篇第一次用回调的<b>返回值</b>改变循环的走向：<code>tool_call</code> 返回 <code>{ block: true }</code>，工具就不执行。<br>运行：<code>just ext-damage-control</code>（同时加载 minimal 和 theme-cycler）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。结构是三段：第 79–104 行在循环外读规则，第 106–206 行在每次工具调用前算出 <code>violationReason</code>，第 208–230 行决定放行、拦截还是先问用户。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+本扩展的 <code>session_start</code> 在循环外；<code>tool_call</code> 在 <b>run 内循环</b>的工具阶段，挂在每个工具<b>执行之前</b>（<code>tool_execution_start</code> 之后、真正执行之前），而且是第一个能<b>改变</b>循环的回调：它的返回值决定这个工具跑不跑。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="block">场景 A：并行两个工具，bash rm -rf 被拦（当前代码：ctx.abort + block）</option>
+    <option value="ask">场景 B：ask 规则，用户同意一次、超时一次</option>
+    <option value="fix">场景 C：修法——不 abort，改返回 terminate: true</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">终端（实时）：聊天区 + 页脚</div><div class="term" id="foot1"></div>
+<div class="small muted" style="margin-top:8px">LLM 下一次请求里会看到的 toolResult</div><div class="term" id="tr1"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 读 YAML 规则</td></tr>
+<tr><td><code>input</code> · <code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>:1935</code></a></td><td>–</td></tr>
+<tr><td><code>agent_start</code> · <code>agent_end</code></td><td><span class="tag outer">外</span> 每 run</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>:329</code></a></td><td>–</td></tr>
+<tr><td><code>agent_before_settle</code> · <code>agent_settled</code></td><td><span class="tag outer">外</span> 出口</td><td>≤ N · 1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2017"><code>agent-session.ts:2017</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1084"><code>:1084</code></a></td><td>–</td></tr>
+<tr><td><code>turn_*</code> · <code>context</code> · <code>message_*</code></td><td><span class="tag inner">内</span> 每 turn</td><td>M / 多</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>agent-loop.ts:216</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L400"><code>:400</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L430"><code>:430</code></a></td><td>–</td></tr>
+<tr><td><code>tool_execution_start</code></td><td><span class="tag inner">内</span> 每个工具，tool_call 之前</td><td>K</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L553"><code>agent-loop.ts:553</code></a>（串行）· <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L608"><code>:608</code></a>（并行）</td><td>–</td></tr>
+<tr class="hl"><td><code>tool_call</code>（可拦截）</td><td><span class="tag inner">内</span> 每个工具，执行前</td><td>K</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>agent-loop.ts:739</code></a> <code>beforeToolCall</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L668"><code>agent-session.ts:668</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a></td><td>✔ 检查规则，返回 block / 放行</td></tr>
+<tr><td><code>tool_execution_end</code></td><td><span class="tag inner">内</span> 每个工具，执行后</td><td>K（被拦的也发）</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L931"><code>agent-loop.ts:931</code></a></td><td>–</td></tr>
+</tbody></table></div>
+<p class="small muted">返回值怎么生效：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1253"><code>runner.ts:1253</code></a> 按扩展顺序调 handler，谁先返回 <code>block: true</code> 就立刻返回（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1259"><code>:1259</code></a>），后面的扩展不再被调用。<code>prepareToolCall</code> 拿到结果后<b>先</b>看 <code>signal.aborted</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L748"><code>agent-loop.ts:748</code></a>），<b>再</b>看 <code>block</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L755"><code>:755</code></a>）。这个先后顺序决定了本篇最重要的那个 bug，见 ③。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–8 步是启动链（循环外），到规则读进闭包为止。第 9–20 步是一次被拦截的 bash 调用：从 L1 的 <code>prepareToolCall</code> 一路问到 L3 的规则，L3 做出判决后又通过 <code>ctx.abort()</code> 反过来打断 L1。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、拦截链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 20</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–8 步在双循环启动之前；第 9 步起是 run 内循环里一次被拦下的工具调用。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>damage-control 站在<b>控制</b>这一段：它不改系统提示词，不改用户输入，但它决定 assistant 发出的一个 toolCall 最后变成什么样的 toolResult，而 toolResult 会被装配进下一次请求。它的设计意图是把 <code>reason</code> 写进 toolResult，让模型读到 “DO NOT attempt to work around…”。实际上 <code>ctx.abort()</code> 抢先一步，进上下文的只是 <code>Operation aborted</code>。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 400" role="img" aria-label="提示词上下文：tool_call 控制 toolResult 的内容">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">安装 · 谁放进来</text>
+  <text class="bt" x="262" y="24" font-size="13" style="fill:var(--accent)">控制 · 谁能改</text>
+  <text class="bt" x="560" y="24" font-size="13" style="fill:var(--accent)">装配 · 怎么拼</text>
+
+  <g class="chip"><rect x="16" y="40" width="210" height="34" rx="7"/><text x="26" y="62" font-size="11.5"><tspan class="mono">system</tspan> · 工具列表不变</text><title>本扩展不注册、不移除工具：模型照样看得到 bash，照样会去调用</title></g>
+  <g class="chip"><rect x="16" y="88" width="210" height="34" rx="7"/><text x="26" y="110" font-size="11.5"><tspan class="mono">assistant</tspan> · toolCall(bash …)</text><title>模型决定调用工具；damage-control 无法阻止它“想”调用，只能拦“执行”</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M226,105 L256,105"/>
+
+  <g class="chip hit"><rect x="258" y="84" width="240" height="42" rx="7"/><text class="mono" x="268" y="101" font-size="11.5">tool_call · damage-control</text><text x="268" y="117" font-size="10" style="fill:var(--inner)">每个工具执行前 · 返回值生效</text><title>agent-loop.ts:739 beforeToolCall → agent-session.ts:668 → runner.ts:1249</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M378,126 L378,146"/>
+  <g class="chip"><rect x="258" y="148" width="240" height="32" rx="7"/><text x="268" y="168" font-size="11">① 放行 → 工具真正执行</text><title>return { block: false }（第 219、230 行）</title></g>
+  <g class="chip"><rect x="258" y="190" width="240" height="32" rx="7"/><text x="268" y="210" font-size="11">② block + reason（设计意图）</text><title>agent-loop.ts:755–756：createErrorToolResult(reason)。当前代码走不到这里</title></g>
+  <g class="chip"><rect x="258" y="232" width="240" height="42" rx="7"/><text x="268" y="249" font-size="11">③ 先 ctx.abort() 再 block（实际）</text><text class="mut" x="268" y="265" font-size="10">:748 先看到 aborted → “Operation aborted”</text><title>agent-loop.ts:748–752：signal 已中止，直接返回 Operation aborted，reason 被丢掉</title></g>
+  <text class="mut" x="508" y="140" font-size="10">三选一</text>
+
+  <path class="arrow flow" marker-end="url(#ah2)" d="M498,164 L558,172"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M498,206 L558,184"/>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M498,253 L558,196"/>
+  <g class="chip"><rect x="560" y="156" width="180" height="44" rx="7"/><text x="570" y="174" font-size="11.5"><tspan class="mono">toolResult</tspan> 消息</text><text class="mut" x="570" y="191" font-size="10">isError: true（② ③）</text><title>agent-loop.ts:580 / 662 createToolResultMessage，随后落盘</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M650,200 L650,226"/>
+  <g class="chip"><rect x="560" y="228" width="180" height="44" rx="7"/><text class="mono" x="570" y="246" font-size="11">transformContext</text><text class="mono" x="570" y="262" font-size="11">→ convertToLlm</text><title>agent-loop.ts:400 / 404：下一个 turn 的请求</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M740,250 L756,250"/>
+  <g class="chip"><rect x="758" y="228" width="50" height="44" rx="7"/><text x="783" y="255" text-anchor="middle" font-size="12" font-weight="700">LLM</text></g>
+  <text class="mut" x="560" y="290" font-size="10">③ 时 run 已中止：这条要等用户下次发消息才送到</text>
+
+  <!-- 旁路 -->
+  <g class="chip"><rect x="16" y="314" width="210" height="42" rx="7"/><text class="mono" x="26" y="331" font-size="11">pi.appendEntry(...log)</text><text class="mut" x="26" y="347" font-size="10">CustomEntry · 不进上下文</text><title>agent-session.ts:3466 → session-manager.ts:1290；session-manager.ts:125 写明 buildSessionContext 忽略它</title></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M226,335 L256,335"/>
+  <g class="chip"><rect x="258" y="314" width="240" height="42" rx="7"/><text x="268" y="331" font-size="11">会话文件（.jsonl）里的审计日志</text><text class="mut" x="268" y="347" font-size="10">给人和扩展看，LLM 看不到</text></g>
+  <g class="chip"><rect x="560" y="314" width="248" height="42" rx="7"/><text x="570" y="331" font-size="11">notify → 聊天区提示</text><text class="mut" x="570" y="347" font-size="10">setStatus 传错参数，什么也不显示</text><title>interactive-mode.ts:2916 showExtensionNotify；setStatus 见 ③ 的警示</title></g>
+  <text class="mut" x="16" y="388" font-size="10">只有 toolResult 这一条路通到 LLM；审计日志、通知、状态都只给人看。</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>入口</th><th>段</th><th>本扩展改了什么</th><th>LLM 看得到吗</th></tr></thead>
+<tbody>
+<tr><td>系统提示词 / 工具列表</td><td>安装</td><td>不改：bash、read 等工具照常提供给模型</td><td>–</td></tr>
+<tr><td><code>input</code> / <code>before_agent_start</code> / <code>context</code></td><td>控制</td><td>不订阅</td><td>–</td></tr>
+<tr class="hl"><td><code>tool_call</code> 返回值</td><td>控制</td><td>放行，或者 <code>block</code> + <code>reason</code>。<code>reason</code> 本该成为 toolResult 的正文（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L756"><code>agent-loop.ts:756</code></a>）</td><td>当前代码下<b>看不到 reason</b>，只看到 <code>Operation aborted</code></td></tr>
+<tr><td><code>pi.appendEntry</code></td><td>旁路</td><td>往会话里写 <code>damage-control-log</code> 条目（tool、input、rule、action）</td><td>不会：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L125"><code>session-manager.ts:125</code></a> 写明 CustomEntry 不参与 LLM 上下文</td></tr>
+<tr><td><code>ctx.ui.notify</code> / <code>setStatus</code> / <code>confirm</code></td><td>旁路（L4）</td><td>提示用户、问用户</td><td>不会</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>下面的模拟器用 JS 复刻了第 30–77 行的路径匹配和第 106–206 行的检查顺序，规则取自仓库里的 <code>.pi/damage-control-rules.yaml</code>（路径规则全收，bash 模式只收了 14 条）。选一个工具、填输入，看它命中哪条规则，以及模型最后会读到什么。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">工具 <select id="m-tool">
+      <option>bash</option><option>read</option><option>write</option><option>edit</option><option>grep</option><option>find</option><option>ls</option>
+    </select></label>
+    <input id="m-in" type="text" value="rm -rf build" style="flex:1;min-width:220px;font-family:var(--mono)">
+  </div>
+  <div class="controls" id="m-presets"></div>
+  <div class="controls">
+    <label class="small">ask 规则时用户 <select id="m-ans">
+      <option value="no">选 No</option><option value="yes">选 Yes</option><option value="timeout">30 秒没理（超时）</option>
+    </select></label>
+    <label class="small"><input type="checkbox" id="m-fix"> 套用修法（不 abort，返回 terminate: true）</label>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：cwd 固定为 <code>/Users/me/proj</code>、home 为 <code>/Users/me</code>，<code>path.resolve</code> / <code>path.relative</code> 用简化的 POSIX 实现；bash 模式只是 YAML 的一部分，所以“没命中”不代表真实规则下也放行。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>读规则</td><td>项目 <code>.pi/</code> 优先，否则 <code>~/.pi/</code>（第 81–83 行），YAML 解析</td><td><code>pi.on("session_start")</code></td><td>–</td><td><code>notify</code> 报规则数</td><td>循环外：session_start（/reload 重读）</td></tr>
+<tr class="hl"><td>判决</td><td>四类规则依次检查，得出 <code>violationReason</code>（第 110–206 行）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a>：第一个 block 生效</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L718"><code>prepareToolCall</code></a> 调 <code>beforeToolCall</code></td><td>–</td><td><span class="tag inner">内</span> 每个工具执行前</td></tr>
+<tr><td>拦截</td><td>返回 <code>{ block: true, reason }</code>（第 216、226 行）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L658"><code>_beforeToolCall</code></a> 透传</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L755"><code>agent-loop.ts:755</code></a>：生成 isError 的 toolResult，工具不执行</td><td>工具结果组件显示错误</td><td><span class="tag inner">内</span> 同一个工具</td></tr>
+<tr><td>中止 run</td><td><code>ctx.abort()</code>（第 215、225 行）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L937"><code>runner.ts:937</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3502"><code>agent-session.ts:3502</code></a></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2498"><code>session.abort()</code></a> 同步走到 <a href="../../../../../vendor/pi/packages/agent/src/agent.ts#L351"><code>agent.ts:351</code></a>，signal 立刻 aborted</td><td>TUI 的 <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1978"><code>abortHandler</code></a> 先把排队的消息放回编辑器</td><td><span class="tag inner">内</span> → 本 run 结束</td></tr>
+<tr><td>问用户</td><td>只有 <code>ask: true</code> 的 bash 规则（第 209–220 行）</td><td><code>ctx.ui.confirm(…, { timeout: 30000 })</code></td><td><code>await</code> 期间工具阶段停在这里</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2755"><code>showExtensionConfirm</code></a>：Yes/No 选择框；超时得到 undefined，算 No</td><td><span class="tag inner">内</span> 阻塞到用户选择</td></tr>
+<tr><td>审计日志</td><td><code>{ tool, input, rule, action }</code></td><td><code>pi.appendEntry</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3466"><code>agent-session.ts:3466</code></a></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1290"><code>appendCustomEntry</code></a> 写会话文件</td><td>–</td><td>每次拦截 / 确认</td></tr>
+<tr><td>状态行</td><td>“Damage-Control Active: N Rules” 等</td><td><code>ctx.ui.setStatus(text)</code>：少了 key 参数</td><td>–</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L146"><code>setExtensionStatus</code></a> 收到 <code>text = undefined</code>，执行的是“删除”</td><td>从不显示</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：<code>ctx.abort()</code> 让精心写的 reason 永远到不了模型。</b>第 215、225 行先调 <code>ctx.abort()</code>，再 <code>return { block: true, reason }</code>。在 TUI 里 <code>ctx.abort()</code> 经 <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1978"><code>abortHandler</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L4711"><code>restoreQueuedMessagesToEditor</code></a> → <code>session.abort()</code>，而 <code>session.abort()</code> 在第一个 <code>await</code> 之前就同步调了 <code>agent.abort()</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2506"><code>agent-session.ts:2506</code></a> → <a href="../../../../../vendor/pi/packages/agent/src/agent.ts#L351"><code>agent.ts:351</code></a>）。handler 一返回，<code>prepareToolCall</code> 先检查 <code>signal?.aborted</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L748"><code>agent-loop.ts:748</code></a>），直接产出 <code>"Operation aborted"</code>，走不到读 <code>reason</code> 的第 755 行。结果是：“DO NOT attempt to work around this restriction…”这段话从来不会出现在 toolResult 里。并行执行时，同一批里先准备好、还没开跑的工具也会变成 <code>Operation aborted</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L630"><code>agent-loop.ts:630</code></a>），后面还没准备的直接跳过（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L623"><code>:623</code></a>）。<br>修法：删掉两处 <code>ctx.abort()</code>，返回 <code>{ block: true, reason, terminate: true }</code>。<code>terminate</code> 正是 Pi 为这种情况准备的字段（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L1462"><code>types.ts:1462</code></a>）：工具结果照常写进上下文，这一批结束后 run 不再请求模型（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L281"><code>agent-loop.ts:281</code></a>）。注意 <code>terminate</code> 要求这一批<b>每个</b>结果都带它才会提前结束（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L700"><code>agent-loop.ts:700</code></a>），批里有被放行的工具时，模型还会再被请求一次，并读到 reason。场景 A 和场景 C 对比了两种写法。</div>
+
+<div class="callout warn"><b>Bug：<code>setStatus</code> 少传了 key，状态行从不显示。</b>接口是 <code>setStatus(key, text)</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L166"><code>types.ts:166</code></a>），第 103、213、223 行只传了一个字符串，于是 key 是那段文字、text 是 <code>undefined</code>，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/footer-data-provider.ts#L147"><code>footer-data-provider.ts:147</code></a> 把它当成“清除这个 key”。加载时不报错（推断：jiti 只转译、不做类型检查）。修法：<code>ctx.ui.setStatus("damage-control", `…`)</code>。</div>
+
+<div class="callout warn"><b>Bug：bash 的只读检查几乎拦下所有提到只读路径的命令。</b>第 174 行注释说这是“可能修改”的启发式，但条件里的 <code>/[\s>|]/.test(command)</code> 只要命令里有一个空格就成立。于是 <code>cat package-lock.json</code>、<code>ls build/</code>、<code>/usr/bin/env python3 x.py</code>（命中 <code>/usr/</code>、<code>/bin/</code>）都会被当成“may modify read-only path”拦下。模拟器里点对应的预设就能看到。修法：只在出现重定向、<code>sed -i</code>、<code>rm</code>、<code>mv</code>、<code>tee</code> 等写操作时才判定，例如 <code>/(&gt;|\bsed\s+-i\b|\brm\b|\bmv\b|\btee\b)/</code>。</div>
+
+<div class="callout warn"><b>Bug：bash 的敏感路径检查不认通配符。</b>第 163 行用 <code>command.includes(zap)</code>，而 <code>zeroAccessPaths</code> 里有一半是 <code>*.pem</code>、<code>*.env</code>、<code>*-credentials.json</code> 这样的通配模式，字面上永远不会出现在命令里。结果 <code>read server.pem</code> 被拦（read 走第 55 行的 <code>isPathMatch</code>，认通配），<code>bash cat server.pem</code> 却放行。修法：把命令按空白切成 token，对每个 token 调 <code>isPathMatch</code>。</div>
+
+<div class="callout"><b>路径匹配偏宽。</b><code>isPathMatch</code> 最后还有一个子串兜底（第 76 行 <code>includes(resolvedPattern)</code>）：<code>.env</code> 会命中 <code>src/load.env.ts</code>；目录规则 <code>dist/</code> 经 <code>path.resolve</code> 去掉末尾斜杠后，用 <code>startsWith</code> 也会命中 <code>distribution.ts</code>。方向是“宁可错拦”，对安全扩展说得通，但会打断正常工作。</div>
+
+<div class="callout"><b>启发式的边界。</b>bash 检查是字符串匹配：<code>cat $HOME/.ssh/id_rsa</code>、<code>cat ~/".ssh"/id_rsa</code>、先 <code>cd ~/.ssh</code> 再 <code>cat id_rsa</code> 都能绕过。另外第 125–129 行只认 read / write / edit / grep / find / ls / bash，Pi 的 <code>powershell</code> 工具（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L1389"><code>types.ts:1389</code></a>）不在检查范围内。这类扩展防的是模型“手滑”，挡不住刻意绕过。</div>
+
+<div class="callout"><b>失败时的方向：都是拦。</b>确认框 30 秒没人理，<code>showExtensionSelector</code> 得到 <code>undefined</code>，<code>confirm</code> 返回 false（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2764"><code>interactive-mode.ts:2764</code></a>），按拒绝处理，但日志里写的是 <code>blocked_by_user</code>，分不出是用户拒绝还是超时。YAML 里有一条非法正则时，第 152 行的 <code>new RegExp</code> 抛异常；<code>emitToolCall</code> 不接异常（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1255"><code>runner.ts:1255</code></a>），<code>prepareToolCall</code> 的 catch 把它变成一条错误结果（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L783"><code>agent-loop.ts:783</code></a>），于是每一条 bash 都被拦下，错误信息是正则语法错误。</div>
+
+<div class="callout"><b>和 <code>just</code> 里的另外两个扩展叠加。</b><code>just ext-damage-control</code> 同时装 minimal 和 theme-cycler。minimal 用 <code>setFooter</code> 换掉了内置页脚，而扩展状态只由内置页脚画（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/footer.ts#L290"><code>footer.ts:290</code></a>），所以即使修好 <code>setStatus</code>，这个组合下状态行也看不到，theme-cycler 的状态也一样。这不是 damage-control 写错，是页脚槽的取舍（第 02 篇）。另外多个扩展都订阅 <code>tool_call</code> 时，按加载顺序问，第一个返回 block 的生效，后面的不再被调用（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1259"><code>runner.ts:1259</code></a>）。</div>
+
+<h2 id="sum">小结</h2>
+<p>damage-control 把一个回调的返回值变成了 run 内循环的分叉：<code>tool_call</code> 返回 <code>block</code>，Pi 就跳过执行、把 <code>reason</code> 作为错误结果写进上下文。它多做的一步 <code>ctx.abort()</code> 从 L3 反过来打断 L1，但 <code>prepareToolCall</code> 先看 abort 再看 block，于是 reason 被丢掉了。下一篇 <code>damage-control-continue.ts</code> 用同一套规则，去掉了 <code>abort</code>，改为把可操作的反馈写进 toolResult，让 agent 换条路继续干活。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [2, 'import { isToolCallEventType } from "@mariozechner/pi-coding-agent";', 'l2', '类型收窄工具：只是比较 <code>event.toolName</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L1400"><code>types.ts:1400</code></a>），好处是 TS 能推出 <code>event.input</code> 的字段。'],
+  [3, 'import { parse as yamlParse } from "yaml";', 'l3', 'package.json 里的依赖，jiti 照常解析。'],
+  [22, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调 1 次。规则先是空的，session_start 时才读文件。'],
+  [44, '  function commandReferencesPath(command: string, protectedPath: string): boolean {', 'l3', '只用于 noDeletePaths：子串命中后，要求下一个字符不是字母数字下划线连字符，避免 <code>LICENSE</code> 命中 <code>LICENSE_old</code>。'],
+  [55, '  function isPathMatch(targetPath: string, pattern: string, cwd: string): boolean {', 'l3', '路径匹配：目录规则用 startsWith，其余转成正则再加子串兜底。read / write / edit / grep / find / ls 都走这里。'],
+  [62, '      const absolutePattern = path.isAbsolute(resolvedPattern) ? resolvedPattern : path.resolve(cwd, resolvedPattern);', 'l3', '相对目录规则经 <code>path.resolve</code> 后末尾斜杠没了：<code>dist/</code> → <code>/…/dist</code>，于是也命中 <code>distribution.ts</code>。'],
+  [71, '    const regex = new RegExp(`^${regexPattern}$|^${regexPattern}/|/${regexPattern}$|/${regexPattern}/`);', 'l3', '整段、开头的目录、结尾的文件名、中间的目录，四种位置都算命中。'],
+  [76, '    return regex.test(targetPath) || … || targetPath.includes(resolvedPattern) || relativePath.includes(resolvedPattern);', 'l3', '子串兜底让匹配偏宽：<code>.env</code> 命中 <code>load.env.ts</code>。'],
+  [79, '  pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。/reload 时 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a> 再发，规则重读。'],
+  [83, '    const rulesPath = fs.existsSync(projectRulesPath) ? projectRulesPath : … globalRulesPath …', 'l3', '项目规则存在就<b>只</b>用项目规则，不和全局规则合并。'],
+  [95, '      ctx.ui.notify(`🛡️ Damage-Control: Loaded ${…} rules (${source}).`);', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2916"><code>showExtensionNotify</code></a>：没给 type，走 showStatus，在聊天区显示一行提示。'],
+  [103, '    ctx.ui.setStatus(`🛡️ Damage-Control Active: ${…} Rules`);', 'l4', '⚠ 少了 key：签名是 <code>setStatus(key, text)</code>，这里 text 是 undefined，等于“删除”，什么也不显示。'],
+  [106, '  pi.on("tool_call", async (event, ctx) => {', 'hit', '本篇的核心回调。<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>agent-loop.ts:739</code></a> 的 <code>beforeToolCall</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L668"><code>agent-session.ts:668</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a>。<span class="tag inner">run 内循环</span>每个工具执行前 1 次，返回值会被 Pi 读取。'],
+  [125, '    if (isToolCallEventType("read", event) || … "write" … "edit") {', 'l3', '取出 path。grep / find / ls 没给 path 时按 <code>"."</code>。不在列表里的工具（如 powershell、自定义工具）一律不查路径。'],
+  [134, '        if (event.input.glob.includes(zap) || isPathMatch(event.input.glob, zap, ctx.cwd)) {', 'l3', 'grep 的 glob 参数也查一遍敏感路径。'],
+  [152, '          const regex = new RegExp(rule.pattern);', 'l3', '每次调用、每条规则都重新编译一次正则。YAML 里有非法正则时这里抛异常，结果是每条 bash 都被拦（见 ③）。'],
+  [155, '          shouldAsk = !!rule.ask;', 'l3', '只有 bash 模式规则能设 ask；路径规则一律直接拦。'],
+  [163, '          if (command.includes(zap)) {', 'l3', '⚠ 字面子串：<code>*.pem</code> 这类通配规则永远匹配不上命令。'],
+  [174, '          if (command.includes(rop) && (/[\\s>|]/.test(command) || command.includes("rm") || …)) {', 'l3', '⚠ <code>/[\\s>|]/</code> 遇到任何空格都成立，等于“提到只读路径就拦”。'],
+  [182, '        const hasDeleteOrMove = /\\brm\\b/.test(command) || /\\bmv\\b/.test(command);', 'l3', '<code>\\brm\\b</code> 也命中 <code>git rm</code>、<code>docker run --rm</code>。'],
+  [199, '            if (isPathMatch(resolved, rop, ctx.cwd)) {', 'l3', 'write / edit 的只读检查用的是正规的路径匹配，比 bash 那条准得多。'],
+  [210, '        const confirmed = await ctx.ui.confirm("🛡️ Damage-Control Confirmation", …, { timeout: 30000 });', 'l4', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L2755"><code>showExtensionConfirm</code></a>：Yes / No 选择框。await 期间工具阶段停在这里；30 秒超时算 No。'],
+  [214, '          pi.appendEntry("damage-control-log", { …, action: "blocked_by_user" });', 'l2', '写一条 CustomEntry 到会话（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3466"><code>agent-session.ts:3466</code></a>）。不进 LLM 上下文。超时也记成 blocked_by_user。'],
+  [215, '          ctx.abort();', 'l2', '⚠ <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L937"><code>runner.ts:937</code></a> → TUI 的 abortHandler → <code>session.abort()</code>，同步把 signal 置为 aborted。下一行返回的 reason 因此被丢弃。'],
+  [216, '          return { block: true, reason: `🛑 BLOCKED by Damage-Control: … DO NOT attempt to work around …` };', 'hit', '返回值：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1259"><code>runner.ts:1259</code></a> 见到 block 立刻返回。本该在 <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L756"><code>agent-loop.ts:756</code></a> 变成 toolResult 正文，实际被 :748 的 aborted 分支截走。'],
+  [219, '          return { block: false };', 'hit', '用户选了 Yes：放行，工具照常执行。'],
+  [222, '        ctx.ui.notify(`🛑 Damage-Control: Blocked ${event.toolName} due to ${violationReason}`);', 'l4', '用户在聊天区能看到拦截原因，这是 reason 唯一可见的地方。'],
+  [225, '        ctx.abort();', 'l2', '⚠ 同第 215 行。'],
+  [226, '        return { block: true, reason: `🛑 BLOCKED by Damage-Control: ${violationReason} …` };', 'hit', '同第 216 行。修法：删掉上一行，这里加 <code>terminate: true</code>。'],
+  [230, '    return { block: false };', 'l3', '没有违规：放行。返回 <code>undefined</code> 效果一样。'],
+];
+WT.source(SRC);
+
+// ─────────── damage-control 检查逻辑复刻（第 30–206 行） ───────────
+const HOME = '/Users/me', CWD = '/Users/me/proj';
+const RULES = {
+  bashToolPatterns: [
+    { pattern: '\\brm\\s+(-[^\\s]*)*-[rRf]', reason: 'rm with recursive or force flags' },
+    { pattern: '\\bsudo\\s+rm\\b', reason: 'sudo rm' },
+    { pattern: '\\bchmod\\s+(-[^\\s]+\\s+)*777\\b', reason: 'chmod 777 (world writable)' },
+    { pattern: '\\bgit\\s+reset\\s+--hard\\b', reason: 'git reset --hard (use --soft or stash)' },
+    { pattern: '\\bgit\\s+clean\\s+(-[^\\s]*)*-[fd]', reason: 'git clean with force/directory flags' },
+    { pattern: '\\bgit\\s+push\\s+.*--force(?!-with-lease)', reason: 'git push --force (use --force-with-lease)' },
+    { pattern: '\\bgit\\s+push\\s+(-[^\\s]*)*-f\\b', reason: 'git push -f (use --force-with-lease)' },
+    { pattern: '\\bgit\\s+stash\\s+clear\\b', reason: 'git stash clear (deletes ALL stashes)' },
+    { pattern: '\\bgit\\s+checkout\\s+--\\s*\\.', reason: 'Discards all uncommitted changes', ask: true },
+    { pattern: '\\bgit\\s+restore\\s+\\.', reason: 'Discards all uncommitted changes', ask: true },
+    { pattern: '\\bgit\\s+stash\\s+drop\\b', reason: 'Permanently deletes a stash', ask: true },
+    { pattern: '\\bgit\\s+branch\\s+(-[^\\s]*)*-D', reason: 'Force deletes branch (even if unmerged)', ask: true },
+    { pattern: '\\bmkfs\\.', reason: 'filesystem format command' },
+    { pattern: '\\bdd\\s+.*of=/dev/', reason: 'dd writing to device' },
+  ],
+  zeroAccessPaths: ['.env', '.env.local', '.env.development', '.env.production', '.env.staging', '.env.test', '.env.*.local', '*.env',
+    '~/.ssh/', '~/.gnupg/', '~/.aws/', '~/.config/gcloud/', '*-credentials.json', '*serviceAccount*.json', '*service-account*.json',
+    '~/.azure/', '~/.kube/', 'kubeconfig', '*-secret.yaml', 'secrets.yaml', '~/.docker/', '*.pem', '*.key', '*.p12', '*.pfx',
+    '*.tfstate', '*.tfstate.backup', '.terraform/', '.vercel/', '.netlify/', 'firebase-adminsdk*.json', 'serviceAccountKey.json',
+    '.supabase/', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.git-credentials', '.git-credentials', 'dump.sql', 'backup.sql', '*.dump'],
+  readOnlyPaths: ['/etc/', '/usr/', '/bin/', '/sbin/', '/boot/', '/root/', '~/.bash_history', '~/.zsh_history', '~/.node_repl_history',
+    '~/.bashrc', '~/.zshrc', '~/.profile', '~/.bash_profile', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'Gemfile.lock',
+    'poetry.lock', 'Pipfile.lock', 'composer.lock', 'Cargo.lock', 'go.sum', 'flake.lock', 'bun.lockb', 'uv.lock', 'npm-shrinkwrap.json',
+    '*.lock', '*.lockb', '*.min.js', '*.min.css', '*.bundle.js', '*.chunk.js', 'dist/', 'build/', '.next/', '.nuxt/', '.output/',
+    '__pycache__/', '.venv/', 'venv/', 'target/'],
+  noDeletePaths: ["~/.claude/","CLAUDE.md","LICENSE","LICENSE.*","COPYING","COPYING.*","NOTICE","PATENTS","README.md","README.*","CONTRIBUTING.md","CHANGELOG.md","CODE_OF_CONDUCT.md","SECURITY.md",".git/",".gitignore",".gitattributes",".gitmodules",".github/",".gitlab-ci.yml",".circleci/","Jenkinsfile",".travis.yml","azure-pipelines.yml","Dockerfile","Dockerfile.*","docker-compose.yml","docker-compose.*.yml",".dockerignore"],
+};
+// 简化的 POSIX path
+function normalize(p) {
+  const out = [];
+  p.split('/').forEach(s => { if (!s || s === '.') return; if (s === '..') out.pop(); else out.push(s); });
+  return '/' + out.join('/');
+}
+const isAbs = p => p.startsWith('/');
+const resolve = (cwd, p) => normalize(isAbs(p) ? p : cwd + '/' + p);
+const join = (a, b) => { const j = (a + '/' + b).replace(/\/+/g, '/'); return j; };
+function relative(from, to) {
+  const f = from.split('/').filter(Boolean), t = to.split('/').filter(Boolean);
+  let i = 0; while (i < f.length && i < t.length && f[i] === t[i]) i++;
+  return [...Array(f.length - i).fill('..'), ...t.slice(i)].join('/');
+}
+function resolvePath(p, cwd) { if (p.startsWith('~')) p = join(HOME, p.slice(1)); return resolve(cwd, p); }
+const expandTilde = p => p.startsWith('~') ? join(HOME, p.slice(1)) : p;
+function commandReferencesPath(command, pp) {
+  if (!pp) return false;
+  let idx = command.indexOf(pp);
+  while (idx >= 0) { const after = command[idx + pp.length]; if (!after || !/[A-Za-z0-9_-]/.test(after)) return true; idx = command.indexOf(pp, idx + 1); }
+  return false;
+}
+function isPathMatch(target, pattern, cwd) {
+  const rp = pattern.startsWith('~') ? join(HOME, pattern.slice(1)) : pattern;
+  if (rp.endsWith('/')) { const ap = isAbs(rp) ? rp : resolve(cwd, rp); return target.startsWith(ap); }
+  const rx = rp.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  const regex = new RegExp(`^${rx}$|^${rx}/|/${rx}$|/${rx}/`);
+  const rel = relative(cwd, target);
+  return regex.test(target) || regex.test(rel) || target.includes(rp) || rel.includes(rp);
+}
+// 返回 { reason, ask, step }：step 指出是哪一段代码判出来的
+function check(tool, input) {
+  let reason = null, ask = false, step = '';
+  const paths = [];
+  if (['read', 'write', 'edit'].includes(tool)) paths.push(input);
+  else if (['grep', 'find', 'ls'].includes(tool)) paths.push(input || '.');
+  for (const p of paths) {
+    const r = resolvePath(p, CWD);
+    for (const z of RULES.zeroAccessPaths) if (isPathMatch(r, z, CWD)) { return { reason: `Access to zero-access path restricted: ${z}`, ask, step: '第 113–116 行 · zeroAccessPaths（isPathMatch）' }; }
+  }
+  if (tool === 'bash') {
+    const command = input;
+    for (const rule of RULES.bashToolPatterns) if (new RegExp(rule.pattern).test(command)) { return { reason: rule.reason, ask: !!rule.ask, step: `第 151–157 行 · bashToolPatterns /${rule.pattern}/` }; }
+    for (const z of RULES.zeroAccessPaths) if (command.includes(z)) return { reason: `Bash command references zero-access path: ${z}`, ask, step: '第 162–166 行 · zeroAccessPaths（字面 includes）' };
+    for (const r of RULES.readOnlyPaths) {
+      if (command.includes(r) && (/[\s>|]/.test(command) || command.includes('rm') || command.includes('mv') || command.includes('sed'))) {
+        return { reason: `Bash command may modify read-only path: ${r}`, ask, step: '第 171–177 行 · readOnlyPaths（启发式）' };
+      }
+    }
+    if (/\brm\b/.test(command) || /\bmv\b/.test(command)) {
+      for (const n of RULES.noDeletePaths) {
+        const e = expandTilde(n);
+        if (commandReferencesPath(command, n) || (e !== n && commandReferencesPath(command, e))) return { reason: `Bash command attempts to delete/move protected path: ${n}`, ask, step: '第 182–190 行 · noDeletePaths' };
+      }
+    }
+  } else if (tool === 'write' || tool === 'edit') {
+    for (const p of paths) {
+      const r = resolvePath(p, CWD);
+      for (const ro of RULES.readOnlyPaths) if (isPathMatch(r, ro, CWD)) return { reason: `Modification of read-only path restricted: ${ro}`, ask, step: '第 196–203 行 · readOnlyPaths（isPathMatch）' };
+    }
+  }
+  return { reason, ask, step };
+}
+const BLOCK_TAIL = '\n\nDO NOT attempt to work around this restriction. DO NOT retry with alternative commands, paths, or approaches that achieve the same result. Report this block to the user exactly as stated and ask how they would like to proceed.';
+
+// ─────────── 双循环动画 ───────────
+// 状态：rules（已加载规则数）、chat（聊天区行）、results（LLM 将看到的 toolResult）、log（appendEntry 条数）、aborted
+// 补丁 { say: '…' } / { result: [tool, text] } 由 onStep 追加；{ rules, aborted, dialog } 直接合并
+const SCN = {
+  block: [
+    ['session', 'session_start', '', { rules: 187, say: '🛡️ Damage-Control: Loaded 187 rules (project).' }, '读 .pi/damage-control-rules.yaml；setStatus 少了 key，状态行仍是空的'],
+    ['input', 'input', '', {}, '用户：清一下构建目录，顺便看看 app.ts'],
+    ['bas', 'before_agent_start', 'outer', {}, '未订阅'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, '两个 toolCall：read src/app.ts、bash "rm -rf build"（默认并行）'],
+    ['tools', 'tool_execution_start (read) → tool_call', 'inner', {}, 'read src/app.ts：没有命中规则 → { block: false }，准备好、排队等执行'],
+    ['tools', 'tool_execution_start (bash) → tool_call', 'inner', {}, 'bash "rm -rf build" 命中 bashToolPatterns：rm with recursive or force flags'],
+    ['tools', 'notify + appendEntry', 'inner', { say: '🛑 Damage-Control: Blocked bash due to rm with recursive or force flags', log: 1 }, '用户在聊天区看到原因；会话里写了一条 damage-control-log（LLM 看不到）'],
+    ['tools', 'ctx.abort()', 'inner', { aborted: true }, '同步走到 agent.abort()：signal 已 aborted'],
+    ['tools', 'return { block: true, reason }', 'inner', {}, 'runner 收到 block，原样交回 prepareToolCall'],
+    ['tools', 'prepareToolCall：signal.aborted', 'inner', { result: ['bash', 'Operation aborted'] }, 'agent-loop.ts:748 先检查 aborted → “Operation aborted”，reason 被丢弃'],
+    ['tools', '执行排队的 read', 'inner', { result: ['read', 'Operation aborted'] }, 'agent-loop.ts:630：signal 已中止，read 也没跑'],
+    ['tools', 'tool_execution_end ×2 → toolResult ×2', 'inner', {}, '两条 isError 的 toolResult 落盘'],
+    ['tend', 'turn_end', 'inner', {}, 'hasMoreToolCalls 仍是 true'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2：请求在 aborted 的 signal 下发出（推断：立即以 aborted 结束）', 0, 1],
+    ['msg', 'message_end (assistant, aborted)', 'inner', {}, 'agent-loop.ts:254：stopReason aborted → 结束 run'],
+    ['aend', 'agent_end', 'outer', {}, 'run #1 结束'],
+    ['post', '_handlePostAgentRun', 'outer', {}, '用户请求了 abort：不 retry、不续跑'],
+    ['settled', 'agent_settled', 'outer', {}, '停稳。模型这次没机会读到任何东西；下次用户发消息时，它看到的是两条 “Operation aborted”'],
+  ],
+  ask: [
+    ['session', 'session_start', '', { rules: 187, say: '🛡️ Damage-Control: Loaded 187 rules (project).' }, ''],
+    ['input', 'input', '', {}, '用户：把工作区恢复干净'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：bash "git checkout -- ."'],
+    ['tools', 'tool_call → 命中 ask 规则', 'inner', { dialog: 'git checkout -- .' }, 'Discards all uncommitted changes · ask: true → await ctx.ui.confirm（30 秒）'],
+    ['tools', '用户选 Yes', 'inner', { dialog: null, log: 1, say: '（确认框关闭：Yes）' }, 'appendEntry action: confirmed_by_user → { block: false }'],
+    ['tools', '执行 bash → tool_execution_end', 'inner', { result: ['bash', 'Updated 3 paths from the index'] }, '工具照常执行，toolResult 是真实输出'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：bash "git stash drop"'],
+    ['tools', 'tool_call → 命中 ask 规则', 'inner', { dialog: 'git stash drop' }, 'Permanently deletes a stash → 再弹确认框'],
+    ['tools', '30 秒无人响应', 'inner', { dialog: null, log: 1, say: '（确认框超时）' }, 'showExtensionSelector 得到 undefined → confirm 返回 false；日志仍记 blocked_by_user'],
+    ['tools', 'ctx.abort() + block', 'inner', { aborted: true, result: ['bash', 'Operation aborted'] }, '同场景 A：reason “(User denied)” 被丢弃。注意 ask 这条分支没有 notify'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, 'run 中止'],
+    ['settled', 'agent_settled', 'outer', {}, '停稳'],
+  ],
+  fix: [
+    ['session', 'session_start', '', { rules: 187, say: '🛡️ Damage-Control: Loaded 187 rules (project).' }, '假设已修：setStatus("damage-control", …)，删掉 ctx.abort()，返回 terminate: true'],
+    ['input', 'input', '', {}, '同场景 A'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_end (assistant)', 'inner', {}, '两个 toolCall：read src/app.ts、bash "rm -rf build"'],
+    ['tools', 'tool_call (read) → 放行', 'inner', {}, ''],
+    ['tools', 'tool_call (bash) → block + terminate', 'inner', { say: '🛑 Damage-Control: Blocked bash due to rm with recursive or force flags', log: 1, status: '⚠️ Last Violation: rm with recursive or force fla...' }, '没有 abort：signal 正常'],
+    ['tools', 'prepareToolCall：block', 'inner', { result: ['bash', '🛑 BLOCKED by Damage-Control: rm with recursive or force flags' + BLOCK_TAIL] }, 'agent-loop.ts:755：reason 成为 toolResult 正文'],
+    ['tools', '执行 read', 'inner', { result: ['read', 'export function app() { … }'] }, 'read 正常执行'],
+    ['tend', 'turn_end', 'inner', {}, '这一批不是每条都 terminate（read 没有）→ 继续请求模型'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '模型读到 BLOCKED 和 “DO NOT attempt to work around …”'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“删除 build/ 被 Damage-Control 拦下了，需要你手动处理或告诉我怎么做。”'],
+    ['tend', 'turn_end', 'inner', {}, '没有 toolCall'],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['post', '_handlePostAgentRun', 'outer', {}, ''],
+    ['settle', 'agent_before_settle', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳。如果这一批只有被拦的 bash，terminate 会让 run 在 turn 1 后就结束，模型下次再读 reason'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), tr1 = document.getElementById('tr1');
+function line(t, cls) { const s = document.createElement('span'); s.textContent = t; if (cls) s.className = cls; return s; }
+function paintLines(el, rows) { el.textContent = ''; rows.forEach((r, i) => { el.appendChild(line(r[0], r[1])); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n')); }); }
+WT.loops({
+  hit: ['session', 'tools'],
+  sub: { tools: 'tool_call（执行前，可 block）' },
+  legend: [
+    '橙框 = damage-control 用到的回调。tools 格的副标题换成了真正订阅的 tool_call：每个工具执行前调用，返回 { block: true } 工具就不执行。',
+    'ctx.abort() 不是回调，是扩展反过来调用 L1：它让本 run 在下一个检查点结束。',
+  ],
+  scenes: SCN,
+  state: () => ({ rules: 0, chat: [], results: [], log: 0, aborted: false, dialog: null, status: '' }),
+  onStep(st, s) {
+    if (s.patch.say) st.chat = [...st.chat, s.patch.say];
+    if (s.patch.result) st.results = [...st.results, s.patch.result];
+    if (s.patch.log) st.logN = (st.logN || 0) + 1;
+  },
+  logTag: s => /tool_call|ctx\.abort|block|notify/.test(s.event) ? '<span class="tag hit">本扩展</span>'
+    : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    const rows = st.chat.slice(-4).map(c => [' ' + c, c.startsWith('🛑') ? 'sw-wrn' : 'dim']);
+    if (st.dialog) rows.push([` ┌ 🛡️ Damage-Control Confirmation: ${st.dialog} … > Yes / No (30s)`, 'acc']);
+    while (rows.length < 5) rows.push([' ']);
+    rows.push([' ' + '─'.repeat(60), 'dim']);
+    rows.push([' gpt-5.5-codex                              [##--------] 18%', 'dim']);
+    rows.push([st.status ? ` 状态：${st.status}` : ' 状态：（空）setStatus 没有 key，minimal 的页脚也不画状态', 'dim']);
+    paintLines(foot1, rows);
+    WT.flash(foot1);
+    if (!st.results.length) tr1.textContent = st.aborted ? '（run 已中止）' : '（还没有 toolResult）';
+    else paintLines(tr1, st.results.map(([t, txt]) => [` [${t}] ${txt.split('\n')[0]}${txt.includes('\n') ? ' …（含 DO NOT attempt to work around …）' : ''}`, /aborted/.test(txt) ? 'sw-wrn' : /BLOCKED/.test(txt) ? 'sw-ok' : '']));
+    if (st.logN) tr1.appendChild(document.createTextNode(`\n （会话里另有 ${st.logN} 条 damage-control-log，不进上下文）`));
+  },
+  idle() { foot1.textContent = '（还没启动）'; tr1.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 拦截链 ───────────
+const CHIPS = {
+  bind:     ['bindCurrentSessionExtensions', 110, 190, 51, 1],
+  notify:   ['showExtensionNotify', 312, 130, 51, 1],
+  confirm:  ['showExtensionConfirm（Yes/No）', 454, 175, 51, 1],
+  aborth:   ['abortHandler → session.abort', 641, 170, 51, 1],
+  tmap:     ['applyExtensionDefaults（themeMap）', 110, 240, 147, 1],
+  load:     ['YAML 规则（81–103）', 362, 115, 147, 1],
+  check:    ['路径 / bash 检查（110–206）', 489, 160, 147, 1],
+  verdict:  ['block（208–227）', 661, 110, 147, 1],
+  loader:   ['loader · jiti', 110, 100, 243, 1],
+  on:       ['pi.on ×2', 222, 65, 243, 1],
+  emit:     ['runner.emit', 299, 85, 243, 1],
+  emittc:   ['runner.emitToolCall', 396, 130, 243, 1],
+  ctxui:    ['ctx.ui.*', 538, 65, 243, 1],
+  append:   ['pi.appendEntry', 615, 100, 243, 1],
+  ctxabort: ['ctx.abort()', 727, 80, 243, 1],
+  sess:     ['AgentSession', 110, 100, 339, 1],
+  loop:     ['runLoop · executeToolCalls', 222, 185, 339, 1],
+  prep:     ['prepareToolCall', 419, 110, 339, 1],
+  btc:      ['_beforeToolCall', 541, 110, 339, 1],
+  ac:       ['AbortController', 663, 110, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/damage-control.ts -e minimal.ts -e theme-cycler.ts</code> 创建 AgentSession。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），也就是第 22 行：<code>rules</code> 初始化为四个空数组。'],
+  ['on', '<span class="tag l2">L2</span> 登记 <code>session_start</code> 和 <code>tool_call</code>。因为它是第一个 <code>-e</code>，之后每个工具调用它都第一个被问。'],
+  ['bind', '<span class="tag l4">L4</span> 交互模式绑定 UI 上下文，同时把 <code>abortHandler</code> 交给会话（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L1978"><code>interactive-mode.ts:1978</code></a>）：以后扩展调 <code>ctx.abort()</code> 走的就是它。'],
+  ['emit', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> 发出 <code>session_start</code>，调到第 79 行。'],
+  ['tmap', '<span class="tag l3">L3</span> <code>applyExtensionDefaults</code>：设主题和标题。'],
+  ['load', '<span class="tag l3">L3</span> 第 81–93 行：找项目或全局的 YAML，解析成四类规则，存进闭包。'],
+  ['notify', '<span class="tag l4">L4</span> <code>notify</code> 在聊天区报规则数；<code>setStatus</code> 因为少了 key 什么也没做。<br><b>启动链到此结束。下面是一次被拦下的 bash 调用。</b>'],
+  ['loop', '<span class="tag l1">L1</span> <span class="tag inner">run 内循环</span>：assistant 带 toolCall，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L279"><code>agent-loop.ts:279</code></a> 进入 <code>executeToolCalls</code>；默认并行，先逐个 <code>prepareToolCall</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L614"><code>:614</code></a>）。'],
+  ['prep', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L718"><code>prepareToolCall</code></a>：找到工具、校验参数，然后调 <code>config.beforeToolCall</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>:739</code></a>）。'],
+  ['btc', '<span class="tag l1">L1</span> 会话在 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L653"><code>agent-session.ts:653</code></a> 挂上的 <code>_beforeToolCall</code>：有 tool_call 订阅者才往下走，组装事件（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L668"><code>:668</code></a>）。'],
+  ['emittc', '<span class="tag l2">L2</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a>：按扩展顺序 await 每个 handler，第 106 行拿到 <code>event</code> 和 <code>ctx</code>。'],
+  ['check', '<span class="tag l3">L3</span> 第 110–206 行：先查敏感路径，再按工具查 bash 模式 / 只读 / 禁删。<code>rm -rf build</code> 命中第一条 bash 模式。'],
+  ['verdict', '<span class="tag l3">L3</span> 第 221 行起：不是 ask 规则，直接拦。'],
+  ['ctxui', '<span class="tag l2">L2</span> <code>ctx.ui.notify</code>、<code>ctx.ui.setStatus</code>。'],
+  ['notify', '<span class="tag l4">L4</span> 聊天区出现 “🛑 Damage-Control: Blocked bash due to …”。这是 reason 唯一被看到的地方。'],
+  ['append', '<span class="tag l2">L2</span> <code>pi.appendEntry</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3466"><code>agent-session.ts:3466</code></a>：写一条 CustomEntry，LLM 看不到。'],
+  ['ctxabort', '<span class="tag l2">L2</span> 第 225 行 <code>ctx.abort()</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L937"><code>runner.ts:937</code></a> → 会话的 abort 绑定（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3502"><code>agent-session.ts:3502</code></a>），有 TUI 的 abortHandler 就交给它。'],
+  ['aborth', '<span class="tag l4">L4</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/interactive-mode.ts#L4711"><code>restoreQueuedMessagesToEditor</code></a> 把排队消息放回编辑器，再 <code>void session.abort()</code>；<code>session.abort()</code> 在第一个 await 之前同步调了 <code>agent.abort()</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2506"><code>agent-session.ts:2506</code></a>）。'],
+  ['ac', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/agent/src/agent.ts#L351"><code>agent.ts:351</code></a>：本 run 的 AbortController 中止。handler 这才 <code>return { block: true, reason }</code>；回到 <code>prepareToolCall</code>，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L748"><code>:748</code></a> 先看到 aborted，返回 “Operation aborted”，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L755"><code>:755</code></a> 的 block 分支没机会执行。run 随后以 aborted 结束。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+const PRESETS = [
+  ['bash', 'rm -rf build', '危险命令'],
+  ['bash', 'git checkout -- .', 'ask 规则'],
+  ['bash', 'cat package-lock.json', '只读误拦'],
+  ['bash', '/usr/bin/env python3 x.py', '只读误拦'],
+  ['bash', 'cat server.pem', '通配漏检'],
+  ['read', 'server.pem', '同一文件走 read'],
+  ['bash', 'cat ~/.ssh/id_rsa', '敏感路径'],
+  ['bash', 'cat $HOME/.ssh/id_rsa', '绕过'],
+  ['read', 'src/load.env.ts', '子串误拦'],
+  ['write', 'distribution.ts', '目录误拦'],
+  ['bash', 'git rm CLAUDE.md', '禁删'],
+  ['edit', 'src/app.ts', '正常'],
+];
+PRESETS.forEach(([tool, input, tag]) => {
+  const b = document.createElement('button');
+  b.textContent = `${tool}: ${input}（${tag}）`;
+  b.onclick = () => { $('m-tool').value = tool; $('m-in').value = input; drawSim(); };
+  $('m-presets').appendChild(b);
+});
+function drawSim() {
+  const tool = $('m-tool').value, input = $('m-in').value, fix = $('m-fix').checked, ans = $('m-ans').value;
+  const r = check(tool, input);
+  const rows = [], notes = [];
+  if (!r.reason) {
+    rows.push([' ✔ 没有命中规则 → return { block: false }', 'sw-ok'], [' 工具照常执行，toolResult 是真实输出', 'dim']);
+  } else {
+    rows.push([` violationReason: ${r.reason}`, 'sw-wrn'], [` 判出位置：${r.step}`, 'dim']);
+    let blocked = true, denied = '';
+    if (r.ask) {
+      rows.push([' ask: true → ctx.ui.confirm(…, { timeout: 30000 })', 'acc']);
+      if (ans === 'yes') { blocked = false; rows.push([' 用户选 Yes → appendEntry confirmed_by_user → { block: false }，工具执行', 'sw-ok']); }
+      else { denied = ' (User denied)'; rows.push([ans === 'timeout' ? ' 超时 → confirm 返回 false → 日志记 blocked_by_user' : ' 用户选 No → 日志记 blocked_by_user', 'dim']); }
+    } else rows.push([` 聊天区：🛑 Damage-Control: Blocked ${tool} due to ${r.reason}`, 'dim']);
+    if (blocked) {
+      if (fix) {
+        rows.push([' return { block: true, reason, terminate: true }（没有 abort）', 'acc']);
+        rows.push([` LLM 看到：🛑 BLOCKED by Damage-Control: ${r.reason}${denied}`, 'sw-ok'], ['           DO NOT attempt to work around this restriction. …', 'sw-ok']);
+      } else {
+        rows.push([' ctx.abort() → return { block: true, reason }', 'acc']);
+        rows.push([' LLM 看到：Operation aborted', 'sw-wrn'], [' （reason 在 agent-loop.ts:748 被丢弃；本 run 中止）', 'dim']);
+      }
+    }
+  }
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  if (/误拦/.test(PRESETS.find(p => p[0] === tool && p[1] === input)?.[2] || '')) notes.push('这个命令/路径并不修改受保护的文件，却被拦了');
+  if (tool === 'bash' && /\.pem|\.key|\.env\b/.test(input) && !r.reason) notes.push('bash 用字面 includes，*.pem 这类通配规则匹配不上；换成 read 工具同一文件会被拦');
+  if (tool === 'bash' && /\$HOME|\$\{HOME\}/.test(input) && !r.reason) notes.push('$HOME 不是 ~，字符串匹配认不出：启发式的边界');
+  $('m-note').textContent = notes.join(' · ');
+}
+['m-tool', 'm-in', 'm-ans', 'm-fix'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>
