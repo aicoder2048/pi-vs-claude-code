@@ -26,6 +26,7 @@
       { n: "15", title: "pi-pi.ts", href: "pi-pi.html" },
       { n: "16", title: "subagent-widget.ts", href: "subagent-widget.html" },
       { n: "17", title: "coms.ts", href: "coms.html" },
+      { n: "18", title: "coms-net.ts", href: "coms-net.html" },
     ],
     lessons: [
       { n: "01", title: "循环骨架与插口", href: LESSONS + "0001-loop-skeleton-and-sockets.html" },

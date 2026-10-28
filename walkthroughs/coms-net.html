@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>coms-net.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 18</div>
+<h1>coms-net.ts</h1>
+<p class="subtitle">第 17 篇 coms 的网络版：每个 Pi 不再自己监听 socket，而是连到一个独立的 Bun 中转服务（<code>scripts/coms-net-server.ts</code>），用 HTTP 发消息、用 SSE 长连接收消息，所以不同机器上的 Pi 也能互相对话。1639 行，订阅 <code>session_start</code>、<code>agent_end</code>、<code>session_shutdown</code>，注册 4 个工具、1 个命令、7 个命令行参数。挂点和 coms 完全一样；变的是<b>消息怎么到达</b>：从“对方直接写我的 socket”变成“中转服务通过我开着的 SSE 推给我”。<br>运行：先 <code>just coms-net-server</code> 起中转服务，再 <code>pi -e extensions/coms-net.ts --cname dev</code></p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。和第 17 篇对照着看：注册、工具、<code>agent_end</code> 回传、<code>session_shutdown</code> 清理的结构一一对应。新增的是 HTTP 封装（第 443 行起）、SSE 读流与重连（第 740–828 行），以及入站提示里写给模型的说明（第 684–689 行）。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+和第 17 篇一样：发送方在工具阶段 <code>coms_net_send</code> / <code>coms_net_await</code>；接收方在循环外收到消息，<code>sendMessage</code> 并入当前 run 或起新 settle，<code>agent_end</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a>）把最后一段话交回。不同在于“循环外收到消息”的来源：不再是 socket 连接回调，而是一个一直在读的 SSE 流（第 776 行的 <code>while (true)</code> 读循环），它和 Pi 的双循环完全并行。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="recv">场景 A（接收方 B）：SSE 推来提示 → 新 settle → agent_end POST 回答</option>
+    <option value="send">场景 B（发送方 A）：coms_net_send → coms_net_await（SSE 与长轮询赛跑）</option>
+    <option value="gap">场景 C：B 的 SSE 正在重连时 A 发来消息</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">三个进程的状态（实时，简化）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>registerFlag</code> ×7</td><td>循环外，加载时</td><td>0</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L334"><code>loader.ts:334</code></a></td><td>✔ 比第 17 篇多 --server-url、--auth-token</td></tr>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 找服务、注册、开 SSE、心跳</td></tr>
+<tr class="hl"><td>SSE 读循环</td><td>与循环异步（一直在读）</td><td>每个推来的事件 1 次</td><td><code>fetch</code> 的 <code>resp.body.getReader()</code></td><td>✔ prompt → sendMessage；response → 唤醒等待</td></tr>
+<tr class="hl"><td><code>coms_net_*</code> 工具 ×4</td><td><span class="tag inner">内</span> 工具阶段</td><td>调用次数</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a></td><td>✔ HTTP 请求中转服务</td></tr>
+<tr class="hl"><td><code>agent_end</code></td><td><span class="tag outer">外</span> 每 run 结束</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a></td><td>✔ POST 回答到中转服务</td></tr>
+<tr class="hl"><td><code>session_shutdown</code></td><td>循环外</td><td>0（/reload、换会话、退出时 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3723"><code>agent-session.ts:3723</code></a></td><td>✔ 断 SSE、DELETE 注册（2 秒超时）</td></tr>
+<tr class="hl"><td>心跳 / 重连定时器</td><td>与循环异步</td><td>每 10 秒 / 断线时</td><td><code>setInterval</code> / <code>setTimeout</code></td><td>✔ 上报上下文占用；指数退避重连</td></tr>
+</tbody></table></div>
+<p class="small muted">入站消息仍然走 <code>sendCustomMessage</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>agent-session.ts:2357</code></a>）：在跑 → follow-up（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L311"><code>agent-loop.ts:311</code></a>），空闲 → 新 settle（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2383"><code>agent-session.ts:2383</code></a>）。中转服务不是 Pi 的一部分，它是第三个进程：Bun 写的 HTTP 服务，记录每个项目的在线 agent 和消息状态（queued → delivered → complete / error / timeout）。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–6 步是启动链：找到中转服务和令牌，注册，打开 SSE。第 7–16 步是一次往返：A 的工具阶段 POST 消息，中转服务通过 B 的 SSE 推过去，B 的循环处理完，<code>agent_end</code> POST 回答，中转服务再通过 A 的 SSE（或 A 的长轮询）把回答交给 A 的 <code>coms_net_await</code>。和第 17 篇相比，中间多了一跳。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、经中转服务的往返链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 16</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–6 步在循环外；第 7 步起是 A 问、B 答的一次往返，经过中转服务。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>进上下文的东西和第 17 篇一样：B 收到的提示是一条 custom 消息，B 的回答是 <code>agent_end</code> 时分支上最后一条 assistant 文字，A 那边以 <code>coms_net_await</code> 的工具结果读到它。不同的是，入站消息的开头多了两行<b>写给模型的指令</b>（第 685–688 行）：告诉它“正常回答就会自动送回去，不要用 coms_net_send 回复，否则会来回互发”，以及“这个 msg_id 属于对方，不是你的”。这是用提示词预防第 17 篇协议里容易出现的情况：模型把收到的请求当成要它主动发消息（推断自这段说明的措辞，第 17 篇的代码里没有对应的提示）。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 300" role="img" aria-label="提示词上下文：入站消息里写给模型的指令">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <g class="chip"><rect x="16" y="20" width="240" height="56" rx="7"/><text x="26" y="38" font-size="11">A：coms_net_send(target, prompt)</text><text class="mut" x="26" y="54" font-size="10">POST /v1/messages</text><text class="mut" x="26" y="68" font-size="10">Authorization: Bearer 令牌</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M256,48 L286,48"/>
+  <g class="chip"><rect x="288" y="20" width="220" height="56" rx="7"/><text x="298" y="38" font-size="11">中转服务</text><text class="mut" x="298" y="54" font-size="10">记录消息：queued</text><text class="mut" x="298" y="68" font-size="10">B 的 SSE 开着 → 推送，delivered</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M508,48 L538,48"/>
+  <g class="chip hit"><rect x="540" y="14" width="268" height="122" rx="7"/><text class="mono" x="550" y="32" font-size="10.5">B：custom 消息 coms-net-inbound</text><text class="mono" x="550" y="50" font-size="9.5">[inbound coms-net message from A @ /repo]</text><text class="mono" x="550" y="64" font-size="9.5">[reply by writing a normal assistant</text><text class="mono" x="550" y="78" font-size="9.5"> message … DO NOT call coms_net_send…</text><text class="mono" x="550" y="92" font-size="9.5"> msg_id … belongs to A's outbound …]</text><text class="mono" x="550" y="112" font-size="10">原始提示</text><text class="mut" x="550" y="128" font-size="10">并入当前 run 或起新 settle</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M674,136 L674,162"/>
+  <g class="chip hit"><rect x="540" y="164" width="268" height="44" rx="7"/><text class="mono" x="550" y="182" font-size="10.5">B：agent_end → POST …/response</text><text class="mut" x="550" y="198" font-size="10">最后一条 assistant 文字（配对规则同第 17 篇）</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M540,186 L510,186"/>
+  <g class="chip"><rect x="288" y="164" width="220" height="44" rx="7"/><text x="298" y="182" font-size="11">中转服务：complete</text><text class="mut" x="298" y="198" font-size="10">推 response 给 A，唤醒长轮询</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M288,186 L258,186"/>
+  <g class="chip hit"><rect x="16" y="164" width="240" height="44" rx="7"/><text class="mono" x="26" y="182" font-size="10.5">A：coms_net_await 的结果</text><text class="mut" x="26" y="198" font-size="10">SSE 先到还是长轮询先到，谁先算谁</text></g>
+  <text class="mut" x="16" y="238" font-size="10">令牌：--auth-token 参数 &gt; PI_COMS_NET_AUTH_TOKEN 环境变量 &gt; ~/.pi/coms-net/projects/&lt;项目&gt;/server.secret.json（第 331–337 行）。</text>
+  <text class="mut" x="16" y="254" font-size="10">走的是明文 HTTP（Bun.serve，没有 TLS）：在局域网模式下（0.0.0.0），令牌和消息内容都在网络上明文传输。</text>
+  <text class="mut" x="16" y="270" font-size="10">能拿到令牌的任何一方，都能让 B 用它自己的全部工具执行一段提示。</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>东西</th><th>进谁的上下文</th><th>和第 17 篇的区别</th></tr></thead>
+<tbody>
+<tr class="hl"><td>入站提示</td><td>B（custom 消息）</td><td>多了两行写给模型的回复规则</td></tr>
+<tr class="hl"><td>回答</td><td>A（coms_net_await 的工具结果）</td><td>由中转服务转交；A 可用 SSE 或长轮询拿到</td></tr>
+<tr><td>同伴名单</td><td>A（coms_net_list 的工具结果）</td><td>由中转服务提供，可跨机器</td></tr>
+<tr><td>审计日志</td><td>–（coms-net-log）</td><td>多了 sse_open / sse_disconnect / reconnect 等事件</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器复刻了两段逻辑：扩展的 SSE 重连退避（第 795–818 行，原公式），以及中转服务对“目标当前有没有 SSE 连接”的处理（服务端约第 909–939 行）。拖动断线次数看重连间隔，再在 B 断线的窗口里发一条消息，看它最后的状态。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">连续重连失败 <input type="range" id="m-n" min="0" max="10" value="3"> <span class="counter" id="m-nv">3</span> 次</label>
+  </div>
+  <div class="term" id="m-backoff"></div>
+  <div class="controls" style="margin-top:10px">
+    <label class="small">A 发消息时，B 的 SSE <select id="m-sse">
+      <option value="open">开着</option>
+      <option value="gap">正在重连（断线窗口里）</option>
+      <option value="down">B 已经退出</option>
+    </select></label>
+    <label class="small"><input type="checkbox" id="m-await"> A 随后调用 coms_net_await</label>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：服务端逻辑只模拟了“发送时是否推送”和“到期”两件事；到期时间按默认 30 分钟（<code>PI_COMS_NET_MESSAGE_TTL_MS</code>）。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>找服务</td><td>参数 &gt; 环境变量 &gt; server.json（第 323–337 行）</td><td><code>registerFlag("server-url" / "auth-token")</code></td><td>CLI <code>unknownFlags</code></td><td>notify 连接结果</td><td>session_start</td></tr>
+<tr class="hl"><td>收信</td><td>SSE 读循环 → <code>handleInboundPrompt</code>（第 657–714 行）</td><td><code>pi.sendMessage(…, { deliverAs: "followUp", triggerTurn: true })</code></td><td>follow-up 或新 settle</td><td>聊天区 coms-net-inbound 消息</td><td>SSE 事件到达时</td></tr>
+<tr><td>重连</td><td>指数退避 500ms → 10s，重新注册（第 795–828 行）</td><td>–</td><td>–</td><td>到上限时 notify 一次</td><td>断线时</td></tr>
+<tr class="hl"><td>发信</td><td>POST /v1/messages（第 1226 行）</td><td><code>coms_net_send</code></td><td>工具阶段</td><td>→ 目标 msg_id</td><td><span class="tag inner">内</span></td></tr>
+<tr class="hl"><td>取回答</td><td>本地 SSE 结果 vs 服务器长轮询 vs 超时（第 1437 行）</td><td><code>coms_net_await</code> / <code>coms_net_get</code></td><td>工具阶段</td><td>✓ / ✗</td><td><span class="tag inner">内</span></td></tr>
+<tr class="hl"><td>回传</td><td>最近未回复的入站 + 最后一条 assistant 文字（第 1468–1527 行）</td><td><code>pi.on("agent_end")</code></td><td><code>getBranch</code></td><td>–</td><td><span class="tag outer">外</span> 每 run 结束</td></tr>
+<tr><td>清理</td><td>断 SSE、DELETE 注册（2 秒超时）</td><td><code>pi.on("session_shutdown")</code> + SIGINT / SIGTERM</td><td>–</td><td>摘掉网格</td><td>会话结束</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug（继承自第 17 篇）：回答配对规则相同，挤在一起时回错人。</b>第 1469 行和 coms.ts 一字不差：<code>agent_end</code> 取最近一条未回复的入站，配上分支上最后一条 assistant 文字。两条提示在同一个 run 里处理时只回了后一条，前一条要等 B 的下一次 agent_end（可能是 B 的用户发起的无关对话）才被“回答”。修法同第 17 篇：按 run 里实际处理过的 <code>coms-net-inbound</code> 消息逐条配对。</div>
+
+<div class="callout warn"><b>Bug：<code>coms_net_await</code> 按 Esc 停不下来。</b>第 1384 行的 <code>execute(_callId, params)</code> 没有接 Pi 传进来的 signal；第 1437 行的 race 里只有本地结果、服务器长轮询和超时（默认 30 分钟）。比第 17 篇好一点的是长轮询自带超时，但用户中止仍然无效。修法：把 signal 加进 race，abort 时同时 abort 长轮询请求。</div>
+
+<div class="callout warn"><b>Bug（服务端）：目标正在重连时发来的消息永远不会送达。</b><code>scripts/coms-net-server.ts</code> 只在收到消息的那一刻检查目标有没有开着的 SSE 流（约第 924 行），有就推送并标为 delivered，没有就只记为 queued。之后目标重连、重新注册，服务端并不会补推这些 queued 消息（全文件只有这一处发出 prompt 事件）。消息会一直停在 queued，直到 30 分钟后被到期扫描标成 error “expired”，发送方的 <code>coms_net_await</code> 才收到错误。扩展这边的重连退避最长 10 秒（第 798 行），这个窗口里发来的消息都会这样丢掉。修法：SSE 流建立时，把该 agent 名下所有 queued 消息补推一遍。模拟器下半部分可以试。</div>
+
+<div class="callout"><b>令牌的传递与暴露。</b>令牌可以用 <code>--auth-token</code> 参数传（第 405 行）：命令行参数会出现在 <code>ps</code> 输出和 shell 历史里，同机其他用户可能看到。通过环境变量或本机的 <code>server.secret.json</code> 传要好一些。中转服务在局域网模式下要求显式令牌，否则拒绝绑定 0.0.0.0（服务端约第 1446 行），比较令牌也用了 <code>timingSafeEqual</code>；但它是明文 HTTP，跨机器时令牌和消息内容都不加密。</div>
+
+<div class="callout"><b>用提示词修补协议。</b>第 685–688 行写给模型的两句话，针对的是模型在这种协议里容易犯的错（从措辞推断）：把收到的 msg_id 当成自己的去 await，或者用 send 回复导致来回互发（hops 上限会拦住，但每一跳都要花一轮模型调用）。工具描述（第 1375–1379 行）也重复了这条规则。这是这组扩展里少见的“在提示词里解释扩展机制”的写法：规则只能约束听话的模型，hops 上限才是硬保证。</div>
+
+<div class="callout"><b>与第 17 篇相同的地方。</b>同样正确订阅了 <code>session_shutdown</code>（第 1636 行），在旧扩展失效前断开 SSE、注销自己；同样在 <code>process</code> 上挂 SIGINT / SIGTERM（第 1637–1638 行），/reload 时监听会累积。7 个参数里的布尔参数 <code>--explicit</code> 同样会吞掉后面紧跟的普通参数（第 17 篇的说明）。工具名、customType、状态 key、注册目录都加了 <code>-net</code> / <code>_net</code> 后缀，所以 coms 和 coms-net 可以同时装、互不冲突。</div>
+
+<h2 id="sum">小结</h2>
+<p>coms-net 没有新的挂点：<code>session_start</code> 建连接，工具阶段发信和等待，循环外的 SSE 读循环收信并 <code>sendMessage</code>，<code>agent_end</code> 交回答，<code>session_shutdown</code> 清理。它展示的是，同一组挂点可以换掉底下的传输层，而 Pi 的双循环毫无察觉。18 篇走到这里，扩展能挂的位置都已出现过：循环外的启动和收尾、<code>input</code> 和 <code>before_agent_start</code> 两道入口、run 内循环的 <code>tool_call</code> 与工具执行、<code>agent_end</code> 续跑，以及命令、快捷键、子进程、socket、SSE 这些从循环外把消息送进来的通道。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [4, ' * Drop-in successor to `extensions/coms.ts` whose substrate is a dedicated', 'l3', '和第 17 篇同一个协议，换掉传输层：从每个 agent 自己监听 socket，换成连一个中转服务。'],
+  [41, 'const COMS_NET_DIR = path.join(os.homedir(), ".pi", "coms-net");', 'l3', '和 coms 的目录分开，两个扩展可以同时装。'],
+  [44, 'const RECONNECT_BASE_MS = 500;', 'l3', '重连退避从 500ms 起，翻倍，最多 10 秒（下一行）。'],
+  [331, 'function resolveAuthToken(project: string, cliFlag: string | undefined): string | null {', 'l3', '令牌来源：参数 &gt; 环境变量 &gt; 本机 server.secret.json。'],
+  [400, '	pi.registerFlag("server-url", {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L334"><code>loader.ts:334</code></a>：比第 17 篇多的两个参数之一。'],
+  [405, '	pi.registerFlag("auth-token", {', 'hit', '令牌也能从命令行传：会出现在 ps 输出和 shell 历史里。'],
+  [443, '	async function httpFetch(method: string, urlPath: string, body?: any, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<any> {', 'l3', '所有请求都带 Bearer 令牌，默认 10 秒超时。'],
+  [657, '	function handleInboundPrompt(data: any): void {', 'l3', 'SSE 推来 prompt 事件：与循环异步。'],
+  [681, '			pi.sendMessage(', 'hit', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>sendCustomMessage</code></a>：同第 16、17 篇。'],
+  [686, '						`[reply by writing a normal assistant message — your turn output is auto-returned to ${senderName}. ` +', 'l3', '写给模型的回复规则：正常回答即可，不要用 coms_net_send 回复。'],
+  [698, '				{ deliverAs: "followUp", triggerTurn: true },', 'hit', 'B 在跑 → follow-up（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L311"><code>agent-loop.ts:311</code></a>）；空闲 → 新 settle（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2383"><code>agent-session.ts:2383</code></a>）。'],
+  [716, '	function handleInboundResponse(data: any): void {', 'l3', 'A 这边：SSE 推来 response，resolve 本地等待。'],
+  [740, '	async function openSse(): Promise<void> {', 'l3', '打开 SSE 长连接：一个 fetch 请求，响应体一直读下去。'],
+  [776, '					const { done, value } = await reader.read();', 'l3', 'SSE 读循环：和 Pi 的双循环并行运行，每读到一个事件就分发。'],
+  [798, '		const backoff = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts), RECONNECT_MAX_MS);', 'l3', '指数退避：500、1000、2000…最多 10 秒。模拟器运行的就是这个公式。'],
+  [823, '		const reg = await registerAgent();', 'l3', '重连时先重新注册，拿新的 SSE 地址。服务端不会因此补推断线期间的消息。'],
+  [876, '	pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外：找服务、注册、开 SSE、起心跳。'],
+  [1000, '			httpFetch("POST", `/v1/agents/${encodeURIComponent(identity.session_id)}/heartbeat`, hbReq, { timeoutMs: 5_000 })', 'l3', '每 10 秒心跳：上报上下文占用和队列深度，供别人的网格显示。'],
+  [1185, '	pi.registerTool({', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>：coms_net_send。'],
+  [1226, '				resp = await httpFetch("POST", "/v1/messages", req) as SendResponse;', 'l3', '<span class="tag inner">run 内循环</span>工具阶段：POST 给中转服务，返回 msg_id。目标收没收到，这里不知道。'],
+  [1371, '	pi.registerTool({', 'hit', 'coms_net_await。'],
+  [1384, '		async execute(_callId, params) {', 'hit', '⚠ 没有接 signal：Esc 停不下这个等待。'],
+  [1415, '			const serverPromise = httpFetch(', 'l3', '服务器长轮询：/await?timeout_ms=…，作为 SSE 之外的第二条路。'],
+  [1437, '			const winner = await Promise.race([localPromise, serverPromise, timeoutPromise]);', 'l3', '本地 SSE 结果、长轮询、超时，谁先到算谁；没有中止这一项。'],
+  [1468, '	pi.on("agent_end", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a>：<span class="tag outer">settle 外循环</span>每个 run 结束。'],
+  [1469, '		const inbound = [...inboundQueue.values()].reverse().find((i) => !i.fulfilled);', 'l3', '⚠ 和 coms.ts 相同的配对规则：取最近一条未回复的入站。'],
+  [1507, '			await httpFetch("POST", `/v1/messages/${encodeURIComponent(inbound.msg_id)}/response`, req);', 'l3', '回答 POST 给中转服务，由它推给发送方。'],
+  [1636, '	pi.on("session_shutdown", async () => { await cleanShutdown(); });', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3723"><code>agent-session.ts:3723</code></a>：断 SSE、DELETE 注册（2 秒超时）。'],
+  [1637, '	process.on("SIGINT", () => { void cleanShutdown(); });', 'l3', '同第 17 篇：每次 /reload 再加一个监听。'],
+];
+WT.source(SRC);
+
+// ─────────── 重连退避（第 798 行）与服务端投递 复刻 ───────────
+const RECONNECT_BASE_MS = 500, RECONNECT_MAX_MS = 10000;
+const backoffOf = n => Math.min(RECONNECT_BASE_MS * Math.pow(2, n), RECONNECT_MAX_MS);
+
+// ─────────── 双循环动画 ───────────
+const SCN = {
+  recv: [
+    ['session', 'session_start（B）', '', { a: '📡 lead（另一台机器）', hub: '在线：lead', b: 'register → SSE 打开' }, '找服务和令牌、POST 注册、GET SSE、起心跳'],
+    ['session', 'SSE：prompt 事件', '', { hub: 'msg 01J…：delivered', b: 'handleInboundPrompt → 入队' }, '与循环异步：SSE 读循环收到事件'],
+    ['session', 'sendMessage(followUp, triggerTurn)', '', { b: '空闲 → 新 settle' }, 'agent-session.ts:2383'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1：输入是 coms-net-inbound（带回复规则）', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：read package.json'],
+    ['tools', 'tool_execution_end', 'inner', {}, ''],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“用 bun test。”（按规则正常回答，没有调用 coms_net_send）'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end → POST …/response', 'outer', { hub: 'msg 01J…：complete → 推给 lead', a: '✓ 收到回答' }, '配对规则同第 17 篇'],
+    ['settled', 'agent_settled', 'outer', {}, ''],
+  ],
+  send: [
+    ['session', 'session_start（A）', '', { a: 'register → SSE 打开', hub: '在线：lead、dev', b: '📡 dev' }, ''],
+    ['input', 'input', '', {}, '用户：问 dev 测试怎么跑'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：coms_net_send(target: "dev", …)'],
+    ['tools', 'POST /v1/messages', 'inner', { a: 'msg_id 01J…', hub: 'queued → 推给 dev → delivered' }, '返回 msg_id'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：coms_net_await(msg_id)'],
+    ['tools', 'race：本地 SSE / 长轮询 / 超时', 'inner', { a: '⏳ 等待…（GET …/await 长轮询中）', b: 'dev 在回答' }, '工具阶段阻塞'],
+    ['tools', 'dev：agent_end → POST response', '', { hub: 'complete：推给 A，并结束长轮询' }, '外部'],
+    ['tools', 'SSE 推来 response 先到', 'inner', { a: '✓ 收到回答（SSE 先到，长轮询被 abort）' }, 'race 结束'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, 'A 没有入站，不回传'],
+    ['settled', 'agent_settled', 'outer', {}, ''],
+  ],
+  gap: [
+    ['session', 'B：SSE 断开', '', { b: 'sse_disconnect → 1 秒后重连', hub: 'B 的流已关闭', a: '📡 lead' }, '网络抖动、服务重启都会这样'],
+    ['session', 'A：POST /v1/messages', '', { hub: 'B 没有开着的流 → 只记 queued，不推送' }, '服务端只在收到消息时推送一次'],
+    ['session', 'B：重新注册、SSE 打开', '', { b: 'SSE 恢复，但没收到任何 prompt' }, '服务端不会补推 queued 消息'],
+    ['session', 'A：coms_net_await 等待中', '', { a: '⏳ 等待…' }, 'A 的工具阶段一直阻塞'],
+    ['session', '30 分钟后：到期扫描', '', { hub: 'queued → error "expired"', a: '✗ coms_net_await：error — expired' }, '消息从未送到 B'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+WT.loops({
+  hit: ['session', 'tools', 'aend'],
+  sub: { session: 'session_start / SSE 读循环', tools: 'coms_net_send / await', aend: 'agent_end → POST 回答' },
+  legend: [
+    '橙框 = coms-net 用到的位置：session_start 建连接，SSE 读循环收信并 sendMessage，tools 格里的 coms_net_* 工具，agent_end 回传。',
+    '图只画一个进程；另一个 Pi 和中转服务是“外部”，彼此只通过 HTTP 和 SSE 相连。',
+  ],
+  scenes: SCN,
+  state: () => ({ a: '', hub: '', b: '' }),
+  logTag: s => /外部|dev：/.test(s.note + s.event) && !/A：|B：/.test(s.event) ? '<span class="tag off">外部</span>' : /SSE|session|POST|sendMessage|race|agent_end|coms_net|到期|B：|A：/.test(s.event) ? '<span class="tag hit">本扩展</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    paintLines(foot1, [[' A（发送方）  ' + (st.a || '—'), 'sw-acc'], [' 中转服务     ' + (st.hub || '—'), 'dim'], [' B（接收方）  ' + (st.b || '—'), 'sw-ok']]);
+    WT.flash(foot1);
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 经中转服务的往返 ───────────
+const CHIPS = {
+  grid:    ['同伴网格（belowEditor）', 110, 160, 51, 1],
+  inmsg:   ['B：coms-net-inbound', 282, 140, 51, 1],
+  awaitui: ['A：✓ response', 434, 110, 51, 1],
+  resolve: ['找服务 / 令牌 / 注册', 110, 150, 147, 1],
+  sse:     ['SSE 读循环 + 重连', 272, 135, 147, 1],
+  post:    ['HTTP：POST / GET', 419, 120, 147, 1],
+  reply:   ['B：配对 + POST 回答', 551, 145, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  flags:   ['registerFlag ×7', 222, 110, 243, 1],
+  sendmsg: ['B：pi.sendMessage', 344, 125, 243, 1],
+  aend:    ['B：pi.on("agent_end")', 481, 140, 243, 1],
+  hub:     ['中转服务（第三个进程）', 633, 170, 243, 1],
+  atool:   ['A：工具阶段（await）', 110, 145, 339, 1],
+  bloop:   ['B：follow-up / 新 settle', 267, 160, 339, 1],
+  bbranch: ['B：getBranch', 439, 95, 339, 1],
+};
+const BOOT = [
+  ['loader', '<span class="tag l2">L2</span> <code>pi -e coms-net.ts --cname dev</code>：jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>）。'],
+  ['flags', '<span class="tag l2">L2</span> 7 个 <code>registerFlag</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L334"><code>loader.ts:334</code></a>）、4 个工具、<code>/coms-net</code>、3 个事件。'],
+  ['resolve', '<span class="tag l3">L3</span> <code>session_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>）：定服务地址和令牌，POST <code>/v1/agents/register</code>。'],
+  ['hub', '<span class="tag l2">L2</span> 中转服务记下 dev 在线，返回 SSE 地址。它是 Bun 写的独立进程，不属于 Pi。'],
+  ['sse', '<span class="tag l3">L3</span> <code>openSse</code>：GET SSE 地址，开始 <code>while (true)</code> 读流；起 10 秒心跳。'],
+  ['grid', '<span class="tag l4">L4</span> 状态和同伴网格（编辑器下方）。<br><b>启动链结束。下面是一次往返。</b>'],
+  ['atool', '<span class="tag l1">L1</span> A 的模型调用 coms_net_send：工具阶段（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a>）。'],
+  ['post', '<span class="tag l3">L3</span> A：POST <code>/v1/messages</code>，拿到 msg_id 就返回。'],
+  ['hub', '<span class="tag l2">L2</span> 中转服务：记为 queued；B 的 SSE 开着 → 推 prompt 事件，标为 delivered。'],
+  ['sse', '<span class="tag l3">L3</span> B 的 SSE 读循环收到事件 → <code>handleInboundPrompt</code>：入队，拼上回复规则。'],
+  ['sendmsg', '<span class="tag l2">L2</span> B：<code>pi.sendMessage(…, { deliverAs: "followUp", triggerTurn: true })</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>sendCustomMessage</code></a>。'],
+  ['bloop', '<span class="tag l1">L1</span> B 在跑 → follow-up（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L311"><code>agent-loop.ts:311</code></a>）；空闲 → 新 settle（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2383"><code>agent-session.ts:2383</code></a>）。聊天区出现 coms-net-inbound。'],
+  ['aend', '<span class="tag l2">L2</span> B 的 run 结束：<code>agent_end</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a>）。'],
+  ['bbranch', '<span class="tag l1">L1</span> B：沿 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>getBranch</code></a> 取最后一条 assistant 文字。'],
+  ['reply', '<span class="tag l3">L3</span> B：配给最近一条未回复的入站，POST <code>…/response</code>；中转服务标为 complete，推给 A。'],
+  ['awaitui', '<span class="tag l4">L4</span> A：SSE 推来的 response 和长轮询赛跑，先到者让 <code>coms_net_await</code> 返回；回答成为 A 的工具结果。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 243] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+function drawBackoff() {
+  const n = Number($('m-n').value); $('m-nv').textContent = n;
+  const rows = [];
+  let total = 0;
+  for (let i = 0; i < n; i++) { const b = backoffOf(i); total += b; rows.push([`  第 ${i + 1} 次重连前等待 ${(b / 1000).toFixed(1)}s${b >= RECONNECT_MAX_MS ? '（到上限，notify 一次）' : ''}`, b >= RECONNECT_MAX_MS ? 'sw-wrn' : 'dim']); }
+  if (!n) rows.push(['  SSE 正常，没有断线', 'sw-ok']);
+  rows.push([` 断线窗口合计 ≈ ${(total / 1000).toFixed(1)}s：这段时间里发给 B 的消息只会被记为 queued`, n ? 'sw-wrn' : 'dim']);
+  paintLines($('m-backoff'), rows);
+  WT.flash($('m-backoff'));
+}
+function drawSend() {
+  const sse = $('m-sse').value, aw = $('m-await').checked, rows = [];
+  rows.push([' A：POST /v1/messages → 拿到 msg_id', 'sw-acc']);
+  if (sse === 'open') rows.push([' 服务端：B 的流开着 → 推 prompt，delivered', 'sw-ok'], [' B：sendMessage → 处理 → agent_end POST 回答 → complete', 'sw-ok']);
+  else if (sse === 'gap') rows.push([' 服务端：B 没有开着的流 → 只记 queued，不推送', 'sw-wrn'], [' B：重连成功，但服务端不补推 queued 消息', 'sw-wrn'], [' 30 分钟后：到期扫描 → error "expired"', 'sw-wrn']);
+  else rows.push([' 服务端：B 不在线（已注销）→ 发送时就找不到目标，coms_net_send 报错', 'sw-wrn']);
+  if (aw) {
+    if (sse === 'open') rows.push([' A：coms_net_await → SSE 或长轮询拿到回答 ✓', 'sw-ok']);
+    else if (sse === 'gap') rows.push([' A：coms_net_await 阻塞约 30 分钟，最后得到 error — expired（Esc 也停不下）', 'sw-wrn']);
+    else rows.push([' A：没有 msg_id 可等', 'dim']);
+  }
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  $('m-note').textContent = sse === 'gap' ? '修法：SSE 建立时，服务端把该 agent 名下所有 queued 消息补推一遍' : '';
+}
+$('m-n').addEventListener('input', drawBackoff);
+['m-sse', 'm-await'].forEach(id => $(id).addEventListener('input', drawSend));
+drawBackoff(); drawSend();
+</script>
+</body>
+</html>
