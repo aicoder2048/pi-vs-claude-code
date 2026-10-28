@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-team.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 13</div>
+<h1>agent-team.ts</h1>
+<p class="subtitle">把主 agent 变成只会派活的调度员：工具只剩 <code>dispatch_agent</code>，系统提示词整个换成“你是调度员，下面是你的团队”。每次派活都另起一个 <code>pi</code> 子进程（JSON 模式），子 agent 有自己的工具和会话文件，编辑器上方用网格实时显示每个成员的状态。734 行，订阅 <code>session_start</code>、<code>before_agent_start</code>，注册 1 个工具、3 个命令。这一篇第一次出现<b>嵌套的双循环</b>：主进程的工具阶段里，跑着另一个进程完整的 settle。<br>运行：<code>just ext-agent-team</code>（同时加载 theme-cycler）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。主体是三块：第 301–465 行 <code>dispatchAgent</code> 起子进程并解析它的事件流；第 469–561 行把它包成工具；第 631–733 行在 <code>before_agent_start</code> 和 <code>session_start</code> 里把主 agent 锁成调度员。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+主进程这边，<code>before_agent_start</code> 在外循环入口换系统提示词（同第 10 篇），<code>dispatch_agent</code> 在内循环的工具阶段执行。不同的是这个工具的 <code>execute</code> 要等一个子进程跑完：子进程 <code>pi -p --mode json</code> 有<b>自己的</b> settle 外循环和 run 内循环，从主进程看，整个子 settle 都塞在 <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a> 那一个 <code>await</code> 里。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="normal">场景 A：派 scout 查代码，再派 builder 改（2 个子进程）</option>
+    <option value="abort">场景 B：子进程跑着时按 Esc</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">编辑器上方的团队网格（实时，简化）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 清子会话、载团队、锁工具、装网格和页脚</td></tr>
+<tr><td><code>input</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a></td><td>–</td></tr>
+<tr class="hl"><td><code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口，起 run 之前</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a></td><td>✔ 整个替换系统提示词</td></tr>
+<tr class="hl"><td><code>dispatch_agent</code> 工具 <code>execute</code></td><td><span class="tag inner">内</span> 工具阶段</td><td>派活次数</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a></td><td>✔ 起子进程，等它结束</td></tr>
+<tr class="hl"><td><code>onUpdate</code>（部分结果）</td><td><span class="tag inner">内</span> 工具执行中</td><td>每次派活 1 次</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L848"><code>agent-loop.ts:848</code></a> → <code>tool_execution_update</code></td><td>✔ “Dispatching to …”</td></tr>
+<tr><td><code>agent_*</code> · <code>turn_*</code> · <code>message_*</code></td><td>外 / 内</td><td>N / M</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>:216</code></a></td><td>–</td></tr>
+<tr class="hl"><td>子进程的事件流（stdout JSON 行）</td><td>与主循环异步（子进程自己的循环）</td><td>子进程每个事件 1 行</td><td>子进程的 <code>--mode json</code> 输出</td><td>✔ 解析 message_update / tool_execution_start / message_end / agent_end</td></tr>
+<tr class="hl"><td>每秒定时器 / 网格 <code>render</code></td><td>与循环异步</td><td>子进程运行期间每秒</td><td><code>setInterval</code>；<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔ 重装网格 widget</td></tr>
+</tbody></table></div>
+<p class="small muted">子进程的命令行在第 347–363 行拼出来：<code>--mode json -p --no-extensions --model 父模型 --tools 成员工具 --thinking off --append-system-prompt 成员正文 --session .pi/agent-sessions/名字.json [-c] 任务</code>。这些参数都是 Pi 1.4.0 的正式选项（<a href="../../../../../vendor/pi/packages/coding-agent/src/cli/args.ts#L96"><code>cli/args.ts:96</code></a> 起）。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–6 步是启动链：把主 agent 锁成调度员。第 7–16 步是一次派活：从主进程的工具阶段出发，经 L3 的 <code>dispatchAgent</code> 起一个新的 <code>pi</code> 进程（它自己就是一整套 L1–L4），再把子进程的事件流一路翻译回 L4 的网格。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、派活链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 16</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–6 步在循环外；第 7 步起是主进程 run 内循环里的一次派活。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>agent-team 有两个上下文。<b>主进程</b>：<code>setActiveTools(["dispatch_agent"])</code> 把工具声明缩成一个（安装），<code>before_agent_start</code> 返回一个全新的 <code>systemPrompt</code>（控制），而且没有接在 <code>event.systemPrompt</code> 后面，Pi 默认提示词里的项目上下文、skills、别的扩展加的内容都被换掉。<b>子进程</b>：Pi 默认提示词 + <code>--append-system-prompt</code> 的成员正文，任务作为 user 消息，上下文存在 <code>.pi/agent-sessions/名字.json</code> 里，跨派活累积。两个上下文之间只靠工具结果的文字连接。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 380" role="img" aria-label="提示词上下文：主进程与子进程的两套上下文">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">主进程（调度员）</text>
+  <g class="chip hit"><rect x="16" y="38" width="380" height="44" rx="7"/><text class="mono" x="26" y="56" font-size="11">setActiveTools(["dispatch_agent"])（第 699 行）</text><text class="mut" x="26" y="72" font-size="10">安装：工具声明只剩一个，read / bash 等全部停用</text></g>
+  <g class="chip hit"><rect x="16" y="92" width="380" height="70" rx="7"/><text class="mono" x="26" y="110" font-size="11">before_agent_start → systemPrompt（第 640 行）</text><text class="mut" x="26" y="126" font-size="10">控制：“You are a dispatcher agent…” + 团队成员目录</text><text class="mut" x="26" y="140" font-size="10">没有拼 event.systemPrompt：默认提示词、AGENTS.md、skills、</text><text class="mut" x="26" y="154" font-size="10">其他扩展的 systemPrompt 全被替换</text></g>
+  <g class="chip"><rect x="16" y="172" width="380" height="44" rx="7"/><text x="26" y="190" font-size="11">user 消息 → assistant(dispatch_agent) → toolResult</text><text class="mut" x="26" y="206" font-size="10">toolResult = “[scout] done in 21s” + 子 agent 最终文字（≤ 8000 字）</text></g>
+
+  <text class="bt" x="430" y="24" font-size="13" style="fill:var(--accent)">子进程（成员）</text>
+  <g class="chip"><rect x="430" y="38" width="378" height="44" rx="7"/><text class="mono" x="440" y="56" font-size="11">--tools read,grep,find,ls</text><text class="mut" x="440" y="72" font-size="10">安装：成员 frontmatter 的 tools（没写就默认只读四件套）</text></g>
+  <g class="chip"><rect x="430" y="92" width="378" height="70" rx="7"/><text class="mono" x="440" y="110" font-size="11">Pi 默认提示词 + --append-system-prompt</text><text class="mut" x="440" y="126" font-size="10">成员 .md 的正文接在最后</text><text class="mut" x="440" y="140" font-size="10">--no-extensions：子进程不加载任何扩展</text><text class="mut" x="440" y="154" font-size="10">项目上下文（AGENTS.md 等）照常加载</text></g>
+  <g class="chip"><rect x="430" y="172" width="378" height="44" rx="7"/><text class="mono" x="440" y="190" font-size="11">.pi/agent-sessions/scout.json（-c 续上）</text><text class="mut" x="440" y="206" font-size="10">同一成员多次派活共享上下文；主进程 session_start 时全部删除</text></g>
+
+  <path class="arrow flow" marker-end="url(#ah2)" d="M396,194 L428,194"/>
+  <text class="mut" x="398" y="186" font-size="9">task</text>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M619,216 L619,250 L206,250 L206,218"/>
+  <text class="mut" x="300" y="246" font-size="10">子进程 stdout 的 text_delta 拼成最终文字 → 截到 8000 字 → 主进程 toolResult</text>
+
+  <g class="chip"><rect x="16" y="270" width="792" height="88" rx="7"/></g>
+  <text x="26" y="290" font-size="11">两边看到的东西不一样：</text>
+  <text class="mut" x="26" y="308" font-size="10">· 主 agent 看不到代码，只看到成员的“最后结论”；成员中间读了哪些文件、跑了什么命令，主 agent 一概不知</text>
+  <text class="mut" x="26" y="324" font-size="10">· 成员看不到主对话，只看到 task 这一句（和自己以前被派的任务）；要传上下文，只能写进 task</text>
+  <text class="mut" x="26" y="340" font-size="10">· 完整输出另存在 details.fullOutput 里，进主会话文件，但不进主 agent 的上下文</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>东西</th><th>哪个进程</th><th>段</th><th>寿命</th></tr></thead>
+<tbody>
+<tr class="hl"><td>调度员提示词</td><td>主</td><td>控制（强制提示词）</td><td>每次 settle 重新生成；不落盘</td></tr>
+<tr class="hl"><td>只剩 dispatch_agent</td><td>主</td><td>安装（工具清单）</td><td>记进主会话；/reload 时 session_start 再设一次</td></tr>
+<tr><td>成员正文</td><td>子</td><td>安装（追加的系统提示词）</td><td>每次派活通过命令行传</td></tr>
+<tr><td>成员上下文</td><td>子</td><td>子会话文件</td><td>跨派活累积；主进程 session_start 全删</td></tr>
+<tr><td>派活结果</td><td>主</td><td>toolResult</td><td>落盘，之后每个 turn 都在主上下文里</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器复刻了团队加载（第 107–202 行：扫描、<code>teams.yaml</code>、成员匹配、网格列数）和子进程命令行的拼法（第 338–363 行），数据取自本仓库的 <code>.pi/agents</code>。选一个团队，看哪些成员能被派活、它们拿到什么工具；再选一个成员，看派给它的 <code>pi</code> 命令长什么样。</p>
+<div class="card">
+  <div class="controls">
+    <label class="small">团队 <select id="m-team"></select></label>
+    <label class="small">派给 <select id="m-agent"></select></label>
+    <label class="small"><input type="checkbox" id="m-again"> 这个成员之前已经成功跑过一次</label>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+<p class="small muted">近似之处：成员正文只显示前几十个字；模型名取 <code>openai-codex/gpt-5.5</code> 作示意（实际是主进程当前模型）。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr><td>载团队</td><td>扫 3 个目录 + teams.yaml，默认第一个团队（第 147–202 行）</td><td><code>pi.on("session_start")</code></td><td>–</td><td>notify 用法、状态 “Team: full (6)”</td><td>每次 session_start</td></tr>
+<tr class="hl"><td>锁工具</td><td>–</td><td><code>pi.setActiveTools(["dispatch_agent"])</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1538"><code>setActiveToolsByName</code></a></td><td>–</td><td>每次 session_start</td></tr>
+<tr class="hl"><td>换提示词</td><td>调度员说明 + 团队目录（第 631–667 行）</td><td><code>before_agent_start</code> → <code>forceSystemPrompt</code></td><td>本次 settle 有效，每 turn 投影（第 10 篇）</td><td>–</td><td><span class="tag outer">外</span> 每次 settle</td></tr>
+<tr class="hl"><td>派活</td><td><code>dispatchAgent</code>：同一成员不能同时跑两个（第 316 行）</td><td><code>registerTool("dispatch_agent")</code></td><td>工具阶段 <code>await</code> 子进程；并行批次里多个成员同时跑</td><td><code>renderCall</code> / <code>renderResult</code>（部分结果显示 “working…”）</td><td><span class="tag inner">内</span> 每次派活</td></tr>
+<tr><td>子进程事件流</td><td>按行 JSON.parse，挑 4 种事件（第 376–411 行）</td><td>–</td><td><code>child_process.spawn("pi", …)</code></td><td>网格卡片：状态、工具数、上下文条、最后一行输出</td><td>子进程每个事件</td></tr>
+<tr><td>网格</td><td><code>renderCard</code> × 成员（第 206–297 行）</td><td><code>setWidget("agent-team")</code></td><td>–</td><td>每秒一次重装 widget</td><td>运行中每秒</td></tr>
+<tr><td>页脚</td><td>模型 · 团队 · 上下文条</td><td><code>setFooter</code></td><td><code>getContextUsage</code></td><td>替换内置页脚</td><td>每帧</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：按 Esc 停不下子进程，主 agent 也跟着干等。</b><code>execute</code> 的第三个参数是本 run 的 AbortSignal（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a> 原样转进来），第 478 行把它命名为 <code>_signal</code> 丢掉了，<code>dispatchAgent</code> 里也没有 <code>proc.kill()</code>。Pi 的 <code>executePreparedToolCall</code> 就是 <code>await tool.execute(…)</code>（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a>），没有和 signal 赛跑，所以用户按 Esc 之后，主 agent 要一直等到子进程自己跑完才会收尾；子进程那边照常调用模型、改文件、花钱。修法：<code>signal?.addEventListener("abort", () =&gt; proc.kill("SIGTERM"), { once: true })</code>，并在 <code>close</code> 里区分被中止的情况。场景 B 演示了这段等待。</div>
+
+<div class="callout warn"><b>Bug：上下文百分比超过 100 时，页脚和网格都会抛异常。</b>页脚第 721–722 行和第 01 篇 minimal 一模一样：<code>Math.round(pct / 10)</code> 没有上限，pct ≥ 105 时 <code>"-".repeat(负数)</code> 抛 <code>RangeError</code>。网格卡片第 227–228 行同样没夹住（超过 100% 就出错），而它的分母是主进程<b>启动时</b>模型的窗口（第 678 行），用户中途换了更小窗口的模型时更容易超。修法同第 01 篇：<code>Math.min(10, Math.max(0, …))</code>。</div>
+
+<div class="callout"><b>和本仓库的 agent 配置一起用时的两个坑。</b>一是 <code>teams.yaml</code> 里的 <code>pi-pi</code> 团队，成员定义放在 <code>.pi/agents/pi-pi/</code> 子目录里，而 <code>scanAgentDirs</code>（第 107–133 行）只扫一层，所以选这个团队会得到 0 个成员：网格显示 “No agents found”，调度员提示词里的成员目录是空的。二是 <code>bowser.md</code> 没写 <code>tools</code>，第 98 行默认给 <code>read,grep,find,ls</code>，这个靠 Playwright 命令行干活的成员拿不到 bash。模拟器里选 <code>pi-pi</code> 或 <code>frontend</code> 团队就能看到。这些不是扩展本身写错，是默认值和配置文件对不上。</div>
+
+<div class="callout"><b>系统提示词是整个替换，不是追加。</b>第 640 行没有用 <code>event.systemPrompt</code>，所以第 10、11 篇那种“接力”在这里断了：排在前面的扩展加的东西被丢掉，Pi 默认提示词里的项目上下文和 skills 列表也没了。对调度员来说大多用不上，但如果和 purpose-gate 一起装，目的只有在 purpose-gate 排在<b>后面</b>时才会保留。</div>
+
+<div class="callout"><b>子会话在每次 session_start 时全部删除。</b>第 680–688 行删掉 <code>.pi/agent-sessions/*.json</code>，注释说是为了“让子 agent 从头开始”。代价是 /reload、/new、/resume 都会让所有成员失忆，而主会话的历史里还留着它们以前的结果。这个目录是按 cwd 定的，同一项目里开两个 Pi 时，一个启动会删掉另一个正在用的子会话。</div>
+
+<div class="callout"><b>和其他扩展叠加。</b><code>setActiveTools(["dispatch_agent"])</code> 会停用别的扩展注册的工具。和第 12 篇 tilldone 一起装时会卡死：<code>tilldone</code> 工具被停用，模型建不了任务，而 tilldone 的 <code>tool_call</code> 门又会拦下 <code>dispatch_agent</code>（推断，从两边的代码推出）。另外网格每秒重装一次 widget（第 333–336 行的定时器调 <code>updateWidget</code> → <code>setWidget</code>），只需 <code>requestRender</code> 就够了。</div>
+
+<h2 id="sum">小结</h2>
+<p>agent-team 用三个挂点把主 agent 变成调度员：<code>setActiveTools</code> 收走工具，<code>before_agent_start</code> 换掉提示词，<code>dispatch_agent</code> 工具在 run 内循环的工具阶段起一个子 <code>pi</code> 进程。子进程有自己完整的双循环和会话，主进程只在一个 <code>await</code> 里等它，再把它的事件流翻译成网格。下一篇 <code>agent-chain.ts</code> 同样起子进程，但把成员排成固定的流水线，上一步的输出直接当下一步的输入。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [23, 'import { spawn } from "child_process";', 'l3', '子 agent 是独立的操作系统进程，不是 Pi 内部的对象。'],
+  [93, '		if (!frontmatter.name) return null;', 'l3', '没有 name 字段的 .md 会被忽略。'],
+  [98, '			tools: frontmatter.tools || "read,grep,find,ls",', 'l3', '没写 tools 的成员默认只读四件套（bowser 就是这样）。'],
+  [107, 'function scanAgentDirs(cwd: string): AgentDef[] {', 'l3', '扫 agents/、.claude/agents/、.pi/agents/ 三个目录，只扫一层，不进子目录。'],
+  [137, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调用。'],
+  [143, '	let widgetCtx: any;', 'l3', '记下最近一次拿到的 ctx，供定时器和子进程回调更新网格。'],
+  [201, '		gridCols = size <= 3 ? size : size === 4 ? 2 : 3;', 'l3', '按团队人数自动定列数：6 人 → 3 列。'],
+  [227, '		const filled = Math.ceil(state.contextPct / 20);', 'l3', '⚠ 没有上限：contextPct > 100 时下一行 repeat 负数抛异常。'],
+  [258, '		widgetCtx.ui.setWidget("agent-team", (_tui: any, theme: any) => {', 'l4', '每次 updateWidget 都重装一次 widget；运行中每秒至少一次。'],
+  [301, '	function dispatchAgent(', 'l3', '派活的核心：起子进程、解析它的事件流、更新网格、返回最终文字。'],
+  [316, '		if (state.status === "running") {', 'l3', '同一成员同时只跑一个；并行批次里派同一个成员两次，第二个直接报错返回。'],
+  [333, '		state.timer = setInterval(() => {', 'l3', '每秒更新计时并重装网格，直到子进程结束。'],
+  [338, '		const model = ctx.model', 'l2', '子进程用主进程当前的模型（provider/id）。'],
+  [347, '		const args = [', 'l3', '子进程命令行：JSON 模式、非交互、不加载扩展、指定工具、关 thinking、追加成员正文、指定会话文件。'],
+  [360, '			args.push("-c");', 'l3', '成员上次成功跑完过：续用同一个会话文件，上下文累积。'],
+  [368, '			const proc = spawn("pi", args, {', 'hit', '起一个新的 pi 进程：它有自己的 L1–L4、自己的 settle 外循环和 run 内循环。用 PATH 上的 pi，版本不一定和主进程相同。'],
+  [384, '						if (event.type === "message_update") {', 'l3', '子进程的流式文字：拼起来，取最后一行显示在卡片上。'],
+  [393, '						} else if (event.type === "tool_execution_start") {', 'l3', '子进程每开始一个工具，卡片上的计数 +1。'],
+  [399, '								state.contextPct = ((msg.usage.input || 0) / contextWindow) * 100;', 'l3', '只算 usage.input，不含缓存命中的部分（同第 04 篇）；分母是主进程启动时的窗口。'],
+  [417, '			proc.on("close", (code) => {', 'l3', '子进程退出：退出码 0 算成功，记下会话文件以便下次 -c 续上，然后 resolve。'],
+  [441, '				ctx.ui.notify(', 'l4', '聊天区提示 “Scout done in 21s”。'],
+  [469, '	pi.registerTool({', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>：登记 dispatch_agent。主 agent 唯一能用的工具。'],
+  [478, '		async execute(_toolCallId, params, _signal, onUpdate, ctx) {', 'hit', '<span class="tag inner">run 内循环</span>工具阶段，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a> await 它。⚠ <code>_signal</code> 被丢掉：Esc 停不下子进程。'],
+  [483, '					onUpdate({', 'l2', '部分结果：<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L848"><code>agent-loop.ts:848</code></a> 转成 tool_execution_update，UI 显示 “working…”。'],
+  [491, '				const truncated = result.output.length > 8000', 'l3', '给主 agent 的文字截到 8000 字；完整输出放在 details.fullOutput。'],
+  [631, '	pi.on("before_agent_start", async (_event, _ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a>，<span class="tag outer">settle 外循环</span>入口，每次 settle 1 次。'],
+  [640, '			systemPrompt: `You are a dispatcher agent. You coordinate specialist agents to accomplish tasks.', 'hit', '整个替换系统提示词：没有拼 <code>event.systemPrompt</code>，前面扩展的改动和 Pi 默认内容都丢了。'],
+  [671, '	pi.on("session_start", async (_event, _ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。'],
+  [685, '					try { unlinkSync(join(sessDir, f)); } catch {}', 'l3', '删掉所有子会话文件：成员失忆。同目录下另一个 Pi 进程的子会话也会被删。'],
+  [699, '		pi.setActiveTools(["dispatch_agent"]);', 'l2', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1538"><code>setActiveToolsByName</code></a>：主 agent 只剩这一个工具，别的扩展注册的工具也被停用。'],
+  [721, '				const filled = Math.round(pct / 10);', 'l3', '⚠ 和第 01 篇同一个 bug：pct ≥ 105 时下一行抛 RangeError。'],
+];
+WT.source(SRC);
+
+// ─────────── 团队加载 / 命令行 复刻 ───────────
+const DEFS = { // .pi/agents/*.md（一层）里的 name / tools；pi-pi 子目录不会被扫到
+  scout: { tools: 'read,grep,find,ls', body: 'You are a scout agent. Investigate the codebase quickly and report findings concisely…' },
+  planner: { tools: 'read,grep,find,ls', body: 'You are a planner agent. Analyze requirements and produce clear, actionable implementation plans…' },
+  builder: { tools: 'read,write,edit,bash,grep,find,ls', body: 'You are a builder agent. Implement the requested changes thoroughly…' },
+  reviewer: { tools: 'read,bash,grep,find,ls', body: 'You are a code reviewer agent. Review code for bugs, security issues…' },
+  documenter: { tools: 'read,write,edit,grep,find,ls', body: 'You are a documentation agent…' },
+  'red-team': { tools: 'read,bash,grep,find,ls', body: 'You are a red team agent…' },
+  'plan-reviewer': { tools: 'read,grep,find,ls', body: 'You are a plan reviewer…' },
+  bowser: { tools: null, body: '# Playwright Bowser Agent …（用 playwright-cli 做无头浏览器自动化）' },
+};
+const TEAMS = { // .pi/agents/teams.yaml
+  full: ['scout', 'planner', 'builder', 'reviewer', 'documenter', 'red-team'],
+  'plan-build': ['planner', 'builder', 'reviewer'],
+  info: ['scout', 'documenter', 'reviewer'],
+  frontend: ['planner', 'builder', 'bowser'],
+  'pi-pi': ['ext-expert', 'theme-expert', 'skill-expert', 'config-expert', 'tui-expert', 'prompt-expert', 'agent-expert'],
+};
+function activate(team) { // 第 175–202 行
+  const members = TEAMS[team].filter(m => DEFS[m]).map(m => ({ name: m, tools: DEFS[m].tools || 'read,grep,find,ls', defaulted: !DEFS[m].tools, body: DEFS[m].body }));
+  const size = members.length;
+  return { members, missing: TEAMS[team].filter(m => !DEFS[m]), cols: size <= 3 ? size : size === 4 ? 2 : 3 };
+}
+function argv(m, again) { // 第 338–363 行
+  const a = ['pi', '--mode', 'json', '-p', '--no-extensions', '--model', 'openai-codex/gpt-5.5', '--tools', m.tools, '--thinking', 'off', '--append-system-prompt', JSON.stringify(m.body.slice(0, 40) + '…'), '--session', `.pi/agent-sessions/${m.name}.json`];
+  if (again) a.push('-c');
+  a.push('"<task>"');
+  return a.join(' ');
+}
+function card(st) { // renderCard 简化
+  const icon = { idle: '○', running: '●', done: '✓', error: '✗' }[st.status];
+  return [`┌${'─'.repeat(22)}┐`, `│ ${st.name.padEnd(21)}│`, `│ ${(icon + ' ' + st.status + (st.status !== 'idle' ? ' ' + st.secs + 's' : '')).padEnd(21)}│`, `│ ${('tools ' + st.tools).slice(0, 21).padEnd(21)}│`, `│ ${(st.work || '').slice(0, 21).padEnd(21)}│`, `└${'─'.repeat(22)}┘`];
+}
+
+// ─────────── 双循环动画 ───────────
+// 状态：team（成员卡片状态）、procs（正在跑的子进程）；补丁 { set: [name, status, secs, work] } 由 onStep 应用
+const SCN = {
+  normal: [
+    ['session', 'session_start', '', { boot: true }, '删子会话、载 full 团队（6 人，3 列）、setActiveTools(["dispatch_agent"])、装网格和页脚'],
+    ['input', 'input', '', {}, '用户：给登录接口加限流'],
+    ['bas', 'before_agent_start', 'outer', {}, '返回调度员提示词 + 6 个成员的目录（整个替换）'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '工具声明只有 dispatch_agent'],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：dispatch_agent(scout, "找出登录接口和现有中间件")'],
+    ['tools', 'execute → spawn("pi", …)', 'inner', { set: ['scout', 'running', 0, 'Dispatching…'] }, '起子进程；onUpdate 显示 working…；主进程的工具阶段开始 await'],
+    ['tools', '子进程：settle → run → turn ×3', '', { set: ['scout', 'running', 9, 'grep "login" src/'] }, '与主循环异步：子进程自己的双循环在转，stdout 每个事件一行 JSON'],
+    ['tools', '子进程：agent_end → 退出码 0', '', { set: ['scout', 'done', 21, 'Login is in src/api/auth.ts'] }, 'close：记下会话文件，resolve 最终文字'],
+    ['tools', 'toolResult：[scout] done in 21s …', 'inner', {}, '结果截到 8000 字进主上下文'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：dispatch_agent(builder, "在 src/api/auth.ts 加限流中间件…")'],
+    ['tools', 'execute → spawn("pi", …)', 'inner', { set: ['builder', 'running', 0, 'Dispatching…'] }, 'builder 有 write / edit / bash'],
+    ['tools', '子进程：settle（改文件、跑测试）', '', { set: ['builder', 'running', 30, 'npm test'] }, ''],
+    ['tools', '子进程退出', '', { set: ['builder', 'done', 64, 'Added rate limiter; tests pass'] }, ''],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 3', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '总结给用户，没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '主进程 1 个 run、3 个 turn；里面嵌了 2 个子进程各自完整的 settle'],
+  ],
+  abort: [
+    ['session', 'session_start', '', { boot: true }, ''],
+    ['input', 'input', '', {}, '用户：重构整个 auth 模块'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：dispatch_agent(builder, "重构 auth…")'],
+    ['tools', 'execute → spawn', 'inner', { set: ['builder', 'running', 0, 'Dispatching…'] }, ''],
+    ['tools', '用户按 Esc → signal aborted', '', { set: ['builder', 'running', 12, 'editing src/auth/*.ts'] }, '主 run 的 signal 中止了，但 execute 丢掉了 _signal，没人去 kill 子进程'],
+    ['tools', '子进程继续改文件、调模型', '', { set: ['builder', 'running', 95, 'npm test'] }, '主进程卡在 agent-loop.ts:842 的 await，界面显示 working…'],
+    ['tools', '子进程自己跑完退出', '', { set: ['builder', 'done', 140, 'Refactor complete'] }, '直到这里 execute 才返回'],
+    ['tend', 'turn_end', 'inner', {}, '主 run 这才因为 aborted 收尾'],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, 'Esc 之后又过了约 2 分钟，文件已经被改完了'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+function gridRows(states, cols) {
+  const rows = [];
+  for (let i = 0; i < states.length; i += cols) {
+    const cards = states.slice(i, i + cols).map(card);
+    for (let l = 0; l < 6; l++) {
+      const line = cards.map(c => c[l]).join(' ');
+      const st = states.slice(i, i + cols);
+      const cls = l === 2 && st.some(s => s.status === 'running') ? 'sw-acc' : l === 2 && st.some(s => s.status === 'done') ? 'sw-ok' : 'dim';
+      rows.push([' ' + line, cls]);
+    }
+  }
+  return rows;
+}
+WT.loops({
+  hit: ['session', 'bas', 'tools'],
+  sub: { bas: '整个替换 systemPrompt', tools: 'dispatch_agent → 子 pi 进程' },
+  legend: [
+    '橙框 = agent-team 用到的回调：session_start 锁工具、before_agent_start 换提示词、tools 格里执行 dispatch_agent。',
+    '标“外部”的步骤是子进程自己的双循环：主进程只在工具阶段的一个 await 里等它。网格 widget 每秒重装一次，不在图里。',
+  ],
+  scenes: SCN,
+  state: () => ({ states: [], cols: 3 }),
+  onStep(st, s) {
+    if (s.patch.boot) { const t = activate('full'); st.states = t.members.map(m => ({ name: m.name, tools: m.tools, status: 'idle', secs: 0, work: '' })); st.cols = t.cols; }
+    if (s.patch.set) { const [n, status, secs, work] = s.patch.set; const x = st.states.find(m => m.name === n); if (x) Object.assign(x, { status, secs, work }); }
+  },
+  logTag: s => /spawn|execute/.test(s.event) || s.node === 'session' || s.node === 'bas' ? '<span class="tag hit">本扩展</span>' : /子进程|Esc/.test(s.event) ? '<span class="tag off">外部</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    if (!st.states.length) { foot1.textContent = '（还没载入团队）'; return; }
+    paintLines(foot1, gridRows(st.states, st.cols));
+    WT.flash(foot1);
+    const running = st.states.filter(x => x.status === 'running').map(x => x.name);
+    rc.textContent = running.length ? `子进程在跑：${running.map(n => 'pi … --session .pi/agent-sessions/' + n + '.json').join('；')}` : '没有子进程在跑';
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 派活链 ───────────
+const CHIPS = {
+  grid:    ['setWidget 网格 + setFooter', 110, 175, 51, 1],
+  render:  ['renderCall / renderResult', 297, 160, 51, 1],
+  notify:  ['notify（done in 21s）', 469, 140, 51, 1],
+  load:    ['loadAgents + activateTeam（147–202）', 110, 235, 147, 1],
+  dispatch:['dispatchAgent（301–465）', 357, 160, 147, 1],
+  parse:   ['解析 JSON 事件流（376–411）', 529, 180, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  reg:     ['registerTool · on ×2 · cmd ×3', 222, 185, 243, 1],
+  setat:   ['pi.setActiveTools', 419, 115, 243, 1],
+  bas:     ['before_agent_start', 546, 125, 243, 1],
+  sess:    ['AgentSession', 110, 100, 339, 1],
+  exec:    ['executePreparedToolCall（await）', 222, 210, 339, 1],
+  child:   ['spawn("pi") 子进程：自己的双循环', 444, 215, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/agent-team.ts -e extensions/theme-cycler.ts</code>。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），第 137 行。'],
+  ['reg', '<span class="tag l2">L2</span> 登记 dispatch_agent 工具（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>）、3 个命令、<code>before_agent_start</code> 和 <code>session_start</code>。'],
+  ['load', '<span class="tag l3">L3</span> <code>session_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>）：删子会话文件，扫描成员，读 teams.yaml，激活第一个团队 full（6 人）。'],
+  ['setat', '<span class="tag l2">L2</span> 第 699 行 <code>pi.setActiveTools(["dispatch_agent"])</code> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1538"><code>setActiveToolsByName</code></a>：主 agent 只剩一个工具。'],
+  ['grid', '<span class="tag l4">L4</span> 装网格 widget（编辑器上方）和页脚。<br><b>启动链结束。下面是一次提问里的派活。</b>'],
+  ['bas', '<span class="tag l2">L2</span> 用户提问，<code>before_agent_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a>）返回调度员提示词，成为本次 settle 的强制提示词。'],
+  ['exec', '<span class="tag l1">L1</span> 模型调用 dispatch_agent：<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a> <code>await tool.execute(…)</code>，经 <a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>wrapper</code></a> 进入第 478 行。'],
+  ['render', '<span class="tag l4">L4</span> 第 483 行 <code>onUpdate</code> → tool_execution_update（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L848"><code>:848</code></a>），工具结果组件用 renderResult 显示 “● scout working…”。'],
+  ['dispatch', '<span class="tag l3">L3</span> <code>dispatchAgent</code>：标记 running、启动每秒定时器、拼命令行（第 347–363 行）。'],
+  ['child', '<span class="tag l1">L1</span> 第 368 行 <code>spawn("pi", args)</code>：一个新的 Pi 进程，带着自己的 AgentSession、settle 外循环、run 内循环，和主进程只通过 stdout 的 JSON 行相连。'],
+  ['parse', '<span class="tag l3">L3</span> 第 376–411 行：逐行 <code>JSON.parse</code>，把子进程的 message_update / tool_execution_start / message_end / agent_end 翻译成卡片状态。'],
+  ['grid', '<span class="tag l4">L4</span> <code>updateWidget</code> 重装网格：卡片上是状态、秒数、上下文条、最后一行输出。'],
+  ['parse', '<span class="tag l3">L3</span> 子进程退出（第 417 行）：退出码 0 记为 done，记下会话文件，拼出最终文字，resolve。'],
+  ['notify', '<span class="tag l4">L4</span> notify “Scout done in 21s”。'],
+  ['exec', '<span class="tag l1">L1</span> execute 返回 <code>{ content: 前 8000 字, details: { fullOutput } }</code>：主进程的 toolResult 落盘，下一个 turn 调度员读到结果。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+Object.keys(TEAMS).forEach(t => { const o = document.createElement('option'); o.value = o.textContent = t; $('m-team').appendChild(o); });
+function fillAgents() {
+  const t = activate($('m-team').value);
+  $('m-agent').textContent = '';
+  t.members.forEach(m => { const o = document.createElement('option'); o.value = o.textContent = m.name; $('m-agent').appendChild(o); });
+}
+function drawSim() {
+  const team = $('m-team').value, t = activate(team);
+  const rows = [[` 团队 ${team}：teams.yaml 里 ${TEAMS[team].length} 人，找到 ${t.members.length} 人，网格 ${t.cols || 0} 列`, 'acc']];
+  if (t.missing.length) rows.push([`   找不到定义：${t.missing.join(', ')}`, 'sw-wrn']);
+  t.members.forEach(m => rows.push([`   ${m.name.padEnd(12)} tools: ${m.tools}${m.defaulted ? '（没写 tools，默认值）' : ''}`, m.defaulted ? 'sw-wrn' : 'dim']));
+  if (!t.members.length) rows.push(['   网格显示 “No agents found. Add .md files to agents/”；调度员提示词里的成员目录为空', 'sw-wrn']);
+  const m = t.members.find(x => x.name === $('m-agent').value);
+  if (m) {
+    rows.push(['', ''], [' 派给 ' + m.name + ' 时的子进程命令：', 'acc']);
+    argv(m, $('m-again').checked).match(/.{1,96}(\s|$)/g).forEach(l => rows.push(['   ' + l.trim(), 'sw-ok']));
+  }
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  const notes = [];
+  if (t.missing.length) notes.push('这些成员的 .md 在 .pi/agents/pi-pi/ 子目录里，scanAgentDirs 只扫一层');
+  if (t.members.some(x => x.defaulted)) notes.push('bowser 需要用命令行跑 Playwright，默认的只读工具里没有 bash');
+  $('m-note').textContent = notes.join(' · ');
+}
+$('m-team').addEventListener('input', () => { fillAgents(); drawSim(); });
+['m-agent', 'm-again'].forEach(id => $(id).addEventListener('input', drawSim));
+fillAgents();
+drawSim();
+</script>
+</body>
+</html>
