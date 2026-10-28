@@ -24,6 +24,7 @@
       { n: "13", title: "agent-team.ts", href: "agent-team.html" },
       { n: "14", title: "agent-chain.ts", href: "agent-chain.html" },
       { n: "15", title: "pi-pi.ts", href: "pi-pi.html" },
+      { n: "16", title: "subagent-widget.ts", href: "subagent-widget.html" },
     ],
     lessons: [
       { n: "01", title: "循环骨架与插口", href: LESSONS + "0001-loop-skeleton-and-sockets.html" },

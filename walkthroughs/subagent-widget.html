@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>subagent-widget.ts 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 16</div>
+<h1>subagent-widget.ts</h1>
+<p class="subtitle">在后台跑子代理：<code>/sub 任务</code> 或模型调用 <code>subagent_create</code> 起一个 <code>pi</code> 子进程，编辑器上方为每个子代理挂一个实时 widget；子代理跑完后，结果用 <code>pi.sendMessage(…, { deliverAs: "followUp", triggerTurn: true })</code> 送回主会话。593 行，订阅 <code>session_start</code>，注册 4 个工具、4 个命令。第 13–15 篇的子进程都卡在主 agent 的工具阶段里；这一篇<b>不等</b>：工具立即返回，子进程在循环之外跑，结束时再把主 agent 叫起来。<br>运行：<code>just ext-subagent-widget</code>（同时加载 pure-focus 和 theme-cycler）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">点任意一行，看它属于哪一层、做什么。核心是第 210–301 行的 <code>spawnAgent</code>：它返回 Promise，但调用方都不 await（“Fire-and-forget”）；进程结束时的 <code>close</code> 回调负责把结果送回主会话。工具（第 305–425 行）和命令（第 428–577 行）只是两套入口。</p>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳（settled）。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+<code>subagent_create</code> 在工具阶段执行，但只是起进程、立即返回，工具阶段几乎不花时间。子进程完全在循环之外运行。它结束时调用 <code>sendMessage</code>，走哪条路取决于主 agent 当时在干什么：主 agent 正在跑，消息作为 follow-up 排队，<b>run 内循环</b>在本该停下时接着处理它（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L311"><code>agent-loop.ts:311</code></a>）；主 agent 空闲，<code>triggerTurn</code> 直接<b>起一个新的 settle</b>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2383"><code>agent-session.ts:2383</code></a>）。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="idle">场景 A：派出子代理，主 agent 停稳；子代理结束时起一个新 settle</option>
+    <option value="busy">场景 B：子代理结束时主 agent 还在跑：作为 follow-up 并入当前 run</option>
+    <option value="reload">场景 C：子代理跑着时 /reload</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">编辑器上方的子代理 widget（实时，简化）</div><div class="term" id="foot1"></div>
+<div class="small muted" id="rc" style="margin-top:6px"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>本扩展</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code></td><td>循环外</td><td>启动 1 次（/reload、/new、/resume 再 1 次）</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3755"><code>:3755</code></a></td><td>✔ 想清理旧子代理（实际清不到，见 ③）</td></tr>
+<tr class="hl"><td><code>subagent_create</code> / <code>_continue</code> 工具</td><td><span class="tag inner">内</span> 工具阶段</td><td>调用次数</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a></td><td>✔ 起进程，立即返回</td></tr>
+<tr class="hl"><td><code>subagent_remove</code> / <code>_list</code> 工具</td><td><span class="tag inner">内</span> 工具阶段</td><td>调用次数</td><td>同上</td><td>✔ kill / 列表</td></tr>
+<tr class="hl"><td><code>/sub</code> · <code>/subcont</code> · <code>/subrm</code> · <code>/subclear</code></td><td>循环外（<code>prompt()</code> 入口）</td><td>每次输入 1 次</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2193"><code>agent-session.ts:2193</code></a></td><td>✔ 同样的四件事，不经过模型</td></tr>
+<tr class="hl"><td>子进程 <code>close</code></td><td>与循环异步</td><td>每个子代理每轮 1 次</td><td>Node 子进程事件</td><td>✔ notify + <code>sendMessage</code></td></tr>
+<tr><td>follow-up 消息被取走</td><td><span class="tag inner">内</span> run 将要结束时</td><td>0 或 1</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L311"><code>agent-loop.ts:311</code></a></td><td>–（子代理结果在主 agent 忙时走这里）</td></tr>
+<tr><td>新 settle（custom 消息起头）</td><td><span class="tag outer">外</span></td><td>–</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2383"><code>agent-session.ts:2383</code></a></td><td>–（子代理结果在主 agent 空闲时走这里）</td></tr>
+<tr class="hl"><td>每秒定时器 / widget <code>render</code></td><td>与循环异步</td><td>每个运行中的子代理每秒</td><td><code>setInterval</code>；<a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>✔ 重装所有子代理的 widget</td></tr>
+</tbody></table></div>
+<p class="small muted"><code>sendCustomMessage</code> 的分支（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>agent-session.ts:2357</code></a>）：在跑且没禁止 triggerTurn → <code>deliverAs: "followUp"</code> 走 <code>agent.followUp</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2374"><code>:2374</code></a>）；不在跑且 <code>triggerTurn</code> → <code>_startRun</code>。第 12 篇 tilldone 的催办走的是同一个函数，只是它在 agent_end 时调用，落在 steer 分支。源码链接指向 Pi 1.4.0（4a08025）的 TS 源码。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 1–4 步是启动链。第 5–9 步是派出子代理：工具起进程后马上返回，主 agent 的循环继续往下走。第 10–15 步是子代理结束后：L3 的 <code>close</code> 回调经 L2 的 <code>sendMessage</code> 回到 L1，按主 agent 的状态并入当前 run 或起新的 settle。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构与启动链、派出链、回传链">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">终端渲染 / 输入</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">扩展自己的逻辑</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">加载 / 事件 / ctx</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 15</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–4 步在循环外；第 5–9 步在主 agent 的工具阶段（但不等子进程）；第 10 步起是子进程结束后的回传。</span></div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>主 agent 的上下文里，子代理出现两次。第一次是工具结果，只有一句“Subagent #1 spawned … running in background”。第二次是子代理结束后送来的 <b>custom 消息</b>：任务、耗时和最多 8000 字的结果，<code>display: true</code> 所以聊天区也看得到。它和用户消息一样落盘、进上下文，并且会让模型再回应一次。子代理自己的上下文在另一个进程里，存在 <code>~/.pi/agent/sessions/subagents/</code> 下的会话文件中，<code>/subcont</code> 会接着这个文件继续。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 320" role="img" aria-label="提示词上下文：工具结果与回传的 custom 消息">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--accent)">主进程的上下文</text>
+  <g class="chip"><rect x="16" y="38" width="250" height="44" rx="7"/><text class="mono" x="26" y="56" font-size="11">assistant：subagent_create(task)</text><text class="mut" x="26" y="72" font-size="10">thinking 必填，model 选填</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M266,60 L296,60"/>
+  <g class="chip hit"><rect x="298" y="38" width="250" height="44" rx="7"/><text class="mono" x="308" y="56" font-size="11">toolResult（立即）</text><text class="mut" x="308" y="72" font-size="10">“#1 spawned … running in background”</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M548,60 L578,60"/>
+  <g class="chip"><rect x="580" y="38" width="228" height="44" rx="7"/><text x="590" y="56" font-size="11">这个 run 可能就此结束</text><text class="mut" x="590" y="72" font-size="10">模型不知道子代理还要跑多久</text></g>
+
+  <g class="chip hit"><rect x="298" y="120" width="250" height="70" rx="7"/><text class="mono" x="308" y="138" font-size="11">custom 消息：subagent-result</text><text class="mut" x="308" y="154" font-size="10">“Subagent #1 finished "…" in 42s.</text><text class="mut" x="308" y="168" font-size="10">  Result: …（最多 8000 字）”</text><text class="mut" x="308" y="182" font-size="10">display: true；落盘</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M548,140 L578,140"/>
+  <g class="chip"><rect x="580" y="112" width="228" height="40" rx="7"/><text x="590" y="130" font-size="11">主 agent 在跑：follow-up</text><text class="mut" x="590" y="144" font-size="10">并入当前 run（agent-loop.ts:311）</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M548,170 L578,174"/>
+  <g class="chip"><rect x="580" y="158" width="228" height="40" rx="7"/><text x="590" y="176" font-size="11">主 agent 空闲：triggerTurn</text><text class="mut" x="590" y="190" font-size="10">起新 settle（agent-session.ts:2383）</text></g>
+
+  <text class="bt" x="20" y="120" font-size="13" style="fill:var(--accent)">子进程</text>
+  <g class="chip"><rect x="16" y="132" width="250" height="88" rx="7"/><text class="mono" x="26" y="150" font-size="11">pi --mode json -p --no-extensions</text><text class="mut" x="26" y="166" font-size="10">--session ~/.pi/agent/sessions/</text><text class="mut" x="26" y="180" font-size="10">  subagents/subagent-1-时间戳.jsonl</text><text class="mut" x="26" y="194" font-size="10">--tools read,bash,grep,find,ls（写死）</text><text class="mut" x="26" y="208" font-size="10">Pi 默认系统提示词，任务是 user 消息</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M266,176 L296,160"/>
+  <text class="mut" x="270" y="196" font-size="9">close</text>
+  <text class="mut" x="16" y="250" font-size="10">结果文字 = 子进程所有 text_delta 的拼接，再加上 stderr 的输出（第 262–267 行），截到 8000 字。</text>
+  <text class="mut" x="16" y="266" font-size="10">/subcont 用同一个会话文件 + 新的 prompt 再起一次子进程（没有 -c，靠 --session 指向已有文件）；子代理记得之前的对话。</text>
+  <text class="mut" x="16" y="282" font-size="10">子代理的会话文件从不删除：每个 /sub 都在家目录下留一个 .jsonl。</text>
+  <text class="mut" x="16" y="298" font-size="10">和第 13–15 篇不同：这里不替换主进程的系统提示词，也不收工具。4 个 subagent_* 工具和默认工具并列。</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>进上下文的东西</th><th>哪个进程</th><th>什么时候</th><th>会不会让模型再说话</th></tr></thead>
+<tbody>
+<tr><td>subagent_* 工具的声明</td><td>主</td><td>加载时注册</td><td>–</td></tr>
+<tr><td>“spawned … in background” 工具结果</td><td>主</td><td>调用时立即</td><td>照常：同一 run 的下一个 turn</td></tr>
+<tr class="hl"><td>subagent-result custom 消息</td><td>主</td><td>子进程结束时</td><td><b>会</b>：并入当前 run，或起新 settle</td></tr>
+<tr><td>子代理的对话</td><td>子</td><td>子进程运行中</td><td>–（存在 subagents/*.jsonl）</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器复刻了 <code>/sub</code> 的参数解析（第 56–113 行，原码）和结果回传的分支（<code>sendCustomMessage</code>）。上面输入一条 <code>/sub</code> 命令看它怎么解析；下面选子代理结束时主 agent 的状态，看结果走哪条路。</p>
+<div class="card">
+  <div class="controls">
+    <span class="small">/sub</span>
+    <input id="m-cmd" type="text" value="--model openai/gpt-5 --thinking high review this code" style="flex:1;min-width:260px;font-family:var(--mono)">
+  </div>
+  <div class="controls" id="m-presets"></div>
+  <div class="controls">
+    <label class="small">子代理结束时，主 agent <select id="m-state">
+      <option value="idle">空闲</option>
+      <option value="busy">正在跑（流式输出或执行工具）</option>
+      <option value="reloaded">已经 /reload 过（旧扩展实例失效）</option>
+    </select></label>
+  </div>
+  <div class="term" id="m-out"></div>
+  <div class="small muted" id="m-note" style="margin-top:6px"></div>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span></th><th><span class="tag l2">L2</span></th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span></th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr class="hl"><td>派出</td><td><code>spawnAgent</code> 不 await（第 336、461 行）</td><td>工具 <code>subagent_create</code> / 命令 <code>/sub</code></td><td><code>spawn("pi", …)</code>；工具阶段立即结束</td><td>notify 模型和 thinking</td><td><span class="tag inner">内</span> 或命令时</td></tr>
+<tr class="hl"><td>回传</td><td><code>close</code> 回调拼结果（第 269–290 行）</td><td><code>pi.sendMessage(…, { deliverAs: "followUp", triggerTurn: true })</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>sendCustomMessage</code></a>：follow-up 或 <code>_startRun</code></td><td>聊天区出现 custom 消息</td><td>子进程结束时</td></tr>
+<tr><td>续聊</td><td>同一会话文件、turnCount++（第 367–375 行）</td><td><code>subagent_continue</code> / <code>/subcont</code></td><td><code>--session</code> 指向已有文件</td><td>widget 显示 “· Turn 2”</td><td>调用时</td></tr>
+<tr><td>移除</td><td><code>proc.kill("SIGTERM")</code></td><td><code>subagent_remove</code> / <code>/subrm</code> / <code>/subclear</code></td><td>–</td><td><code>setWidget("sub-N", undefined)</code></td><td>调用时</td></tr>
+<tr><td>widget</td><td>每个子代理一个 <code>sub-N</code>（第 130–187 行）</td><td><code>setWidget</code></td><td>–</td><td>编辑器上方，按 id 排列</td><td>每个 text_delta、每秒</td></tr>
+</tbody></table></div>
+
+<div class="callout warn"><b>Bug：/reload、/new 之后，旧的子代理成了孤儿，结束时回传会抛错。</b>第 581–592 行的 <code>session_start</code> 想 kill 正在跑的子代理，但 /reload 和换会话都会重新执行扩展工厂（第 115 行），新闭包里的 <code>agents</code> 是空的，这段循环永远什么都杀不到。旧实例里的子进程继续跑；Pi 在 /reload 时已经把旧的扩展运行时标记为失效（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3724"><code>agent-session.ts:3724</code></a>），子进程结束时旧闭包里的 <code>pi.sendMessage</code> 会在 <code>assertActive</code> 处抛出 “This extension ctx is stale…”（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L385"><code>loader.ts:385</code></a>、<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L168"><code>:168</code></a>）。这个异常发生在子进程的 <code>close</code> 事件回调里，没有人接（推断：会变成进程级的未捕获异常；没有实际触发验证）。结果没有送达，旧 widget 也可能残留。修法：订阅 <code>session_shutdown</code>（它在 invalidate <b>之前</b>发出，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3723"><code>agent-session.ts:3723</code></a>），在那里 kill 所有子进程、清掉定时器。场景 C 演示了这个时序。</div>
+
+<div class="callout"><b>结果回来时会让主 agent 再说一次话。</b><code>triggerTurn: true</code> 的意思是：主 agent 空闲时，一条子代理结果就会起一次完整的 settle（第 12 篇讲过的外循环入口之一）。同时派出 3 个子代理，就可能先后起 3 次 settle（后到的如果撞上前一个还在跑，会变成 follow-up 并入）。用户此时如果正在编辑器里打字，聊天区会被这些回合插进来。这是“后台跑”的代价，也是本扩展有意的设计。</div>
+
+<div class="callout"><b>结果文字里混着 stderr。</b>第 262–267 行把子进程 stderr 的输出也推进 <code>textChunks</code>，和 stdout 的 text_delta 混在一起，最后一起作为 “Result” 送回主 agent。子进程打印的警告、Node 的弃用提示都会进主上下文。另外和第 14 篇一样，多个 turn 的文字首尾相接、没有分隔。</div>
+
+<div class="callout"><b>会话文件只增不删。</b>每次 <code>/sub</code> 或 <code>subagent_create</code> 都在 <code>~/.pi/agent/sessions/subagents/</code> 下新建一个 <code>subagent-N-时间戳.jsonl</code>（第 122–126 行），<code>/subrm</code>、<code>/subclear</code>、session_start 都不删文件。和第 13 篇不同，这些文件在家目录下，跨项目累积。</div>
+
+<div class="callout"><b>widget 刷新很频繁。</b>子进程每吐一个 text_delta，<code>updateWidgets</code> 就把<b>所有</b>子代理的 widget 各重装一遍（第 133–186 行，每个 <code>setWidget</code> 都会先移除再创建组件），外加每个运行中的子代理每秒一次。并发三四个子代理时，这是 TUI 上最忙的地方。只更新数据、调 <code>requestRender</code> 就够了。<code>just ext-subagent-widget</code> 同时装的 pure-focus 把页脚清空，正好给这些 widget 腾出空间。</div>
+
+<h2 id="sum">小结</h2>
+<p>subagent-widget 和第 13–15 篇用同样的子进程，挂法却不同：工具只负责起进程、立即返回，子代理在循环外运行，结束时用 <code>sendMessage</code> + <code>triggerTurn</code> 回到主会话，主 agent 在跑就并入当前 run，空闲就起一次新的 settle。这让主 agent 不被卡住，但也意味着子进程的生命周期要自己管：会话被替换时，没有 <code>session_shutdown</code> 清理，旧子代理就成了孤儿。下一篇 <code>coms.ts</code> 把这种“从循环外把消息送进来”的手法推广到跨会话通信。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [21, 'const { spawn } = require("child_process") as any;', 'l3', '用 require 拿 spawn（jiti 允许）；类型因此是 any。'],
+  [56, 'function readCommandValue(input: string): { value?: string; rest: string } {', 'l3', '读一个参数值：支持 "带引号的值"，否则读到下一个空白为止。'],
+  [73, 'function parseCommandOptions(input: string): ParsedCommand {', 'l3', '解析 /sub 前面的 --model / --thinking，剩下的是任务。模拟器运行的就是这段原码。'],
+  [115, 'export default function (pi: ExtensionAPI) {', 'l2', '工厂函数，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调用。/reload、换会话时会再调一次：新闭包，新的空 agents。'],
+  [116, '	const agents: Map<number, SubState> = new Map();', 'l3', '子代理状态，包括正在跑的进程引用（proc）。只活在这一个闭包里。'],
+  [123, '		const dir = path.join(os.homedir(), ".pi", "agent", "sessions", "subagents");', 'l3', '子代理会话放在家目录下，不按项目分，也从不删除。'],
+  [135, '				widgetCtx.ui.setWidget(key, (_tui: any, theme: any) => {', 'l4', '每次更新都把所有子代理的 widget 重装一遍。'],
+  [200, '					state.textChunks.push(delta.delta || "");', 'l3', '子进程的流式文字累积起来，结束时就是“结果”。'],
+  [224, '		const thinking = options.thinking || pi.getThinkingLevel();', 'l2', '没指定 thinking 就用主 agent 当前的。'],
+  [229, '			const proc = spawn("pi", [', 'hit', '起子进程：它有自己的双循环。调用方都不等它。'],
+  [232, '				"--session", state.sessionFile,   // persistent session for /subcont resumption', 'l3', '有会话文件：/subcont 指向同一个文件，子代理记得之前的对话。'],
+  [235, '				"--tools", "read,bash,grep,find,ls",', 'l3', '工具写死：没有 edit / write，但有 bash。'],
+  [264, '					state.textChunks.push(chunk);', 'l3', 'stderr 也推进结果文字：警告信息会进主 agent 的上下文。'],
+  [269, '			proc.on("close", (code) => {', 'hit', '子进程结束：与主循环异步，可能发生在主 agent 正在跑、空闲、甚至会话已被替换之后。'],
+  [283, '				pi.sendMessage({', 'hit', '→ <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L384"><code>loader.ts:384</code></a> 先 assertActive（扩展失效时抛错），再 → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>sendCustomMessage</code></a>。'],
+  [287, '				}, { deliverAs: "followUp", triggerTurn: true });', 'hit', '主 agent 在跑 → <code>agent.followUp</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2374"><code>agent-session.ts:2374</code></a>），run 将要结束时取走（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L311"><code>agent-loop.ts:311</code></a>）；空闲 → <code>_startRun</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2383"><code>:2383</code></a>）起新 settle。'],
+  [305, '	pi.registerTool({', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L292"><code>loader.ts:292</code></a>：subagent_create。4 个工具和默认工具并列。'],
+  [313, '			thinking: StringEnum([...THINKING_OVERRIDES], {', 'l2', 'thinking 是必填参数，参数说明里教模型按任务难度选。'],
+  [317, '		execute: async (callId, args, _signal, _onUpdate, ctx) => {', 'hit', '<span class="tag inner">run 内循环</span>工具阶段，但几乎不花时间：起进程就返回。'],
+  [336, '			spawnAgent(state, args.task, ctx, { model: args.model, thinking: args.thinking });', 'l3', '“Fire-and-forget”：没有 await，返回的 Promise 被丢弃。'],
+  [339, '				content: [{ type: "text", text: `Subagent #${id} spawned with ${state.model} (${state.thinking} thinking) and is running in background.` }],', 'l3', '工具结果只有这一句；真正的结果以后再来。'],
+  [397, '				state.proc.kill("SIGTERM");', 'l3', 'subagent_remove：本扩展里唯一会 kill 子进程的地方（命令版本同理）。被 kill 的子进程也会触发 close，照样回传一条 error 结果。'],
+  [428, '	pi.registerCommand("sub", {', 'hit', '命令入口（同第 07 篇，循环外）：用户直接派子代理，不经过模型。'],
+  [581, '	pi.on("session_start", async (_event, ctx) => {', 'hit', '<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。'],
+  [583, '		for (const [id, state] of Array.from(agents.entries())) {', 'l3', '⚠ 想 kill 旧子代理，但这是新闭包的 agents，/reload 后总是空的：旧进程变成孤儿。'],
+];
+WT.source(SRC);
+
+// ─────────── 参数解析原码（第 56–113 行） ───────────
+const THINKING_OVERRIDES = ['low', 'medium', 'high', 'xhigh'];
+function readCommandValue(input) {
+  const trimmed = input.trimStart();
+  if (!trimmed) return { rest: '' };
+  const quote = trimmed[0];
+  if (quote === '"' || quote === "'") { const end = trimmed.indexOf(quote, 1); if (end === -1) return { rest: trimmed }; return { value: trimmed.slice(1, end), rest: trimmed.slice(end + 1) }; }
+  const end = trimmed.search(/\s/);
+  return end === -1 ? { value: trimmed, rest: '' } : { value: trimmed.slice(0, end), rest: trimmed.slice(end) };
+}
+function parseCommandOptions(input) {
+  const options = {}; let rest = input.trimStart();
+  while (rest.startsWith('--')) {
+    const flagMatch = rest.match(/^--(model|thinking)(?:=([^\s]+))?(?:\s+|$)/);
+    if (!flagMatch) { const flag = rest.match(/^\S+/)?.[0] || rest; return { options, rest: '', error: `Unknown or malformed option: ${flag}` }; }
+    const flag = flagMatch[1]; let value = flagMatch[2]; rest = rest.slice(flagMatch[0].length);
+    if (!value) { const parsed = readCommandValue(rest); value = parsed.value; rest = parsed.rest; }
+    if (!value) return { options, rest: '', error: `Missing value for --${flag}` };
+    if (flag === 'model') { options.model = value; rest = rest.trimStart(); continue; }
+    const thinking = value.toLowerCase();
+    if (!THINKING_OVERRIDES.includes(thinking)) return { options, rest: '', error: 'Thinking must be one of: low, medium, high, xhigh' };
+    options.thinking = thinking; rest = rest.trimStart();
+  }
+  return { options, rest: rest.trim() };
+}
+
+// ─────────── 双循环动画 ───────────
+// 状态：subs = { id: {status, secs, task, line} }、stale（旧实例是否失效）；补丁 { set: [id, status, secs, task, line] } / { clear } / { stale }
+const SCN = {
+  idle: [
+    ['session', 'session_start', '', {}, '清理（此时本来就是空的），设主题'],
+    ['input', 'input', '', {}, '用户：派个子代理去审查 src/auth，审完告诉我'],
+    ['bas', 'before_agent_start', 'outer', {}, '不改提示词'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：subagent_create(task, thinking: "high")'],
+    ['tools', 'execute → spawn，立即返回', 'inner', { set: [1, 'running', 0, 'review src/auth', ''] }, '工具结果：“#1 spawned … running in background”'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“已经派出 #1，完成后我会告诉你。”'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '主 agent 停稳、空闲'],
+    ['session', '子进程运行中（循环外）', '', { set: [1, 'running', 30, 'review src/auth', 'Checked 12 files…'] }, '与主循环无关：子进程自己的双循环'],
+    ['session', '子进程 close → sendMessage', '', { set: [1, 'done', 42, 'review src/auth', 'Found 2 issues'] }, '主 agent 空闲 → triggerTurn → _startRun（agent-session.ts:2383）'],
+    ['astart', 'agent_start', 'outer', {}, '新 settle 的 run #1：输入是 subagent-result 消息', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“#1 审查完了，发现两个问题：……”'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '第二次 settle 停稳：没有用户输入，是子代理把主 agent 叫起来的'],
+  ],
+  busy: [
+    ['session', 'session_start', '', {}, ''],
+    ['input', 'prompt("/sub 列出所有 TODO")', '', { set: [1, 'running', 0, '列出所有 TODO', ''] }, '命令：循环外直接派出'],
+    ['input', 'input', '', {}, '用户接着问别的：重构 utils.ts'],
+    ['bas', 'before_agent_start', 'outer', {}, ''],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：edit utils.ts'],
+    ['tools', '子进程 close → sendMessage', '', { set: [1, 'done', 18, '列出所有 TODO', '14 TODOs found'] }, '主 agent 正在跑 → deliverAs followUp → agent.followUp（agent-session.ts:2374）'],
+    ['tools', 'tool_execution_end (edit)', 'inner', {}, ''],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“utils.ts 重构完了。”没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, '本该结束：agent-loop.ts:311 取 follow-up，取到 subagent-result'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 3：同一个 run 继续，输入是子代理结果', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“另外，#1 列出了 14 个 TODO：……”'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['aend', 'agent_end', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '一次 settle 里处理了用户的请求和子代理的结果'],
+  ],
+  reload: [
+    ['session', 'session_start', '', {}, ''],
+    ['input', 'prompt("/sub 跑完整测试")', '', { set: [1, 'running', 0, '跑完整测试', ''] }, '派出 #1'],
+    ['session', '/reload → session_shutdown', '', {}, 'agent-session.ts:3723：本扩展没订阅，什么也没做'],
+    ['session', 'oldRunner.invalidate()', '', { stale: true }, 'agent-session.ts:3724：旧扩展实例失效'],
+    ['session', '工厂重跑 → session_start', '', { clear: true }, '新闭包的 agents 是空的：for 循环什么都杀不到；旧子进程继续跑'],
+    ['session', '旧子进程 close', '', {}, '旧闭包：ctx.ui.notify、pi.sendMessage'],
+    ['session', 'sendMessage → assertActive 抛错', '', {}, 'loader.ts:385 → :168 “This extension ctx is stale…”；结果没有送达'],
+  ],
+};
+const foot1 = document.getElementById('foot1'), rc = document.getElementById('rc');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+WT.loops({
+  hit: ['session', 'input', 'tools'],
+  sub: { input: '/sub 等命令', tools: 'subagent_create（立即返回）' },
+  legend: [
+    '橙框 = subagent-widget 用到的位置：session_start、/sub 等命令、tools 格里的 subagent_* 工具。',
+    '子进程 close 后的 sendMessage 不在图里：主 agent 在跑时并入当前 run（turn_end 后的 follow-up），空闲时从 agent_start 起新 settle。',
+  ],
+  scenes: SCN,
+  state: () => ({ subs: {}, stale: false, orphan: false }),
+  onStep(st, s) {
+    if (s.patch.set) { const [id, status, secs, task, line] = s.patch.set; st.subs[id] = { status, secs, task, line }; }
+    if (s.patch.stale) st.stale = true;
+    if (s.patch.clear) { st.orphan = Object.values(st.subs).some(x => x.status === 'running'); st.subs = {}; }
+  },
+  logTag: s => /sub|subagent|session_start|sendMessage|close/.test(s.event) ? '<span class="tag hit">本扩展</span>' : /invalidate|shutdown/.test(s.event) ? '<span class="tag off">Pi</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st) {
+    const rows = [];
+    Object.entries(st.subs).forEach(([id, x]) => {
+      const icon = { running: '●', done: '✓', error: '✗' }[x.status];
+      rows.push([' ' + '─'.repeat(60), 'dim'], [` ${icon} Subagent #${id}  ${x.task}  (${x.secs}s) | Tools: ${Math.floor(x.secs / 6)}`, x.status === 'running' ? 'sw-acc' : 'sw-ok']);
+      if (x.line) rows.push([`   ${x.line}`, 'dim']);
+      rows.push([' ' + '─'.repeat(60), 'dim']);
+    });
+    if (!rows.length) rows.push([st.orphan ? ' （新实例没有任何子代理；旧的 #1 仍在后台运行，无人管理）' : ' （没有子代理）', st.orphan ? 'sw-wrn' : 'dim']);
+    rows.push([' > ', 'dim']);
+    paintLines(foot1, rows);
+    WT.flash(foot1);
+    rc.textContent = st.stale ? '旧扩展实例已失效：它闭包里的 pi.sendMessage 会抛错' : '';
+  },
+  idle() { foot1.textContent = '（还没启动）'; rc.textContent = ''; },
+});
+
+// ─────────── 四层：启动链 + 派出链 + 回传链 ───────────
+const CHIPS = {
+  widget:  ['setWidget("sub-N") × 子代理数', 110, 205, 51, 1],
+  notify:  ['notify（done in 42s）', 327, 140, 51, 1],
+  msgui:   ['聊天区 custom 消息', 479, 135, 51, 1],
+  spawnA:  ['spawnAgent（不 await）', 110, 160, 147, 1],
+  close:   ['close 回调拼结果（269–290）', 282, 190, 147, 1],
+  loader:  ['loader · jiti', 110, 100, 243, 1],
+  reg:     ['registerTool ×4 · cmd ×4 · on', 222, 190, 243, 1],
+  send:    ['pi.sendMessage（assertActive）', 424, 205, 243, 1],
+  sess:    ['AgentSession', 110, 100, 339, 1],
+  exec:    ['工具阶段（立即返回）', 222, 145, 339, 1],
+  scm:     ['sendCustomMessage', 379, 125, 339, 1],
+  follow:  ['followUp → agent-loop:311', 516, 170, 339, 1],
+  newrun:  ['_startRun → 新 settle', 694, 115, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/subagent-widget.ts -e pure-focus.ts -e theme-cycler.ts</code>。<b>还没有任何循环。</b>'],
+  ['loader', '<span class="tag l2">L2</span> jiti 编译并调用工厂（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a>），第 115 行：agents 为空。'],
+  ['reg', '<span class="tag l2">L2</span> 登记 4 个工具、4 个命令和 <code>session_start</code>。没有订阅 <code>session_shutdown</code>。'],
+  ['widget', '<span class="tag l4">L4</span> session_start：清理（空的）、设主题。pure-focus 把页脚清空。<br><b>下面是派出子代理。</b>'],
+  ['exec', '<span class="tag l1">L1</span> 模型调用 subagent_create：<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L842"><code>agent-loop.ts:842</code></a> await execute（第 317 行）。'],
+  ['spawnA', '<span class="tag l3">L3</span> 建状态、建会话文件，调 <code>spawnAgent</code>（第 336 行）<b>不 await</b>；spawnAgent 同步起子进程、设好定时器后返回 Promise。'],
+  ['widget', '<span class="tag l4">L4</span> 挂 <code>sub-1</code> widget，编辑器上方出现 “● Subagent #1”。'],
+  ['exec', '<span class="tag l1">L1</span> execute 立即返回 “spawned … in background”：工具阶段结束，主 agent 的 run 照常往下走，可能就此停稳。'],
+  ['close', '<span class="tag l3">L3</span> 子进程在循环外运行，text_delta 和定时器不断重装 widget。<br><b>下面是子进程结束之后。</b>'],
+  ['notify', '<span class="tag l4">L4</span> <code>close</code> 回调（第 269 行）：状态改 done，notify “Subagent #1 done in 42s”。'],
+  ['send', '<span class="tag l2">L2</span> 第 283 行 <code>pi.sendMessage</code>：<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L384"><code>loader.ts:384</code></a> 先 <code>assertActive</code>（扩展已失效就在这里抛错）。'],
+  ['scm', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2357"><code>sendCustomMessage</code></a> 看主 agent 当前状态决定走哪条路。'],
+  ['follow', '<span class="tag l1">L1</span> 在跑：<code>agent.followUp</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2374"><code>:2374</code></a>），run 将要结束时被取走（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L311"><code>agent-loop.ts:311</code></a>），内循环再转一个 turn。'],
+  ['newrun', '<span class="tag l1">L1</span> 空闲：<code>triggerTurn</code> → <code>_startRun({ messageType: "custom" })</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2383"><code>:2383</code></a>）：一次新的 settle，没有用户输入。'],
+  ['msgui', '<span class="tag l4">L4</span> 聊天区出现 subagent-result 消息（display: true），主 agent 接着回应。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器 ───────────
+const $ = id => document.getElementById(id);
+[
+  ['list files and summarize', '只有任务'],
+  ['--model openai/gpt-5 --thinking high review this code', '两个参数'],
+  ['--thinking=xhigh write tests', '= 写法'],
+  ['--model "openrouter/x y" refactor', '带引号'],
+  ['--thinking max go', '非法 thinking'],
+  ['--temp 0.2 hi', '未知参数'],
+].forEach(([cmd, tag]) => {
+  const b = document.createElement('button'); b.textContent = tag;
+  b.onclick = () => { $('m-cmd').value = cmd; drawSim(); };
+  $('m-presets').appendChild(b);
+});
+function drawSim() {
+  const p = parseCommandOptions($('m-cmd').value), rows = [];
+  if (p.error) rows.push([` 解析失败：${p.error}`, 'sw-wrn'], [' （notify 报错，不派出）', 'dim']);
+  else if (!p.rest) rows.push([' 没有任务：notify 用法说明', 'sw-wrn']);
+  else {
+    rows.push([` model    = ${p.options.model || '（主 agent 当前模型）'}`, 'dim'], [` thinking = ${p.options.thinking || '（主 agent 当前 thinking）'}`, 'dim'], [` task     = ${p.rest}`, 'sw-ok']);
+    rows.push(['', ''], [` pi --mode json -p --session ~/.pi/agent/sessions/subagents/subagent-1-….jsonl --no-extensions --model ${p.options.model || '…'} --tools read,bash,grep,find,ls --thinking ${p.options.thinking || '…'} "${p.rest}"`, 'sw-acc']);
+    rows.push(['', ''], [' 子代理结束时：', 'acc']);
+    const st = $('m-state').value;
+    if (st === 'idle') rows.push(['  sendMessage → 不在跑 + triggerTurn → _startRun：起一次新的 settle，主 agent 回应结果', 'sw-ok']);
+    else if (st === 'busy') rows.push(['  sendMessage → 在跑 → deliverAs followUp → agent.followUp：当前 run 将要结束时取走，多转一个 turn', 'sw-ok']);
+    else rows.push(['  旧闭包的 pi.sendMessage → assertActive → throw "This extension ctx is stale…"：结果丢失，异常无人捕获（推断）', 'sw-wrn']);
+  }
+  paintLines($('m-out'), rows);
+  WT.flash($('m-out'));
+  $('m-note').textContent = $('m-state').value === 'reloaded' ? '修法：订阅 session_shutdown（在 invalidate 之前发出），在那里 kill 所有子进程' : '';
+}
+['m-cmd', 'm-state'].forEach(id => $(id).addEventListener('input', drawSim));
+drawSim();
+</script>
+</body>
+</html>
