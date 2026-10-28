@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阅读指南 · 双循环与回调点</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<!--
+  这是一篇会持续增补的阅读指南。维护约定：
+  - 新增一节：加一个带 id 的 <h2>（右侧目录自动出现），放在“更新记录”之前；在“更新记录”里加一行。
+  - 新写一篇走读：在下方脚本的 PAGES 里追加一行（hit / sub 照抄那一篇的 WT.loops，on 填扩展真实的 pi.on 事件），
+    对照表、选择器和“这一步叫到谁”都由 PAGES 生成，不用改 HTML。
+  - 底图本身（节点、箭头）只在 assets/walkthrough.js 里改，这里不复制。
+-->
+<main>
+<header class="lesson">
+<div class="kicker">走读 · 阅读指南</div>
+<h1>怎么读“双循环与回调点”</h1>
+<p class="subtitle">18 篇走读的“双循环与回调点”这张图看起来几乎一模一样。这是故意的：图里画的是 Pi，不是扩展。这篇讲清楚哪些部分每篇都一样、哪些不一样，以及读图时容易看错的地方。</p>
+</header>
+
+<!-- ═══════════ 为什么一样 ═══════════ -->
+<h2 id="why">为什么每篇的图都一样</h2>
+<p>图里的两个框是 Pi 自己的运行流程：</p>
+<ul>
+<li><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：用户一次回车，可能起好几个 run，直到没有续跑的理由才停稳。</li>
+<li><span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，有工具调用就执行工具，再进下一个 turn。</li>
+</ul>
+<p>扩展改不了这两个循环的形状，只能在沿途发出的事件上挂回调。所以节点和箭头对任何扩展都一样，每篇只是在上面标出“我挂在哪”。这张图由共用脚本 <code>WT.loops()</code> 统一生成，每篇只声明三样东西：</p>
+<div class="grid c3">
+  <div class="card"><h3 style="margin-top:0">① 橙框（hit）</h3><p>本扩展用到的节点。<b>每篇真正不同的地方主要在这里。</b></p></div>
+  <div class="card"><h3 style="margin-top:0">② 格子里的小字（sub）</h3><p>默认写节点的通用含义；扩展用到的格子会改写成“扩展在这里做什么”。</p></div>
+  <div class="card"><h3 style="margin-top:0">③ 图例（legend）</h3><p>图下方的说明：橙框各是什么，以及<b>不在图里</b>的回调，比如 <code>render()</code>。</p></div>
+</div>
+
+<!-- ═══════════ 底图 ═══════════ -->
+<h2 id="map">底图：13 个节点</h2>
+<p>先选一个扩展，图会换成那一篇的橙框和小字；再播放场景，看圆点每走一步会叫到哪些扩展。不选扩展时，看到的就是没有任何橙框的底图。</p>
+
+<div class="controls">
+  <label class="small muted" for="ext">按扩展高亮</label>
+  <select id="ext"></select>
+</div>
+<div class="fig fig-scroll" id="loops-fig"></div>
+<div class="controls">
+  <select id="scn">
+    <option value="full">场景 A：带工具的 2 个 turn，外加扩展续跑的第 2 个 run</option>
+    <option value="cmd">场景 B：斜杠命令，在 prompt() 入口就被截走</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="card" id="who"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>节点</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>session_start</code></td><td>循环外</td><td>启动 1 次</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a></td><td>/reload 时会再发一次。走读里这一格也代表 <code>session_shutdown</code>、<code>session_tree</code> 这类会话事件</td></tr>
+<tr><td><code>input</code></td><td>循环外 · 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a></td><td>扩展可以改写输入，或者返回 handled 让这次 settle 根本不开始</td></tr>
+<tr><td><code>before_agent_start</code></td><td><span class="tag outer">外</span> 入口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1935"><code>agent-session.ts:1935</code></a></td><td>改系统提示词的地方，只对本次 settle 有效</td></tr>
+<tr><td><code>agent_start</code></td><td><span class="tag outer">外</span> 每 run</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L126"><code>agent-loop.ts:126</code></a></td><td>一个 run 开始</td></tr>
+<tr><td><code>turn_start</code> · <code>turn_end</code></td><td><span class="tag inner">内</span> 每 turn</td><td>M</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L216"><code>agent-loop.ts:216</code></a> · <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L296"><code>agent-loop.ts:296</code></a></td><td>两处都会吸收 steering 消息</td></tr>
+<tr><td><code>context → LLM</code></td><td><span class="tag inner">内</span> 每次调模型</td><td>M</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L400"><code>agent-loop.ts:400</code></a></td><td>transformContext 在这里把消息投影成 LLM 请求</td></tr>
+<tr><td><code>message_*</code></td><td><span class="tag inner">内</span> 流式</td><td>多</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L430"><code>agent-loop.ts:430</code></a></td><td>start / update / end</td></tr>
+<tr><td><code>tool_call/result</code></td><td><span class="tag inner">内</span> 工具阶段</td><td>多</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L668"><code>agent-session.ts:668</code></a></td><td>一格里包含 <code>tool_call</code>（执行前，可 block）、工具本身的执行、<code>tool_execution_end</code></td></tr>
+<tr><td><code>agent_end</code></td><td><span class="tag outer">外</span> 每 run</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a></td><td>run 结束。扩展在这里排进消息，外循环就会再起一个 run</td></tr>
+<tr><td><code>_handlePostAgentRun</code></td><td><span class="tag outer">外</span> 每 run 末</td><td>N</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1979"><code>agent-session.ts:1979</code></a></td><td>不是扩展事件，是 Pi 自己判断要不要续跑：retry、compaction、有排队消息</td></tr>
+<tr><td><code>agent_before_settle</code></td><td><span class="tag outer">外</span> 每 run 末</td><td>≤ N</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2017"><code>agent-session.ts:2017</code></a></td><td>扩展最后一次要求 continue 的机会</td></tr>
+<tr><td><code>agent_settled</code></td><td><span class="tag outer">外</span> 出口</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1084"><code>agent-session.ts:1084</code></a></td><td>外循环退出，回到空闲</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 读法 ═══════════ -->
+<h2 id="how">四步读法</h2>
+<ol>
+<li><b>先看橙框落在哪。</b>橙框在外循环入口（<code>input</code>、<code>before_agent_start</code>），说明扩展管的是“这次提问怎么开始”；在内循环的工具格，说明它管每一次工具调用；在 <code>agent_end</code>，说明它会影响“要不要再跑一个 run”。</li>
+<li><b>再看橙框里的小字。</b>同样是工具格，damage-control 写的是 “tool_call（执行前，可 block）”，tool-counter 写的是 “tool_execution_end”。一个在工具执行前拦，一个在执行后计数，时机完全不同。</li>
+<li><b>然后看图例。</b>页脚、widget 的 <code>render()</code>，以及快捷键，都不走双循环，图里画不出来，只会写在图例里。只挂 <code>session_start</code> 的扩展（minimal、pure-focus），主要工作其实都在图例里提到的 <code>render()</code> 中。</li>
+<li><b>最后播放场景，盯住 run / turn 计数。</b>计数器里 run 变成 2，说明外循环转了第二圈，这是扩展能不能“催续跑”的直接证据。tilldone 那篇第一次出现这种情况。</li>
+</ol>
+
+<!-- ═══════════ 对照表 ═══════════ -->
+<h2 id="compare">18 篇的橙框对照</h2>
+<p>“实际订阅”一列来自扩展源码里的 <code>pi.on(…)</code>（用 grep 统计）。它和橙框不一定一一对应，原因见下一节。</p>
+<div class="tbl"><table>
+<thead><tr><th>#</th><th>扩展</th><th>橙框</th><th>实际订阅</th><th>读图要点</th></tr></thead>
+<tbody id="cmp"></tbody>
+</table></div>
+<p class="small muted">18 篇里从没亮过的节点：<code>agent_start</code>、<code>turn_start</code> / <code>turn_end</code>、<code>context → LLM</code>、<code>message_*</code>、<code>agent_before_settle</code>、<code>agent_settled</code>。这些插口 Pi 都提供了，只是这批扩展没用到。</p>
+
+<!-- ═══════════ 误读 ═══════════ -->
+<h2 id="pitfalls">容易看错的地方</h2>
+<div class="callout warn"><b>橙色的 input 格不一定表示订阅了 input 事件。</b>session-replay、theme-cycler、system-select、cross-agent、subagent-widget 都没有 <code>pi.on("input")</code>，它们注册的是斜杠命令。命令在 <code>prompt()</code> 入口、input 事件之前就被截走并执行（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2101"><code>agent-session.ts:2101</code></a>），不起 run。图上没有单独的“命令”节点，所以借用了离它最近的 input 格，并把小字改成 “prompt() 截走 /xxx”。真正订阅 input 事件的只有 purpose-gate 和 tilldone。读的时候看小字，别只看颜色。</div>
+<div class="callout"><b>session 格代表一组事件。</b>theme-cycler、coms、coms-net 还订阅了 <code>session_shutdown</code>，tilldone 还订阅了 <code>session_tree</code>、<code>session_fork</code>、<code>session_switch</code>。图上只有一个 <code>session_start</code> 格，这些事件都算在它头上，具体是哪个要看小字或图例。</div>
+<div class="callout"><b>工具格也包含扩展自己注册的工具。</b>agent-team、agent-chain、pi-pi 没有订阅任何 <code>tool_*</code> 事件，工具格亮是因为它们用 <code>registerTool</code> 注册的工具在这一格里执行。这些工具会再起子 pi 进程，每个子进程又有自己完整的一套双循环，这一层嵌套图上画不出来。</div>
+<div class="callout"><b>快捷键和循环外的消息也不在图里。</b>theme-cycler 的快捷键在编辑器里就被拦下（<a href="../../../../../vendor/pi/packages/coding-agent/src/modes/interactive/components/custom-editor.ts#L90"><code>custom-editor.ts:90</code></a>），根本不经过 <code>prompt()</code>。subagent-widget、coms、coms-net 在循环外（子进程退出、socket 或 SSE 回调里）调 <code>sendMessage</code> 唤醒 agent，入口同样不在图上。</div>
+
+<!-- ═══════════ 更新记录 ═══════════ -->
+<h2 id="changelog">更新记录</h2>
+<ul class="small">
+<li>2026-10-28 · 初版：为什么一样、13 个节点、四步读法、18 篇对照、容易看错的地方。</li>
+</ul>
+
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// ─────────── 每篇走读的挂点 ───────────
+// hit / sub 照抄各篇的 WT.loops；on = 扩展源码里真实的 pi.on 事件；tip = 读图要点
+const PAGES = [
+  { n: '01', name: 'minimal', hit: ['session'], sub: {}, on: 'session_start', tip: '图里只亮 session_start，页脚 render() 每帧拉取数据，写在图例里' },
+  { n: '02', name: 'pure-focus', hit: ['session'], sub: { session: '启动 / reload · 循环外' }, on: 'session_start', tip: '同 01：用 setFooter 顶掉内置页脚' },
+  { n: '03', name: 'tool-counter-widget', hit: ['session', 'tools'], sub: { tools: 'tool_execution_end' }, on: 'session_start · tool_execution_end', tip: '第一次订阅内循环事件：工具执行完才计数' },
+  { n: '04', name: 'tool-counter', hit: ['session', 'tools'], sub: { tools: 'tool_execution_end' }, on: 'session_start · tool_execution_end', tip: '同 03；token 和成本由页脚 render 现读' },
+  { n: '05', name: 'damage-control', hit: ['session', 'tools'], sub: { tools: 'tool_call（执行前，可 block）' }, on: 'session_start · tool_call', tip: '和 03 同一格，时机相反：执行前拦截' },
+  { n: '06', name: 'damage-control-continue', hit: ['session', 'tools'], sub: { tools: 'tool_call（执行前，可 block）' }, on: 'session_start · tool_call', tip: '和 05 同图；不 abort，所以内循环会继续下一个 turn' },
+  { n: '07', name: 'session-replay', hit: ['session', 'input'], sub: { input: 'prompt() 截走 /replay' }, on: 'session_start', tip: 'input 格是借用：命令被截走，不起 run' },
+  { n: '08', name: 'cross-agent', hit: ['session', 'input'], sub: { session: '加载时注册 · session_start', input: '命令 → sendUserMessage' }, on: 'session_start', tip: 'input 格是借用；命令再调 sendUserMessage，第二次进 prompt() 才起 settle' },
+  { n: '09', name: 'theme-cycler', hit: ['session', 'input'], sub: { session: 'session_start / _shutdown', input: 'prompt() 截走 /theme' }, on: 'session_start · session_shutdown', tip: 'input 格是借用；快捷键在编辑器里拦下，不在图里' },
+  { n: '10', name: 'system-select', hit: ['session', 'input', 'bas'], sub: { input: 'prompt() 截走 /system', bas: '返回 systemPrompt' }, on: 'session_start · before_agent_start', tip: 'input 格是借用；before_agent_start 换系统提示词' },
+  { n: '11', name: 'purpose-gate', hit: ['session', 'input', 'bas'], sub: { input: 'input：handled / continue', bas: '追加 <purpose>' }, on: 'session_start · input · before_agent_start', tip: '第一次真正订阅 input：handled 时 settle 不开始' },
+  { n: '12', name: 'tilldone', hit: ['session', 'input', 'tools', 'aend'], sub: { input: 'input：重置“已催过”', tools: 'tool_call 门 + tilldone 工具', aend: 'agent_end → 催办续跑' }, on: 'session_start · session_tree · session_fork · session_switch · input · tool_call · agent_end', tip: '唯一 4 格全亮；agent_end 让外循环转第二圈' },
+  { n: '13', name: 'agent-team', hit: ['session', 'bas', 'tools'], sub: { bas: '整个替换 systemPrompt', tools: 'dispatch_agent → 子 pi 进程' }, on: 'session_start · before_agent_start', tip: '工具格亮是因为自注册工具；里面嵌套子进程的双循环' },
+  { n: '14', name: 'agent-chain', hit: ['session', 'bas', 'tools'], sub: { bas: '整个替换 systemPrompt', tools: 'run_chain → N 个子进程（串行）' }, on: 'session_start · before_agent_start', tip: '同 13，子进程串行' },
+  { n: '15', name: 'pi-pi', hit: ['session', 'bas', 'tools'], sub: { bas: '读模板，整个替换', tools: 'query_experts → N 个子进程（并行）' }, on: 'session_start · before_agent_start', tip: '同 13，子进程并行' },
+  { n: '16', name: 'subagent-widget', hit: ['session', 'input', 'tools'], sub: { input: '/sub 等命令', tools: 'subagent_create（立即返回）' }, on: 'session_start', tip: '工具立即返回；子进程在循环外跑完再 sendMessage 唤醒' },
+  { n: '17', name: 'coms', hit: ['session', 'tools', 'aend'], sub: { session: 'session_start / socket 回调', tools: 'coms_send / coms_await', aend: 'agent_end → 回传' }, on: 'session_start · session_shutdown · agent_end', tip: '消息从循环外的 socket 进来；agent_end 把回答传回去' },
+  { n: '18', name: 'coms-net', hit: ['session', 'tools', 'aend'], sub: { session: 'session_start / SSE 读循环', tools: 'coms_net_send / await', aend: 'agent_end → POST 回答' }, on: 'session_start · session_shutdown · agent_end', tip: '挂点同 17，传输换成 SSE' },
+];
+const LABEL = { session: 'session', input: 'input', bas: 'before_agent_start', tools: 'tools', aend: 'agent_end' };
+
+// ─────────── 对照表 ───────────
+PAGES.forEach(p => {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${p.n}</td><td><a href="${p.name}.html"><code></code></a></td><td></td><td class="small"></td><td></td>`;
+  tr.querySelector('code').textContent = p.name + '.ts';
+  tr.children[2].innerHTML = p.hit.map(k => `<span class="tag hit">${LABEL[k] || k}</span>`).join(' ');
+  tr.children[3].textContent = p.on;
+  tr.children[4].textContent = p.tip;
+  $('cmp').appendChild(tr);
+});
+
+// ─────────── 双循环（底图 + 按扩展高亮） ───────────
+// [节点, 事件, 循环, 状态补丁, 说明, run+, turn+]
+const SCN = {
+  full: [
+    ['session', 'session_start', '', {}, '启动时 1 次，在循环外'],
+    ['input', 'input', '', {}, '用户回车'],
+    ['bas', 'before_agent_start', 'outer', {}, '每次 settle 1 次'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_*', 'inner', {}, '模型要调工具'],
+    ['tools', 'tool_call → 执行 → tool_execution_end', 'inner', {}, ''],
+    ['tend', 'turn_end', 'inner', {}, '有工具结果 → 下一 turn'],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_*', 'inner', {}, '没有工具调用'],
+    ['tend', 'turn_end', 'inner', {}, '什么都没了 → run 结束'],
+    ['aend', 'agent_end', 'outer', {}, '假设有扩展在这里排进一条消息'],
+    ['post', '_handlePostAgentRun', 'outer', {}, '看到排队消息 → agent.continue()'],
+    ['astart', 'agent_start', 'outer', {}, 'run #2：外循环转第二圈', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, ''],
+    ['msg', 'message_*', 'inner', {}, ''],
+    ['tend', 'turn_end', 'inner', {}, 'run 结束'],
+    ['aend', 'agent_end', 'outer', {}, '这次没有再排消息'],
+    ['post', '_handlePostAgentRun', 'outer', {}, '不续跑'],
+    ['settle', 'agent_before_settle', 'outer', {}, '没有扩展要求 continue'],
+    ['settled', 'agent_settled', 'outer', {}, '外循环退出 → 空闲'],
+  ],
+  cmd: [
+    ['session', 'session_start', '', {}, '启动时 1 次'],
+    ['input', 'prompt() 截走 /命令', '', {}, '命令 handler 执行完就返回：没有 input 事件，也没有 run'],
+  ],
+};
+
+const who = $('who');
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function current() { return PAGES.find(p => p.name === $('ext').value); }
+function describe(node) {
+  const using = PAGES.filter(p => p.hit.includes(node));
+  const p = current();
+  const mine = p ? (p.hit.includes(node)
+    ? `<b>${p.name} 在这里被叫到</b>：${esc(p.sub[node] || '见那一篇的图例')}。`
+    : `${p.name} 在这一步不做事。`) : '';
+  const list = using.length ? using.map(x => x.name).join('、') : '18 篇里没有扩展挂在这里';
+  return `${mine} 这一格亮橙框的走读：${list}。`;
+}
+
+WT.loops({
+  hit: [],
+  legend: ['橙框 = 上方所选扩展用到的回调；不选扩展时就是 18 篇共用的底图。',
+    '页脚 / widget 的 render()、快捷键、循环外的 sendMessage 都不在图里，看各篇图例。'],
+  scenes: SCN,
+  state: () => ({}),
+  preview(st, s) { who.innerHTML = describe(s.node); WT.flash(who); },
+  idle() { who.innerHTML = '<span class="muted">按 ▶ 播放或单步，这里会列出当前这一步会叫到哪些扩展。</span>'; },
+});
+
+// 默认小字取自底图，切换扩展时先还原再覆盖
+const DEFAULT_SUB = {};
+document.querySelectorAll('#loops-fig [id^="n-"]').forEach(g => { DEFAULT_SUB[g.id.slice(2)] = g.querySelectorAll('text')[1].textContent; });
+function applyExt() {
+  const p = current();
+  Object.keys(DEFAULT_SUB).forEach(k => {
+    const g = $('n-' + k);
+    g.classList.toggle('hit', !!p && p.hit.includes(k));
+    g.querySelectorAll('text')[1].textContent = (p && p.sub[k]) || DEFAULT_SUB[k];
+  });
+}
+const sel = $('ext');
+sel.innerHTML = '<option value="">（不选：只看底图）</option>' +
+  PAGES.map(p => `<option value="${p.name}">${p.n} · ${p.name}</option>`).join('');
+sel.onchange = applyExt;
+</script>
+</body>
+</html>

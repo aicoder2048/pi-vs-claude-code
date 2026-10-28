@@ -8,6 +8,10 @@
     title: "Pi 扩展走读",
     edition: "Pi v1.4.0",
     home: "index.html",
+    // 阅读指南：跨篇通用的读法，会持续增补。新加一篇指南就在这里加一行。
+    guides: [
+      { title: "怎么读双循环与回调点", href: "guide-loops.html" },
+    ],
     walks: [
       { n: "01", title: "minimal.ts", href: "minimal.html" },
       { n: "02", title: "pure-focus.ts", href: "pure-focus.html" },
@@ -89,6 +93,7 @@
       el("details", { open: "" }, el("summary", {}, "走读目录"),
         el("nav", { "aria-label": "走读目录" },
           el("h2", {}, "总览"), list([{ title: "目录与阅读方法", href: WALK.home }]),
+          el("h2", {}, "阅读指南"), list(WALK.guides),
           el("h2", {}, "走读"), list(WALK.walks),
           el("h2", {}, "参考课程"), list(WALK.lessons))));
 
