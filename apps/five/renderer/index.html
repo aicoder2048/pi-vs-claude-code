@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; worker-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'"
+    />
+    <title>拾伍 · 五子棋</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"
+          ><i></i><i></i><i></i><i></i
+        ></span>
+        <div>
+          <h1>拾伍<span>五子棋</span></h1>
+          <p>FIVE IN A ROW</p>
+        </div>
+      </div>
+      <div class="header-note">
+        <span class="live-dot"></span>离线对弈
+        <span class="divider">/</span> 人与棋的片刻专注
+      </div>
+      <button
+        id="sound"
+        class="icon-button"
+        type="button"
+        aria-label="关闭落子音效"
+        aria-pressed="true"
+        title="切换落子音效"
+      >
+        ♫
+      </button>
+    </header>
+
+    <main class="layout">
+      <section class="play-area" aria-label="五子棋对弈区">
+        <div class="board-heading">
+          <div>
+            <span class="eyebrow">THE BOARD</span>
+            <h2>落子之间，自有天地。</h2>
+          </div>
+          <span class="rule-chip">15 路 · 自由五子棋</span>
+        </div>
+        <div class="board-frame">
+          <canvas
+            id="board"
+            tabindex="0"
+            role="grid"
+            aria-label="15乘15五子棋棋盘，方向键移动，回车或空格落子"
+          ></canvas>
+        </div>
+        <div class="board-footer">
+          <span
+            ><i class="tiny-cross" aria-hidden="true">⌖</i>
+            <span id="last-move">黑棋先行，落子无悔亦可悔</span></span
+          ><span id="move-count">第 00 手</span>
+        </div>
+        <p class="keyboard-tip">
+          点击交叉点落子 <span>·</span> 方向键移动，Enter 落子
+          <span>·</span> Ctrl / ⌘ Z 悔棋
+        </p>
+        <section class="music-panel" aria-label="背景音乐">
+          <div class="music-info">
+            <span class="music-note" aria-hidden="true">♬</span>
+            <div>
+              <label for="music-mode">听一点，慢下来</label
+              ><small id="music-status">本地合成 · 离线可听</small>
+            </div>
+          </div>
+          <select id="music-mode" aria-label="背景音乐风格">
+            <option value="off">音乐关闭</option>
+            <option value="piano">轻柔钢琴</option>
+            <option value="jazz">慢爵士</option>
+          </select>
+          <div class="volume-control">
+            <label for="music-volume">音量</label
+            ><input
+              id="music-volume"
+              type="range"
+              min="0"
+              max="100"
+              value="30"
+              aria-label="背景音乐音量"
+            /><output id="volume-label" for="music-volume">30%</output>
+          </div>
+        </section>
+      </section>
+
+      <aside class="sidebar" aria-label="对局设置">
+        <section class="status-card" aria-live="polite" aria-atomic="true">
+          <div class="status-top">
+            <span class="eyebrow">CURRENT GAME</span
+            ><span id="game-badge" class="status-badge">进行中</span>
+          </div>
+          <div class="turn-heading">
+            <span id="turn-stone" class="stone black"></span>
+            <h2 id="status-title">轮到你了</h2>
+          </div>
+          <p id="status-detail">执黑先行，开启这一局。</p>
+          <div class="players">
+            <div id="human-player" class="player active">
+              <span class="player-avatar">你</span>
+              <div>
+                <strong>你</strong><small id="human-color">黑棋 · 先手</small>
+              </div>
+              <span class="player-dot black"></span>
+            </div>
+            <div id="ai-player" class="player">
+              <span class="player-avatar ai-avatar">弈</span>
+              <div>
+                <strong>拾伍 AI</strong
+                ><small id="ai-level">进阶 · 从容应战</small>
+              </div>
+              <span id="ai-color-dot" class="player-dot white"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-card">
+          <div class="section-heading">
+            <h3>对弈设置</h3>
+            <span>YOUR PREFERENCE</span>
+          </div>
+          <fieldset>
+            <legend>对手难度</legend>
+            <div class="difficulty" role="group" aria-label="对手难度">
+              <button type="button" data-level="easy" aria-pressed="false">
+                <span>入门</span><small>轻松一局</small></button
+              ><button type="button" data-level="medium" aria-pressed="true">
+                <span>进阶</span><small>见招拆招</small></button
+              ><button type="button" data-level="hard" aria-pressed="false">
+                <span>高手</span><small>步步为营</small>
+              </button>
+            </div>
+            <p id="difficulty-detail" class="setting-help">
+              攻守兼备，提前推演对手的下一步。
+            </p>
+          </fieldset>
+          <fieldset>
+            <legend>你的执子</legend>
+            <div class="color-picker" role="group" aria-label="你的执子">
+              <button type="button" data-color="1" aria-pressed="true">
+                <span class="mini-stone black"></span>黑棋先手</button
+              ><button type="button" data-color="2" aria-pressed="false">
+                <span class="mini-stone white"></span>白棋后手
+              </button>
+            </div>
+          </fieldset>
+          <label class="toggle-row" for="numbers"
+            ><span>显示落子顺序</span
+            ><input id="numbers" type="checkbox" /><span
+              class="toggle"
+              aria-hidden="true"
+            ></span
+          ></label>
+          <button id="new-game" type="button" class="primary-button">
+            <span aria-hidden="true">↻</span> 开始新一局
+          </button>
+          <button id="undo" type="button" class="secondary-button" disabled>
+            <span aria-hidden="true">↶</span> 悔一步
+          </button>
+        </section>
+        <div class="wisdom">
+          <span class="wisdom-mark" aria-hidden="true">五</span>
+          <p>
+            纵横十五道，黑白两相知。<small
+              >任意方向，五子连珠即胜。无禁手。</small
+            >
+          </p>
+        </div>
+        <p id="save-status" class="save-status">对局自动保存在本机</p>
+      </aside>
+    </main>
+    <footer class="app-footer">
+      <span>拾伍 <span class="footer-dot">·</span> 一方棋盘，一刻闲心</span
+      ><span>无需联网 · 不设禁手 · 长连获胜</span>
+    </footer>
+    <dialog
+      id="confirm-dialog"
+      aria-labelledby="dialog-title"
+      aria-describedby="dialog-description"
+    >
+      <div class="dialog-symbol">↻</div>
+      <h2 id="dialog-title">重新开始这一局？</h2>
+      <p id="dialog-description">当前棋局将被清空，开启一场新的对弈。</p>
+      <div class="dialog-actions">
+        <button id="cancel-reset" class="secondary-button" type="button">
+          继续对弈</button
+        ><button id="confirm-reset" class="primary-button" type="button">
+          开始新局
+        </button>
+      </div>
+    </dialog>
+    <div id="toast" role="status" class="toast" hidden></div>
+    <script type="module" src="app.mjs"></script>
+  </body>
+</html>
