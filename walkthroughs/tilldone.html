@@ -172,7 +172,7 @@ tilldone 两层循环都挂了：<b>run 内循环</b>里，<code>tool_call</code
 <div class="callout"><b>和其他扩展叠加。</b>tilldone 每次 refreshUI 都重新 <code>setFooter</code>（第 297 行），页脚槽是“最后一个赢”（第 02 篇），所以只要 agent 动一下任务，tilldone 就会把别的扩展（minimal、tool-counter）的页脚抢回来，也会挡住 theme-cycler 的状态。<code>tool_call</code> 门和第 05 篇 damage-control 叠加时，谁先 <code>-e</code> 谁先问，任何一个 block 就生效。</div>
 
 <h2 id="sum">小结</h2>
-<p>tilldone 把扩展能挂的位置几乎用了一遍：用 <code>registerTool</code> 给模型一个新工具，用 <code>tool_call</code> 在 run 内循环里设门，用工具结果的 <code>details</code> 把状态存进会话树，用 <code>agent_end</code> + <code>triggerTurn</code> 让 settle 外循环再转一圈，再用 <code>input</code> 给续跑节流。下一篇 <code>agent-team.ts</code> 换到编排：注册的工具会启动子代理，并用 <code>setActiveTools</code> 控制主 agent 能做什么。</p>
+<p>tilldone 把扩展能挂的位置几乎用了一遍：用 <code>registerTool</code> 给模型一个新工具，用 <code>tool_call</code> 在 run 内循环里设门，用工具结果的 <code>details</code> 把状态存进会话树，用 <code>agent_end</code> + <code>triggerTurn</code> 让 settle 外循环再转一圈，再用 <code>input</code> 给续跑节流。下一篇 12-b 是它的四层重写：同样的挂点，代码按 L2 / L3 / L4 分进三个文件，并修掉这一篇标出的 B1–B3。</p>
 
 </main>
 

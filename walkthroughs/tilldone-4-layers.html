@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tilldone/ 四层版 走读</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+</head>
+<body>
+<main>
+<header class="lesson">
+<div class="kicker">扩展走读 · 12-b</div>
+<h1>tilldone/（四层版）</h1>
+<p class="subtitle">第 12 篇 <code>tilldone.ts</code> 的四层重写。挂在 Pi 上的位置一个没变，给模型看的每个字也没变；变的是这些回调背后的代码住在哪一层：726 行的单文件拆成 <code>index.ts</code>（L2 胶水）、<code>state.ts</code>（L3 纯逻辑）、<code>ui.ts</code>（L4 渲染）三个文件，顺带修掉第 12 篇标出的 B1–B3。设计来源：<code>discussions/2026-10-28-four-layer-harness.md</code> 第 6 节。<br>运行：<code>just ext-tilldone-4layer</code>（即 <code>pi -e extensions/tilldone</code>，同时加载 theme-cycler）</p>
+</header>
+
+<!-- ═══════════ 源码 ═══════════ -->
+<h2 id="src">源码</h2>
+<p class="small muted">这一篇的层标签正好对应文件：<span class="tag l2">L2</span> 都在 <code>index.ts</code>，<span class="tag l3">L3</span> 都在 <code>state.ts</code>，<span class="tag l4">L4</span> 都在 <code>ui.ts</code>。行号是各自文件里的行号，点一行看解释。</p>
+<div class="tbl"><table>
+<thead><tr><th>文件</th><th>层</th><th>行数</th><th>装了什么</th><th>import 了谁</th></tr></thead>
+<tbody>
+<tr><td><a href="../extensions/tilldone/index.ts#L29"><code>index.ts</code></a></td><td><span class="tag l2">L2</span></td><td>95</td><td>唯一的可变状态 <code>model</code>、5 个 <code>pi.on</code>、工具和命令注册</td><td>Pi、typebox、themeMap、state、ui</td></tr>
+<tr><td><a href="../extensions/tilldone/state.ts#L109"><code>state.ts</code></a></td><td><span class="tag l3">L3</span></td><td>379</td><td>类型、纯转移函数、门、催办、快照 / 恢复边界、所有给模型看的字符串</td><td><b>什么都不 import</b></td></tr>
+<tr><td><a href="../extensions/tilldone/ui.ts#L21"><code>ui.ts</code></a></td><td><span class="tag l4">L4</span></td><td>247</td><td>状态条、widget、页脚、工具结果行、<code>/tilldone</code> 面板</td><td>Pi UI、pi-tui；从 state 只取类型、两个选择器和图标表</td></tr>
+<tr><td><code>package.json</code></td><td>–</td><td>4</td><td>告诉 Pi 这个目录的入口是 <code>./index.ts</code>（原因见 ① 末尾）</td><td>–</td></tr>
+</tbody></table></div>
+<div class="src" id="src-lines"></div>
+<div class="card explain" id="src-explain"><span class="muted">← 点一行</span></div>
+
+<!-- ═══════════ 双循环 ═══════════ -->
+<h2 id="loops">双循环与回调点</h2>
+<p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳。
+<span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
+挂点和第 12 篇完全相同，只有两处不同：去掉了 1.4.0 里不存在的 <code>session_switch</code> / <code>session_fork</code>；工具声明了 <code>executionMode: "sequential"</code>，于是同一批工具调用改成<b>逐个</b>准备、逐个执行。场景 A 演示这个改变，场景 B 演示确认框怎样被拆成“L3 问 → L4 弹框 → L3 再算”。</p>
+
+<div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
+
+<div class="controls">
+  <select id="scn">
+    <option value="batch">场景 A：同一条回复里 toggle + read，sequential 后 read 放行</option>
+    <option value="confirm">场景 B：clear 有任务时的两阶段确认，再到 agent_end 催办</option>
+  </select>
+  <button class="primary" id="play">▶ 播放</button>
+  <button id="step">单步</button>
+  <button id="reset">重置</button>
+  <span class="counter" id="ctr">run 0 · turn 0</span>
+</div>
+<div class="small muted">这一步经过的文件（亮色 = 本步调用到的函数）</div><div class="term" id="trace1"></div>
+<div class="small muted" style="margin-top:10px">事件日志</div><ul class="log" id="log1"></ul>
+
+<div class="tbl"><table>
+<thead><tr><th>回调</th><th>循环位置</th><th>每次 settle</th><th>发出位置</th><th>L2 收到后交给谁</th></tr></thead>
+<tbody>
+<tr class="hl"><td><code>session_start</code> · <code>session_tree</code></td><td>循环外</td><td>启动 1 次 · /tree 时 1 次</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L4202"><code>:4202</code></a></td><td><code>restoreFrom</code>（<a href="../extensions/tilldone/index.ts#L36"><code>index.ts:36</code></a>）→ L3 <code>restore</code> → L4 <code>paint</code></td></tr>
+<tr class="hl"><td><code>input</code></td><td><span class="tag outer">外</span> 最前面</td><td>1</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2117"><code>agent-session.ts:2117</code></a></td><td>L3 <code>userInput</code>：重置“已催过”</td></tr>
+<tr class="hl"><td><code>tool_call</code></td><td><span class="tag inner">内</span> 每个工具，执行前</td><td>K</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>agent-loop.ts:739</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/runner.ts#L1249"><code>runner.emitToolCall</code></a></td><td>L3 <code>gate</code>，返回值原样交回 Pi</td></tr>
+<tr class="hl"><td><code>tilldone</code> 工具 <code>execute</code></td><td><span class="tag inner">内</span> 工具阶段（现在串行）</td><td>模型调用它的次数</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L526"><code>agent-loop.ts:526</code></a> 选串行 → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a></td><td>L3 <code>runTool</code>（可能两次）→ L4 <code>paint</code></td></tr>
+<tr class="hl"><td><code>agent_end</code></td><td><span class="tag outer">外</span> 每 run 结束</td><td>N</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L329"><code>agent-loop.ts:329</code></a></td><td>L3 <code>agentEnd</code> 给出催办消息，L2 <code>sendMessage</code></td></tr>
+<tr class="hl"><td>页脚 / widget <code>render</code></td><td>与循环异步</td><td>每帧</td><td><a href="../../../../../vendor/pi/packages/tui/src/tui.ts#L409"><code>tui.ts:409</code></a></td><td>L4 闭包里拿着的不可变 list 值</td></tr>
+</tbody></table></div>
+<p class="small muted">B3 修复的源码依据：<code>tool-definition-wrapper.ts</code> 把扩展声明的 <code>executionMode</code> 原样传给 Pi（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L20"><code>:20</code></a>）；只要这一批里有一个工具是 sequential，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L526"><code>agent-loop.ts:526</code></a> 就让整批走 <code>executeToolCallsSequential</code>，它在 <a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L551"><code>:551</code></a> 一个调用 prepare 完马上执行，下一个调用的门才开始检查。不含 tilldone 的批次仍然并行。源码链接指向 Pi 1.4.0（4a08025）。</p>
+
+<!-- ═══════════ 维度一 ═══════════ -->
+<h2 id="d1">① 四层结构</h2>
+<p>第 12 篇里四层只是“概念上”的分层，代码全挤在一个闭包里。这一篇四层落成了文件：chip 上写的就是文件和函数。第 1–7 步是启动链（从目录加载到第一次画界面），第 8–14 步在 run 内循环（一批 toggle + read），第 15–17 步在 settle 外循环（催办续跑）。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 395" role="img" aria-label="四层结构：文件即层">
+  <g class="band l4"><rect x="8" y="8" width="804" height="86" rx="10"/><text class="bt" x="22" y="40" font-size="14">L4 UI</text><text class="mut" x="22" y="60" font-size="10.5">ui.ts</text></g>
+  <g class="band l3"><rect x="8" y="104" width="804" height="86" rx="10"/><text class="bt" x="22" y="136" font-size="14">L3 业务</text><text class="mut" x="22" y="156" font-size="10.5">state.ts</text></g>
+  <g class="band l2"><rect x="8" y="200" width="804" height="86" rx="10"/><text class="bt" x="22" y="232" font-size="14">L2 扩展</text><text class="mut" x="22" y="252" font-size="10.5">index.ts</text></g>
+  <g class="band l1"><rect x="8" y="296" width="804" height="86" rx="10"/><text class="bt" x="22" y="328" font-size="14">L1 Runtime</text><text class="mut" x="22" y="348" font-size="10.5">双循环 / 会话 / LLM</text></g>
+  <polyline id="bootpath" class="arrow flow" points="" />
+  <g id="chips"></g>
+  <g id="dot2" class="dot"><circle r="8"/></g>
+</svg>
+</div>
+<div class="controls">
+  <button id="b-prev">← 上一步</button>
+  <button class="primary" id="b-next">下一步 →</button>
+  <span class="counter" id="b-ctr">0 / 17</span>
+</div>
+<div class="card explain" id="b-text"><span class="muted">按“下一步”开始。第 1–7 步在循环外；第 8–14 步在 run 内循环；第 15–17 步在 settle 外循环。</span></div>
+
+<div class="tbl"><table>
+<thead><tr><th>原版 tilldone.ts</th><th>四层版里在哪</th><th>层</th><th>变化</th></tr></thead>
+<tbody>
+<tr><td>闭包变量 <code>tasks / nextId / listTitle / listDescription / nudgedThisCycle</code>（160–164）</td><td><code>let model</code>（<a href="../extensions/tilldone/index.ts#L29"><code>index.ts:29</code></a>），类型 <code>Model = { list, nudged }</code></td><td><span class="tag l2">L2</span> 持有 · <span class="tag l3">L3</span> 定义</td><td>5 个可变变量 → 1 个格子，里面是冻结的值；只有 <code>set()</code> 能换它</td></tr>
+<tr><td>工具 <code>execute</code> 里的 7 个分支（403–617）</td><td><code>validate</code> + <code>runTool</code>（<a href="../extensions/tilldone/state.ts#L206"><code>state.ts:206</code></a> · <a href="../extensions/tilldone/state.ts#L258"><code>:258</code></a>）</td><td><span class="tag l3">L3</span></td><td>同步纯函数；中途的 <code>await confirm</code> 拆成两次调用</td></tr>
+<tr><td><code>makeDetails</code>（168–175）</td><td><code>toDetails</code>（<a href="../extensions/tilldone/state.ts#L124"><code>state.ts:124</code></a>）</td><td><span class="tag l3">L3</span></td><td>B1 出站：每个 Task 都拷一份</td></tr>
+<tr><td><code>reconstructState</code>（302–323）</td><td>L2 <code>restoreFrom</code> 取 details，L3 <code>restore</code> / <code>parseDetails</code>（<a href="../extensions/tilldone/state.ts#L149"><code>:149</code></a>）</td><td><span class="tag l2">L2</span> + <span class="tag l3">L3</span></td><td>B1 入站：解析成新对象；Pi 的会话条目形状只留在 L2</td></tr>
+<tr><td><code>tool_call</code> 门（335–361）</td><td><code>gate</code>（<a href="../extensions/tilldone/state.ts#L333"><code>state.ts:333</code></a>）</td><td><span class="tag l3">L3</span></td><td>同样的三条理由、同样的顺序</td></tr>
+<tr><td><code>agent_end</code> / <code>input</code>（365–388）</td><td><code>agentEnd</code> / <code>userInput</code>（<a href="../extensions/tilldone/state.ts#L350"><code>:350</code></a> · <a href="../extensions/tilldone/state.ts#L364"><code>:364</code></a>）</td><td><span class="tag l3">L3</span></td><td>催办消息由 L3 生成，L2 只负责 <code>sendMessage</code></td></tr>
+<tr><td><code>refreshUI</code>、页脚、widget、状态（179–298）</td><td><code>paint</code>（<a href="../extensions/tilldone/ui.ts#L21"><code>ui.ts:21</code></a>）</td><td><span class="tag l4">L4</span></td><td>B2：<code>setStatus("tilldone", 文字)</code>；闭包拿值而不是实时读状态</td></tr>
+<tr><td><code>TillDoneListComponent</code>、<code>renderCall/Result</code></td><td><code>showList</code>、<code>renderCall</code>、<code>renderResult</code>（<a href="../extensions/tilldone/ui.ts#L122"><code>ui.ts:122</code></a> 起）</td><td><span class="tag l4">L4</span></td><td>渲染输出逐字节相同</td></tr>
+</tbody></table></div>
+
+<div class="callout"><b>为什么目录里必须有 <code>package.json</code>。</b><code>-e extensions/tilldone</code> 传的是目录。Pi 的包管理器遇到目录，只看两种“入口声明”：<code>package.json</code> 里的 <code>pi.extensions</code> 清单，或者 <code>extensions/</code> 子目录（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/package-manager.ts#L1385"><code>package-manager.ts:1385</code></a> → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/package-manager.ts#L2220"><code>collectPackageResources</code></a>）。都没有，就把目录路径原样当成扩展交出去（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/package-manager.ts#L1389"><code>:1389</code></a>）。之后 jiti 按“无扩展名”解析这个路径，先命中了同级的 <code>extensions/tilldone.ts</code>，也就是<b>原版</b>（实测：对照测试第一次跑出“原版对新版 0 差异”，追查才发现两边加载的是同一个文件）。所以加了 <code>{"pi":{"extensions":["./index.ts"]}}</code>，对照测试现在每个场景都断言实际加载的是 <code>extensions/tilldone/index.ts</code>。</div>
+
+<div class="callout"><b>为什么主题键用目录 URL。</b><code>themeMap.ts</code> 用文件名决定主题：<code>index.ts</code> 的文件名是 “index”，查不到映射就会落到 synthwave；终端标题取的是 argv 里第一个 <code>-e</code> 的文件名。所以 <a href="../extensions/tilldone/index.ts#L26"><code>index.ts:26</code></a> 传 <code>new URL(".", import.meta.url)</code>，文件名是 “tilldone”，得到原版的 everforest。启动也必须用目录形式：实测 <code>-e extensions/tilldone/index.ts</code> 会得到标题 “π - index”，而且主题不生效（themeMap 认为它不是主扩展）。</div>
+
+<!-- ═══════════ 维度二 ═══════════ -->
+<h2 id="d2">② 提示词上下文</h2>
+<p>模型看到的内容和第 12 篇<b>逐字节相同</b>：工具描述、参数描述、每个动作的结果文字、三条门理由、催办消息。区别在于这些字符串现在全部住在 <code>state.ts</code> 一个文件里，L2 只是搬运。这正是讨论记录里说的“第三层决定什么进上下文”：要改给模型的措辞，只改 L3。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 300" role="img" aria-label="提示词上下文：字符串在 L3 定义，L2 搬运，Pi 装配">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0L10,5L0,10z"/></marker>
+  </defs>
+  <text class="bt" x="20" y="24" font-size="13" style="fill:var(--l3)">L3 state.ts · 定义</text>
+  <text class="bt" x="300" y="24" font-size="13" style="fill:var(--l2)">L2 index.ts · 搬运</text>
+  <text class="bt" x="572" y="24" font-size="13" style="fill:var(--accent)">Pi 装配 · 模型看到</text>
+
+  <g class="chip hit"><rect x="16" y="40" width="260" height="44" rx="7"/><text class="mono" x="26" y="58" font-size="11">TOOL.description / params</text><text class="mut" x="26" y="74" font-size="10">state.ts:76</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M276,62 L296,62"/>
+  <g class="chip"><rect x="298" y="40" width="250" height="44" rx="7"/><text class="mono" x="308" y="58" font-size="11">pi.registerTool + Type.Object</text><text class="mut" x="308" y="74" font-size="10">加载时 1 次</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M548,62 L570,62"/>
+  <g class="chip"><rect x="572" y="40" width="236" height="44" rx="7"/><text x="582" y="58" font-size="11">system 消息：工具段 + 声明</text><text class="mut" x="582" y="74" font-size="10">每个请求都带</text></g>
+
+  <g class="chip hit"><rect x="16" y="100" width="260" height="44" rx="7"/><text class="mono" x="26" y="118" font-size="11">GATE_REASON（3 条）</text><text class="mut" x="26" y="134" font-size="10">gate() 返回 { block, reason }</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M276,122 L296,122"/>
+  <g class="chip"><rect x="298" y="100" width="250" height="44" rx="7"/><text class="mono" x="308" y="118" font-size="11">pi.on("tool_call") 原样返回</text><text class="mut" x="308" y="134" font-size="10">index.ts:52，一行</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M548,122 L570,122"/>
+  <g class="chip"><rect x="572" y="100" width="236" height="44" rx="7"/><text x="582" y="118" font-size="11">toolResult（isError）</text><text class="mut" x="582" y="134" font-size="10">下一个 turn 模型读到</text></g>
+
+  <g class="chip hit"><rect x="16" y="160" width="260" height="44" rx="7"/><text class="mono" x="26" y="178" font-size="11">runTool → Reply.text</text><text class="mut" x="26" y="194" font-size="10">“Added task #1: …” 等结果文字</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M276,182 L296,182"/>
+  <g class="chip"><rect x="298" y="160" width="250" height="44" rx="7"/><text class="mono" x="308" y="178" font-size="11">execute 返回 content + details</text><text class="mut" x="308" y="194" font-size="10">details = toDetails() 的拷贝</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M548,182 L570,182"/>
+  <g class="chip"><rect x="572" y="160" width="236" height="44" rx="7"/><text x="582" y="178" font-size="11">toolResult：content 给模型</text><text class="mut" x="582" y="194" font-size="10">details 只给扩展和 UI</text></g>
+
+  <g class="chip hit"><rect x="16" y="220" width="260" height="44" rx="7"/><text class="mono" x="26" y="238" font-size="11">agentEnd → Nudge</text><text class="mut" x="26" y="254" font-size="10">customType: tilldone-nudge</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M276,242 L296,242"/>
+  <g class="chip"><rect x="298" y="220" width="250" height="44" rx="7"/><text class="mono" x="308" y="238" font-size="11">pi.sendMessage(nudge, triggerTurn)</text><text class="mut" x="308" y="254" font-size="10">index.ts:57</text></g>
+  <path class="arrow flow" marker-end="url(#ah2)" d="M548,242 L570,242"/>
+  <g class="chip"><rect x="572" y="220" width="236" height="44" rx="7"/><text x="582" y="238" font-size="11">custom 消息 → 新 run</text><text class="mut" x="582" y="254" font-size="10">外循环第 2 圈</text></g>
+  <text class="mut" x="20" y="288" font-size="10">左列全部在 state.ts，零 import；中列每行只做一次转交，没有业务判断；右列是 Pi 的装配，和第 12 篇相同。</text>
+</svg>
+</div>
+<div class="tbl"><table>
+<thead><tr><th>进上下文的东西</th><th>段</th><th>定义在</th><th>谁交给 Pi</th><th>和原版比</th></tr></thead>
+<tbody>
+<tr><td>工具描述 / 参数描述</td><td>安装</td><td><a href="../extensions/tilldone/state.ts#L76"><code>state.ts:76</code></a> <code>TOOL</code></td><td><code>registerTool</code>（index.ts）</td><td>逐字节相同；schema 由 <code>ACTIONS</code> 生成，顺序也相同</td></tr>
+<tr class="hl"><td>门理由</td><td>控制</td><td><a href="../extensions/tilldone/state.ts#L95"><code>state.ts:95</code></a> <code>GATE_REASON</code></td><td><code>pi.on("tool_call")</code></td><td>相同。B3 修复后，同一批里 toggle 之后的 read 不再收到 “No task is in progress”</td></tr>
+<tr class="hl"><td>结果文字</td><td>控制</td><td><code>runTool</code> 各分支</td><td><code>execute</code> 的 content</td><td>相同</td></tr>
+<tr class="hl"><td>催办消息</td><td>控制</td><td><a href="../extensions/tilldone/state.ts#L350"><code>state.ts:350</code></a> <code>agentEnd</code></td><td><code>pi.sendMessage</code></td><td>相同，每次提问最多 1 次</td></tr>
+<tr><td>details 快照</td><td>–（不给 LLM）</td><td><code>toDetails</code></td><td><code>execute</code> 的 details</td><td>键和顺序相同；B1：之后不会再被改写</td></tr>
+</tbody></table></div>
+
+<!-- ═══════════ 维度三 ═══════════ -->
+<h2 id="d3">③ 业务穿透</h2>
+<p>模拟器把<b>原版</b>（第 12 篇复刻的浅拷贝逻辑）和<b>四层版</b>（冻结的值 + 出入站拷贝 + 串行批次）并排跑同一串操作。先加几个任务、toggle 两次，再 “/tree” 回到早先那条结果：左边内存重建的是“现在”的状态，右边是那一刻的状态。“批次 [toggle, read]”比较 B3；“试图原地改任务”演示冻结：原版悄悄改了历史，四层版直接抛错。</p>
+<div class="card">
+  <div class="controls">
+    <button id="a-add">add 3 tasks</button>
+    <label class="small">#<input id="a-id" type="number" value="1" min="1" style="width:56px"></label>
+    <button id="a-toggle">toggle #id</button>
+    <button id="a-update">update #id</button>
+    <button id="a-batch">批次 [toggle #id, read]</button>
+    <button id="a-poke">试图原地改 #id</button>
+  </div>
+  <div class="controls">
+    <label class="small">/tree 回到第 <select id="t-idx"></select> 条 tilldone 结果之后</label>
+    <button id="t-go">导航</button>
+    <button id="a-reset">重新开始</button>
+  </div>
+  <div class="grid c2">
+    <div><div class="small muted">原版 tilldone.ts</div><div class="term" id="m-old"></div></div>
+    <div><div class="small muted">四层版 tilldone/</div><div class="term" id="m-new"></div></div>
+  </div>
+</div>
+<p class="small muted">近似之处：只复刻了 add / toggle / update 和门的判断，没有确认框；“落盘”用 <code>JSON.stringify</code> 在那一刻取；批次只模拟门看到的状态，不模拟工具真的执行。四层版一侧调用的是按 <code>state.ts</code> 规则写的 JS 复刻，不是直接加载 <code>state.ts</code>。</p>
+
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th><span class="tag l3">L3</span> state.ts</th><th><span class="tag l2">L2</span> index.ts</th><th><span class="tag l1">L1</span></th><th><span class="tag l4">L4</span> ui.ts</th><th>刷新时机</th></tr></thead>
+<tbody>
+<tr class="hl"><td>门</td><td><code>gate(model, toolName)</code></td><td><code>pi.on("tool_call")</code> 一行转交</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L739"><code>agent-loop.ts:739</code></a>；有 tilldone 的批次串行（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L526"><code>:526</code></a>）</td><td>工具结果显示 🚫</td><td><span class="tag inner">内</span> 每个非 tilldone 工具</td></tr>
+<tr class="hl"><td>tilldone 工具</td><td><code>validate</code> → <code>Valid</code>；<code>runTool</code> 返回 <code>Ask</code> 或 <code>Reply</code></td><td><code>execute</code>：Ask 时 <code>await ctx.ui.confirm</code>，再用答案调第二次；<code>set(reply.next)</code></td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a>；结果落盘</td><td><code>paint</code>；确认框是 Pi 的对话框</td><td><span class="tag inner">内</span> 模型调用时</td></tr>
+<tr class="hl"><td>催办</td><td><code>agentEnd</code>：未完成且没催过 → <code>Nudge</code></td><td><code>pi.sendMessage(nudge, { triggerTurn: true })</code></td><td>steer 入队 → <code>_handlePostAgentRun</code> → <code>agent.continue()</code></td><td>聊天区显示催办</td><td><span class="tag outer">外</span> 每 run 结束</td></tr>
+<tr><td>重置催办</td><td><code>userInput</code></td><td><code>pi.on("input")</code></td><td>–</td><td>–</td><td><span class="tag outer">外</span> 每条用户消息</td></tr>
+<tr><td>状态恢复</td><td><code>restore</code> / <code>parseDetails</code>：解析成新的冻结对象，坏数据跳过</td><td><code>restoreFrom</code>：从 <code>getBranch()</code> 取 details</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/session-manager.ts#L1469"><code>getBranch</code></a></td><td><code>paint</code></td><td>循环外</td></tr>
+<tr><td>页脚 / widget / 状态</td><td>选择器 <code>countByStatus</code>、<code>current</code></td><td><code>set(next, ctx)</code> 时调用</td><td>–</td><td><code>paint</code>：status → widget → footer，顺序同原版</td><td>每次状态变化</td></tr>
+<tr><td>/tilldone</td><td>–</td><td>无 UI 时 <code>notify</code>，否则交给 L4</td><td>–</td><td><code>showList</code></td><td>命令执行时</td></tr>
+</tbody></table></div>
+
+<div class="tbl"><table>
+<thead><tr><th>怎么证明“除 B1–B3 外行为没变”</th><th>结果（2026-10-28 实测）</th></tr></thead>
+<tbody>
+<tr><td><code>bun test extensions/tilldone/state.test.ts</code>：50 个用例，期望值照原版源码抄写，含“state.ts 不 import 任何东西”等结构检查</td><td>50 pass · 0 fail</td></tr>
+<tr><td><code>bunx -p typescript@5.6.3 tsc -p tests/tilldone/tsconfig.json</code>：对着 Pi 1.4.0 的类型声明做类型检查</td><td>rc = 0</td></tr>
+<tr><td><code>bun tests/tilldone/equivalence.ts</code>：真实 Pi 1.4.0 + faux 假模型（不调用任何真实模型），12 个场景，记录工具结果、details、门理由、催办、确认框、UI 调用和渲染出的页脚 / widget / 工具行 / 面板</td><td>原版对原版：12 个场景都 0 差异。原版对四层版：所有差异都归到 B1 / B2 / B3，且每项修复都确实出现；最后一行 PASS</td></tr>
+<tr><td>反向检查：故意改坏新代码 4 处（改一条结果文字、删 <code>executionMode</code>、页脚少一行、不显示 widget）</td><td>每一处都让对照测试 FAIL（实现时做过，之后已还原）</td></tr>
+</tbody></table></div>
+
+<div class="callout"><b>B1–B3 之外有意改变的三点。</b>去掉了 <code>session_switch</code> / <code>session_fork</code> 的订阅（1.4.0 不会触发，见第 12 篇）；恢复时格式不对的 details 会被跳过，原版会照单全收（只有外来或手改的会话数据才会碰到）；L3 的状态全部 <code>Object.freeze</code>，任何地方原地改都会在严格模式下抛 <code>TypeError</code>，而不是悄悄改掉历史。冻结是必要的：bun 和 Pi 的 jiti 只剥掉类型、不做类型检查，<code>readonly</code> 拦不住运行时的修改。</div>
+
+<div class="callout"><b>原样保留的行为。</b>这是一次“行为不变”的重写，第 12 篇里不是 bug 的取舍都保留了：页脚每次刷新都重新 <code>setFooter</code>，和别的扩展叠加时“最后一个赢”；催办不区分用户按 Esc 中止；无 UI 时确认框一律当作“取消”。要改这些需要另开一次 Feature。</div>
+
+<div class="callout"><b>对照测试没覆盖到的地方。</b><code>/tilldone</code> 面板打开期间的实时更新（两个版本都不更新）、多个扩展同时 <code>setFooter</code> 的真实叠加、真实 TUI 的重绘时机。真实交互界面需要模型，要在终端里跑一次 <code>just ext-tilldone-4layer</code> 亲眼看。</div>
+
+<h2 id="sum">小结</h2>
+<p>四层拆分没有给 Pi 增加任何挂点：<code>session_start</code>、<code>tool_call</code>、工具 <code>execute</code>、<code>agent_end</code>、<code>input</code> 还是那几个，模型看到的字符串一个字没变。变的是代码的“住址”：L2 每个回调只剩一两行转交，L3 是不碰 Pi 的纯函数（所以能 <code>bun test</code>，也能对照原版逐场景验证），L4 只拿值画界面。B1–B3 也是在结构上修掉的：拷贝只发生在出入站两个边界，串行由工具声明决定。下一篇 <code>agent-team.ts</code> 换到编排：注册的工具会启动子代理，并用 <code>setActiveTools</code> 控制主 agent 能做什么。</p>
+
+</main>
+
+<script>
+// ─────────── 源码 + 逐行解释 ───────────
+const SRC = [
+  [26, 'const THEME_KEY_URL = new URL(".", import.meta.url).href;', 'l2', '<b>index.ts</b> · 主题键用目录 URL，文件名是 “tilldone”，主题仍是 everforest。'],
+  [29, '	let model: Model = INITIAL_MODEL;', 'l2', '<b>index.ts</b> · 整个扩展唯一可变的东西。里面装的是 L3 生成的冻结值。'],
+  [31, '	const set = (next: Model, ctx?: ExtensionContext): void => {', 'l2', '<b>index.ts</b> · 唯一写 <code>model</code> 的地方；带 ctx 时顺手调 L4 <code>paint</code>，所以每次状态变化都会重画。'],
+  [36, '	const restoreFrom = (ctx: ExtensionContext): void => {', 'l2', '<b>index.ts</b> · 沿 <code>getBranch()</code> 取出 tilldone 结果的 details 交给 L3。Pi 的会话条目形状只出现在这里。'],
+  [46, '	pi.on("session_start", async (_event, ctx) => {', 'hit', '<b>index.ts</b> · <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>，循环外。主题 + 恢复。'],
+  [52, '	pi.on("tool_call", async (event) => gate(model, event.toolName));', 'hit', '<b>index.ts</b> · <span class="tag inner">run 内循环</span>每个工具执行前。整段只有一行：L3 的返回值原样交给 Pi。'],
+  [54, '	pi.on("agent_end", async () => {', 'hit', '<b>index.ts</b> · <span class="tag outer">settle 外循环</span>每个 run 结束。L3 决定催不催、催什么，L2 只发消息。'],
+  [60, '	pi.on("input", async () => {', 'hit', '<b>index.ts</b> · 每条用户消息：L3 <code>userInput</code> 重置“已催过”。'],
+  [71, '		executionMode: "sequential",', 'hit', '<b>index.ts</b> · B3 修复。这一批只要有 tilldone，就整批逐个 prepare + 执行（<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L526"><code>agent-loop.ts:526</code></a>）。'],
+  [74, '			const first = runTool(model, params);', 'l2', '<b>index.ts</b> · 第一次调 L3：不带用户答案。需要确认时得到 <code>Ask</code>，否则直接是 <code>Reply</code>。'],
+  [76, '				first.kind === "ask" ? runTool(model, params, await ctx.ui.confirm(...)) : first;', 'l2', '<b>index.ts</b> · 等完确认框（最多 30 秒），用答案对<b>当前</b>的 model 再调一次。等待期间状态若被 /tree 换掉，算出的结果也基于新状态。（confirm 的参数略写）'],
+  [77, '			if (reply.next) set(reply.next, ctx);', 'l2', '<b>index.ts</b> · 只有成功才有 <code>next</code>：失败和取消既不改状态也不重画，和原版一致。'],
+  [76, 'export const TOOL = {', 'l3', '<b>state.ts</b> · 工具名、描述、参数描述、命令描述：给模型看的“安装”文字都在这。'],
+  [95, 'export const GATE_REASON = {', 'l3', '<b>state.ts</b> · 三条门理由，逐字节同原版。'],
+  [110, '	const frozen = Object.freeze(tasks.map((t) => Object.freeze({ id: t.id, text: t.text, status: t.status })));', 'l3', '<b>state.ts</b> · 每个 ListState 都在 <code>makeList</code> 里出生：新的 Task 对象、全部冻结。原地修改会抛错，B1 这一类问题回不来。'],
+  [124, 'export function toDetails(list: ListState, action: string, error?: string): Details {', 'l3', '<b>state.ts</b> · B1 出站：写进会话的 details 是全新的普通对象，从此归会话所有。'],
+  [149, 'export function parseDetails(raw: unknown): ListState | undefined {', 'l3', '<b>state.ts</b> · B1 入站：会话里读出来的东西当作不可信数据解析，重建成新对象；格式不对返回 undefined，被跳过。'],
+  [189, 'type Valid =', 'l3', '<b>state.ts</b> · 参数校验后的判别联合：“toggle 没有 id”“add 没有内容”这种组合过了 <code>validate</code> 就不可能存在。'],
+  [258, 'export function runTool(model: Model, params: Params, consent?: boolean): Ask | Reply {', 'l3', '<b>state.ts</b> · 整个工具行为，同步、纯。重载保证：带了 <code>consent</code> 的调用一定返回 Reply，L2 不会陷入反复确认。'],
+  [268, '				if (consent === undefined) {', 'l3', '<b>state.ts</b> · new-list 覆盖已有清单时“该不该问”是业务规则，所以在 L3；“怎么问”（弹框）在 L2/L4。'],
+  [333, 'export function gate(model: Model, toolName: string): Verdict {', 'l3', '<b>state.ts</b> · 原版第 335–361 行的门，变成一个纯函数。'],
+  [350, 'export function agentEnd(model: Model): { readonly model: Model; readonly nudge?: Nudge } {', 'l3', '<b>state.ts</b> · 返回新 model（已催过）和要发的消息；发不发、怎么发由 L2 处理。'],
+  [21, 'export function paint(ui: ExtensionUIContext, list: ListState): void {', 'l4', '<b>ui.ts</b> · 原版 <code>refreshUI</code> 的位置：状态 → widget → 页脚，顺序不变。拿到的是一个不可变的 list 值。'],
+  [22, '	ui.setStatus(STATUS_KEY, statusText(list));', 'l4', '<b>ui.ts</b> · B2 修复：key 是 “tilldone”，文字是第二个参数。'],
+  [28, '	ui.setFooter((tui, theme, footerData) => ({', 'l4', '<b>ui.ts</b> · 页脚闭包拿的是值，不是实时读状态。因为每次状态变化都会重新 paint（原版也每次重装页脚），两者等价；对照测试在每个 prompt 结束时重画页脚核对过。'],
+  [245, 'export function showList(ui: ExtensionUIContext, list: ListState): Promise<void> {', 'l4', '<b>ui.ts</b> · <code>/tilldone</code> 面板；“有没有 UI”的判断留在 L2。'],
+];
+WT.source(SRC);
+
+// ─────────── 双循环动画 ───────────
+// 补丁：l1 / l2 / l3 / l4 = 这一步在该层调用了什么；tasks = 任务摘要
+const SCN = {
+  batch: [
+    ['session', 'session_start', '', { l2: 'restoreFrom(ctx)', l3: 'restore → parseDetails', l4: 'paint', tasks: '#1○ #2○ #3○' }, '已有 3 个 idle 任务（从会话恢复）'],
+    ['input', 'input', '', { l2: 'pi.on("input")', l3: 'userInput → nudged = false' }, '用户：开始做第一项'],
+    ['bas', 'before_agent_start', 'outer', {}, '未订阅'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, '一条回复里两个 toolCall：tilldone toggle #1、read src/auth.ts'],
+    ['tools', '批次里有 sequential 工具 → 串行', 'inner', { l1: 'agent-loop.ts:526 → executeToolCallsSequential' }, '原版这里是并行：先把两个调用都 prepare 完'],
+    ['tools', 'prepare #1：tool_call (tilldone) → 放行', 'inner', { l2: 'pi.on("tool_call")', l3: 'gate → tilldone 永远放行' }, ''],
+    ['tools', '执行 #1：tilldone toggle', 'inner', { l2: 'execute → runTool → set', l3: 'runTool：Reply(next, details 拷贝)', l4: 'paint：widget 显示 WORKING ON #1', tasks: '#1● #2○ #3○' }, 'details 是新对象，之后不会被改'],
+    ['tools', 'prepare #2：tool_call (read) → 放行', 'inner', { l2: 'pi.on("tool_call")', l3: 'gate → 有进行中的任务' }, 'B3 修复：门看到的是 toggle 之后的状态'],
+    ['tools', '执行 #2：read', 'inner', { l1: 'read 工具执行' }, '原版这里 read 被拦，要多花一个 turn'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+  ],
+  confirm: [
+    ['session', 'session_start', '', { l2: 'restoreFrom(ctx)', l3: 'restore → parseDetails', l4: 'paint', tasks: '#1✓ #2○' }, '清单 “Auth” 有 2 个任务'],
+    ['input', 'input', '', { l2: 'pi.on("input")', l3: 'userInput' }, '用户：换个话题，先清空'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 1', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：tilldone clear'],
+    ['tools', 'execute → runTool(model, params)', 'inner', { l2: 'execute：第一次调 L3', l3: 'runTool → Ask("Clear TillDone list?", …)' }, '还有任务：L3 说“要问”，但不自己弹框'],
+    ['tools', 'await ctx.ui.confirm(…)', 'inner', { l2: 'await confirm（最多 30 秒）', l4: 'Pi 对话框：This will remove all 2 task(s) from "Auth"' }, '工具阶段停在这里等用户'],
+    ['tools', 'runTool(model, params, true)', 'inner', { l2: '第二次调 L3，带上答案', l3: 'runTool → Reply("Cleared 2 task(s)")', l4: 'paint：清单为空', tasks: '（空）' }, '基于“现在”的 model 重新算'],
+    ['tend', 'turn_end', 'inner', {}, ''],
+    ['tstart', 'turn_start', 'inner', {}, 'turn 2', 0, 1],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：tilldone new-list "Billing" + add ×2'],
+    ['tools', 'execute ×2', 'inner', { l2: 'execute → set', l3: 'runTool ×2（清单为空，不用问）', l4: 'paint', tasks: '#1○ #2○' }, ''],
+    ['tend', 'turn_end', 'inner', {}, '模型回答“已建好清单”，没有 toolCall'],
+    ['aend', 'agent_end → sendMessage(triggerTurn)', 'outer', { l2: 'pi.sendMessage(nudge, { triggerTurn: true })', l3: 'agentEnd → Nudge，nudged = true' }, '2 个未完成 → 催办'],
+    ['post', '_handlePostAgentRun：hasQueuedMessages', 'outer', { l1: 'agent.continue()' }, '外循环第 2 圈'],
+    ['astart', 'agent_start', 'outer', {}, 'run #2：输入是催办消息', 1],
+  ],
+};
+const trace1 = document.getElementById('trace1');
+function paintLines(el, rows) {
+  el.textContent = '';
+  rows.forEach((r, i) => {
+    const s = document.createElement('span'); s.textContent = r[0]; if (r[1]) s.className = r[1];
+    el.appendChild(s); if (i < rows.length - 1) el.appendChild(document.createTextNode('\n'));
+  });
+}
+const LAYERS = [['l2', ' L2 index.ts › '], ['l3', ' L3 state.ts › '], ['l4', ' L4 ui.ts    › '], ['l1', ' L1 Pi       › ']];
+WT.loops({
+  hit: ['session', 'input', 'tools', 'aend'],
+  sub: { session: 'session_start / _tree → restore', input: 'input → userInput', tools: 'tool_call 门 + tilldone（串行）', aend: 'agent_end → agentEnd' },
+  legend: [
+    '橙框 = 四层版用到的回调，和第 12 篇相同。每个橙框背后，L2 只做转交，判断在 state.ts，画面在 ui.ts。',
+    'tools 格现在串行：同一批里 toggle 执行完，下一个工具的门才检查。页脚 / widget 的 render() 不在图里。',
+  ],
+  scenes: SCN,
+  state: () => ({ l1: '', l2: '', l3: '', l4: '', tasks: '（空）' }),
+  logTag: s => Object.keys(s.patch).some(k => k === 'l2' || k === 'l3' || k === 'l4') ? '<span class="tag hit">本扩展</span>' : s.loop ? '' : '<span class="tag off">循环外</span>',
+  preview(st, s) {
+    const rows = LAYERS.map(([k, label]) => [label + (st[k] || '—'), k in s.patch ? 'sw-acc' : 'dim']);
+    rows.push(['', ''], [' 任务：' + st.tasks, 'tasks' in s.patch ? 'sw-ok' : 'dim']);
+    paintLines(trace1, rows);
+    WT.flash(trace1);
+  },
+  idle() { trace1.textContent = '（还没启动）'; },
+});
+
+// ─────────── 四层：文件即层 ───────────
+const CHIPS = {
+  paint:    ['paint（ui.ts:21）', 110, 125, 51, 1],
+  confirm:  ['ctx.ui.confirm（Pi 对话框）', 247, 165, 51, 1],
+  render:   ['renderCall / renderResult', 424, 165, 51, 1],
+  show:     ['showList（/tilldone）', 601, 140, 51, 1],
+  validate: ['validate → Valid', 110, 110, 147, 1],
+  runtool:  ['runTool：Ask | Reply', 232, 135, 147, 1],
+  gate:     ['gate', 379, 55, 147, 1],
+  nudge:    ['agentEnd / userInput', 446, 135, 147, 1],
+  copy:     ['toDetails / parseDetails', 593, 155, 147, 1],
+  loader:   ['loader：目录 → package.json', 110, 180, 243, 1],
+  cell:     ['let model + set()', 302, 115, 243, 1],
+  reg:      ['pi.on ×5 · registerTool', 429, 150, 243, 1],
+  restore:  ['restoreFrom', 591, 90, 243, 1],
+  sess:     ['AgentSession', 110, 100, 339, 1],
+  seq:      ['executeToolCallsSequential', 222, 175, 339, 1],
+  append:   ['appendMessage', 409, 100, 339, 1],
+  branch:   ['getBranch', 521, 75, 339, 1],
+  cont:     ['agent.continue()', 608, 110, 339, 1],
+};
+const BOOT = [
+  ['sess', '<span class="tag l1">L1</span> <code>pi -e extensions/tilldone -e extensions/theme-cycler.ts</code>：传的是<b>目录</b>。还没有任何循环。'],
+  ['loader', '<span class="tag l2">L2</span> 包管理器看到目录（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/package-manager.ts#L1385"><code>package-manager.ts:1385</code></a>），读 <code>package.json</code> 的 <code>pi.extensions</code>，得到 <code>./index.ts</code>；jiti 编译并调用工厂。'],
+  ['cell', '<span class="tag l2">L2</span> <a href="../extensions/tilldone/index.ts#L29"><code>index.ts:29</code></a>：<code>model = INITIAL_MODEL</code>（L3 生成的冻结空清单）。'],
+  ['reg', '<span class="tag l2">L2</span> 登记 5 个事件、<code>/tilldone</code> 命令，以及带 <code>executionMode: "sequential"</code> 的 tilldone 工具。'],
+  ['restore', '<span class="tag l2">L2</span> <code>session_start</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L3339"><code>agent-session.ts:3339</code></a>）→ <code>restoreFrom</code>：沿分支取出每条 tilldone 结果的 details。'],
+  ['copy', '<span class="tag l3">L3</span> <code>restore</code> → <code>parseDetails</code>：当作不可信数据解析，重建成新的冻结对象（B1 入站）。最后一条有效的胜出。'],
+  ['paint', '<span class="tag l4">L4</span> <code>set(model, ctx)</code> → <code>paint</code>：<code>setStatus("tilldone", …)</code>（B2）、widget、页脚。<br><b>启动链结束。下面是 run 内循环。</b>'],
+  ['seq', '<span class="tag l1">L1</span> 模型一条回复里发 toggle + read。批次里有 sequential 工具，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L526"><code>agent-loop.ts:526</code></a> 走串行：一个 prepare 完就执行。'],
+  ['reg', '<span class="tag l2">L2</span> toggle 的门放行，<code>execute</code> 被调（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/tools/tool-definition-wrapper.ts#L22"><code>tool-definition-wrapper.ts:22</code></a>），先调 L3。'],
+  ['validate', '<span class="tag l3">L3</span> <code>validate</code>：参数变成 <code>{ kind: "toggle", id: 1 }</code>。'],
+  ['runtool', '<span class="tag l3">L3</span> <code>runTool</code>：toggle 不需要确认，直接返回 <code>Reply</code>：新 model、结果文字、details 拷贝。'],
+  ['cell', '<span class="tag l2">L2</span> <code>set(reply.next, ctx)</code>：换掉格子里的值，并调 L4 重画。'],
+  ['append', '<span class="tag l1">L1</span> toolResult 落盘。内存里的条目引用的 details 是 <code>toDetails</code> 新造的对象，之后的操作不会再碰它。'],
+  ['gate', '<span class="tag l3">L3</span> 接着才轮到 read 的门：<code>gate</code> 看到 #1 进行中 → 放行（B3 修复）。<br><b>下面是 run 结束后的外循环。</b>'],
+  ['nudge', '<span class="tag l3">L3</span> <code>agent_end</code> → <code>agentEnd</code>：还有未完成、没催过 → 返回新 model（nudged）和 Nudge 消息。'],
+  ['reg', '<span class="tag l2">L2</span> <code>pi.sendMessage(nudge, { triggerTurn: true })</code>：作为 steer 入队（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2376"><code>agent-session.ts:2376</code></a>）。'],
+  ['cont', '<span class="tag l1">L1</span> <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L2014"><code>_handlePostAgentRun</code></a> 看到队列有消息 → <a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1903"><code>agent.continue()</code></a>：settle 外循环第 2 圈。'],
+];
+WT.layers({ chips: CHIPS, boot: BOOT, start: [160, 339] });
+
+// ─────────── 模拟器：原版 vs 四层版 ───────────
+const $ = id => document.getElementById(id);
+const ICON = { idle: '○', inprogress: '●', done: '✓' };
+const NEXT = { idle: 'inprogress', inprogress: 'done', done: 'idle' };
+const fmt = ts => ts.length ? ts.map(t => `#${t.id}${ICON[t.status]}`).join(' ') : '（空）';
+
+// 原版：可变数组，makeDetails 浅拷贝，reconstruct 直接引用（tilldone.ts 168–175、302–323）
+function OldExt() {
+  const x = { tasks: [], nextId: 1, history: [] };
+  const record = (label) => { const d = { tasks: [...x.tasks], nextId: x.nextId }; x.history.push({ label, details: d, disk: JSON.stringify(d) }); };
+  return {
+    x,
+    add(items) { for (const it of items) x.tasks.push({ id: x.nextId++, text: it, status: 'idle' }); record(`add ${items.length}`); },
+    toggle(id) { const t = x.tasks.find(t => t.id === id); if (!t) return; t.status = NEXT[t.status]; if (t.status === 'inprogress') for (const o of x.tasks) if (o !== t && o.status === 'inprogress') o.status = 'idle'; record(`toggle #${id}`); },
+    update(id) { const t = x.tasks.find(t => t.id === id); if (!t) return; t.text += '（改）'; record(`update #${id}`); },
+    poke(id) { const t = x.tasks.find(t => t.id === id); if (!t) return '没有这个任务'; t.status = 'done'; return '改成功了：内存里的 #' + id + ' 和引用它的历史 details 一起被改'; },
+    tree(i) { const d = x.history[i].details; x.tasks = d.tasks; x.nextId = d.nextId; },
+    gateAfterBatch(id) { // 并行：门在 toggle 执行前检查
+      const pre = x.tasks.some(t => t.status === 'inprogress');
+      this.toggle(id);
+      return pre ? 'read 放行' : 'read 被拦：No task is in progress';
+    },
+  };
+}
+// 四层版：冻结的值，出站 / 入站都拷贝（state.ts makeList / toDetails / parseDetails）
+function NewExt() {
+  'use strict';
+  const freeze = ts => Object.freeze(ts.map(t => Object.freeze({ id: t.id, text: t.text, status: t.status })));
+  const x = { list: { tasks: freeze([]), nextId: 1 }, history: [] };
+  const commit = (tasks, nextId, label) => {
+    x.list = { tasks: freeze(tasks), nextId };
+    const d = { tasks: x.list.tasks.map(t => ({ ...t })), nextId };
+    x.history.push({ label, details: d, disk: JSON.stringify(d) });
+  };
+  return {
+    x,
+    get tasks() { return x.list.tasks; },
+    add(items) { const add = items.map((text, i) => ({ id: x.list.nextId + i, text, status: 'idle' })); commit([...x.list.tasks, ...add], x.list.nextId + add.length, `add ${items.length}`); },
+    toggle(id) {
+      const task = x.list.tasks.find(t => t.id === id); if (!task) return;
+      const next = NEXT[task.status];
+      commit(x.list.tasks.map(t => t === task ? { ...t, status: next } : (next === 'inprogress' && t.status === 'inprogress' ? { ...t, status: 'idle' } : t)), x.list.nextId, `toggle #${id}`);
+    },
+    update(id) { const task = x.list.tasks.find(t => t.id === id); if (!task) return; commit(x.list.tasks.map(t => t === task ? { ...t, text: t.text + '（改）' } : t), x.list.nextId, `update #${id}`); },
+    poke(id) {
+      'use strict';
+      const t = x.list.tasks.find(t => t.id === id); if (!t) return '没有这个任务';
+      try { t.status = 'done'; return '（不应该到这里）'; } catch (e) { return 'TypeError：' + e.message.slice(0, 60) + '…，历史不受影响'; }
+    },
+    tree(i) { const d = x.history[i].details; x.list = { tasks: freeze(d.tasks), nextId: d.nextId }; },
+    gateAfterBatch(id) { // 串行：toggle 执行完，read 的门才检查
+      this.toggle(id);
+      return x.list.tasks.some(t => t.status === 'inprogress') ? 'read 放行' : 'read 被拦：No task is in progress';
+    },
+  };
+}
+let oldE, newE, msgOld = '', msgNew = '', treeShown = false;
+function reset() { oldE = OldExt(); newE = NewExt(); msgOld = msgNew = ''; treeShown = false; refreshTreeSelect(); draw(); }
+function refreshTreeSelect() {
+  const sel = $('t-idx'); sel.textContent = '';
+  oldE.x.history.forEach((h, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${i + 1}（${h.label}）`; sel.appendChild(o); });
+}
+function panel(e, tasks, msg) {
+  const rows = [[' 内存：' + fmt(tasks), 'sw-acc'], ['', ''], [` 会话里的 tilldone 结果（${e.x.history.length} 条）：`, '']];
+  e.x.history.forEach((h, i) => {
+    const same = JSON.stringify(h.details) === h.disk;
+    rows.push([`   ${i + 1}. ${h.label}  ${fmt(h.details.tasks)}${same ? '' : '  ⚠ 已被改写'}`, same ? 'dim' : 'sw-wrn']);
+  });
+  if (msg) rows.push(['', ''], [' ' + msg, /被拦|⚠|改成功/.test(msg) ? 'sw-wrn' : 'sw-ok']);
+  return rows;
+}
+function draw() {
+  paintLines($('m-old'), panel(oldE, oldE.x.tasks, msgOld));
+  paintLines($('m-new'), panel(newE, newE.tasks, msgNew));
+  WT.flash($('m-old')); WT.flash($('m-new'));
+  msgOld = msgNew = '';
+}
+const idOf = () => Number($('a-id').value);
+const both = (f) => { f(oldE, 'old'); f(newE, 'new'); refreshTreeSelect(); draw(); };
+$('a-add').onclick = () => both(e => e.add(['改 token 生成', '迁移 session 表', '更新登录接口']));
+$('a-toggle').onclick = () => both(e => e.toggle(idOf()));
+$('a-update').onclick = () => both(e => e.update(idOf()));
+$('a-batch').onclick = () => { msgOld = '批次：' + oldE.gateAfterBatch(idOf()); msgNew = '批次：' + newE.gateAfterBatch(idOf()); refreshTreeSelect(); draw(); };
+$('a-poke').onclick = () => { msgOld = oldE.poke(idOf()); msgNew = newE.poke(idOf()); draw(); };
+$('t-go').onclick = () => {
+  if (!oldE.x.history.length) return;
+  const i = Number($('t-idx').value), disk = fmt(JSON.parse(oldE.x.history[i].disk).tasks);
+  oldE.tree(i); newE.tree(i);
+  msgOld = `/tree → 第 ${i + 1} 条：内存重建 ${fmt(oldE.x.tasks)}，落盘那一刻是 ${disk}`;
+  msgNew = `/tree → 第 ${i + 1} 条：内存重建 ${fmt(newE.tasks)}，落盘那一刻是 ${disk}`;
+  if (fmt(oldE.x.tasks) !== disk) msgOld += '  ⚠';
+  draw();
+};
+$('a-reset').onclick = reset;
+reset();
+</script>
+</body>
+</html>
