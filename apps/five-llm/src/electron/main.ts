@@ -133,14 +133,18 @@ if (isSmoke) app.setPath('userData', path.join(app.getPath('temp'), `five-llm-sm
 // before emitting ready, so awaiting it at module scope would deadlock startup.
 void app.whenReady().then(async () => {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }] },
+    { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' },
+      // Ctrl+Q also quits on macOS, where the role above only binds Cmd+Q.
+      ...(process.platform === 'darwin' ? [{ label: '退出', accelerator: 'Ctrl+Q', visible: false, click: () => app.quit() }] : [])] },
     { label: '编辑', submenu: [{ role: 'copy' }, { role: 'selectAll' }] },
     { label: '显示', submenu: [{ role: 'togglefullscreen' }, { role: 'toggleDevTools' }] },
   ]));
   await initialize(); createWindow();
 }).catch(error => { dialog.showErrorBox('弈境启动失败', String(error)); app.quit(); });
 app.on('activate', () => { if (service && BrowserWindow.getAllWindows().length === 0) createWindow(); });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+// Single-window game: closing the window ends the app on every platform, so
+// `just five-llm` returns to the shell instead of leaving Electron resident.
+app.on('window-all-closed', () => app.quit());
 // Timer runs in the trusted main process, not a throttled/background renderer.
 const heartbeat = setInterval(() => service?.tick(), 200);
 let exiting = false;

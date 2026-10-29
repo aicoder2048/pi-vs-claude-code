@@ -7,10 +7,11 @@
 需要 Bun、Node.js ≥ 22.19；桌面环境需要支持 Electron 45。
 
 ```bash
-cd /Users/szou/Python/Playground/LearnTopEngSkills/practice/harness-dual-loops/vendor/pi-vs-claude-code/apps/five-llm
-bun install
-just start                  # 或 bun run start
+cd apps/five-llm            # 从仓库根目录进入
+just five-llm               # 安装依赖、构建并启动；已装过依赖也可用 just start
 ```
+
+关闭窗口、Cmd+Q 或 Ctrl+Q 都会结束应用，`just` 随之返回命令行，不会在后台残留。
 
 ### 连接 LLM
 
@@ -136,7 +137,7 @@ API Key 只由主进程中的 Pi 使用，不发送给渲染器。模型列表�
 ~/Library/Application Support/Five LLM/records/
 ```
 
-每盘使用独立 ID，不覆盖上一盘；最新一盘包含整场比赛 ID、比分和所有已完成盘的摘要。练习悔棋更新当前棋局文件。关闭窗口保留棋谱（应用仍运行时棋钟不停），退出前等待排队写入。自动保存失败会明确弹窗。当前版本提供棋谱导出和**当前局回看**，尚无历史棋谱导入、跨启动续局或应用安装包签名。
+每盘使用独立 ID，不覆盖上一盘；最新一盘包含整场比赛 ID、比分和所有已完成盘的摘要。练习悔棋更新当前棋局文件。关闭窗口即退出应用；退出前停止棋钟并等待排队写入（最多 3 秒）。自动保存失败会明确弹窗。当前版本提供棋谱导出和**当前局回看**，尚无历史棋谱导入、跨启动续局或应用安装包签名。
 
 ## 检查与测试
 

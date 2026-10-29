@@ -8,6 +8,9 @@ install:
 start:
     bun run start
 
+# Install dependencies, then build and open the desktop; returns when the app quits
+five-llm: install start
+
 check:
     bun run check
 
