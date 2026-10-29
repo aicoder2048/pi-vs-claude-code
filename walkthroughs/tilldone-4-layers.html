@@ -34,7 +34,7 @@
 <h2 id="loops">双循环与回调点</h2>
 <p><span class="tag outer">settle 外循环 · 续跑—停稳</span>（重复 run）<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L1873"><code>agent-session.ts:1873 _startRun</code></a>：一次提问可能起多个 run，直到停稳。
 <span class="tag inner">run 内循环 · 模型—工具</span>（重复 turn）<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>agent-loop.ts:188 runLoop</code></a>：每个 turn 请求一次模型，再执行工具。
-挂点和第 12 篇完全相同，只有两处不同：去掉了 1.4.0 里不存在的 <code>session_switch</code> / <code>session_fork</code>；工具声明了 <code>executionMode: "sequential"</code>，于是同一批工具调用改成<b>逐个</b>准备、逐个执行。场景 A 和第 12 篇的场景 A 相同：<b>一次 settle 里外循环转两圈</b>（第 2 个 run 是被 <code>agent_end</code> 催回来的），每一步标出经过了哪个文件。场景 B 是原版的并行批次，场景 C 是四层版改成串行后的同一批，两者对照看 B3。场景 D 演示确认框怎样被拆成“L3 问 → L4 弹框 → L3 再算”。四个场景都演到 <code>agent_settled</code>。</p>
+挂点和第 12 篇完全相同，只有两处不同：去掉了 1.4.0 里不存在的 <code>session_switch</code> / <code>session_fork</code>；工具声明了 <code>executionMode: "sequential"</code>，于是同一批工具调用改成<b>逐个</b>准备、逐个执行。场景 A 和第 12 篇的场景 A 相同：<b>一次 settle 里外循环转两圈</b>（第 2 个 run 是被 <code>agent_end</code> 催回来的），每一步标出经过了哪个文件。场景 B 是原版的并行批次，场景 C 是四层版改成串行后的同一批，两者对照看 B3。场景 D 演示确认框怎样被拆成“L3 问 → L4 弹框 → L3 再算”。场景 E 最整齐：外循环 2 圈，每圈内循环 3 个 turn（每个 turn 调一次模型），第 2 圈把任务做完而自然停稳。五个场景都演到 <code>agent_settled</code>。</p>
 
 <div class="fig fig-scroll" id="loops-fig"></div><!-- 双循环 SVG 由 WT.loops 生成 -->
 
@@ -44,6 +44,7 @@
     <option value="oldbatch">场景 B（原版对照）：toggle + read 并行，read 被拦</option>
     <option value="batch">场景 C：同一批改成串行，read 放行；做完不催</option>
     <option value="confirm">场景 D：clear 的两阶段确认；清空后不催</option>
+    <option value="tworuns">场景 E：外循环 2 圈 × 内循环各 3 个 turn，第 2 圈做完全部任务</option>
   </select>
   <button class="primary" id="play">▶ 播放</button>
   <button id="step">单步</button>
@@ -372,6 +373,48 @@ const SCN = {
     ['post', '_handlePostAgentRun', 'outer', { l1: '队列为空 → 不续跑' }, ''],
     ['settle', 'agent_before_settle', 'outer', {}, ''],
     ['settled', 'agent_settled', 'outer', {}, '停稳：1 次 settle，1 个 run'],
+  ],
+  // E：外循环 2 圈 × 内循环各 3 个 turn；第 2 圈做完全部任务，自然停稳
+  tworuns: [
+    ['session', 'session_start', '', { l2: 'restoreFrom(ctx)', l3: 'restore：没有 tilldone 结果', l4: 'paint', tasks: '（空）' }, '新会话'],
+    ['input', 'input', '', { l2: 'pi.on("input")', l3: 'userInput → nudged = false' }, '用户：给登录加验证码和限流'],
+    ['bas', 'before_agent_start', 'outer', {}, '外循环第 1 圈开始'],
+    ['astart', 'agent_start', 'outer', {}, 'run #1', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'run #1 · turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '第 1 次调模型'],
+    ['msg', 'message_end (assistant)', 'inner', {}, 'toolCall：tilldone new-list + add ×2'],
+    ['tools', 'tilldone.execute ×2', 'inner', { l2: 'execute → runTool → set', l3: 'runTool：new-list、add', l4: 'paint：页脚 [0/2]', tasks: '#1○ #2○' }, ''],
+    ['tend', 'turn_end', 'inner', {}, '有工具结果 → 内循环下一轮'],
+    ['tstart', 'turn_start', 'inner', {}, 'run #1 · turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '第 2 次调模型'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '一批两个 toolCall：tilldone toggle #1、edit login.ts'],
+    ['tools', '串行：toggle #1 → 门放行 edit', 'inner', { l1: 'executeToolCallsSequential', l2: 'execute → set；pi.on("tool_call")', l3: 'runTool：#1 → inprogress；gate → 放行', l4: 'paint：WORKING ON #1', tasks: '#1● #2○' }, 'B3 修复后同一批里就能开工'],
+    ['tend', 'turn_end', 'inner', {}, '有工具结果 → 内循环下一轮'],
+    ['tstart', 'turn_start', 'inner', {}, 'run #1 · turn 3', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '第 3 次调模型'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“验证码加好了。”没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, '没有工具结果、没有 steering → 内循环结束'],
+    ['aend', 'agent_end → sendMessage(triggerTurn)', 'outer', { l2: 'pi.sendMessage(nudge, { triggerTurn: true })', l3: 'agentEnd：2 个未完成、没催过 → Nudge' }, '#1 没标完成，#2 没做'],
+    ['post', '_handlePostAgentRun：hasQueuedMessages', 'outer', { l1: 'agent.continue()' }, '外循环第 2 圈（同一次 settle）'],
+    ['astart', 'agent_start', 'outer', {}, 'run #2：输入是催办消息', 1],
+    ['tstart', 'turn_start', 'inner', {}, 'run #2 · turn 1', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '第 4 次调模型'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '一批两个 toolCall：toggle #1（→ done）、toggle #2（→ inprogress）'],
+    ['tools', 'tilldone.execute ×2（串行）', 'inner', { l2: 'execute → set ×2', l3: 'runTool：#1 → done；#2 → inprogress', l4: 'paint：页脚 [1/2]，WORKING ON #2', tasks: '#1✓ #2●' }, ''],
+    ['tend', 'turn_end', 'inner', {}, '有工具结果 → 内循环下一轮'],
+    ['tstart', 'turn_start', 'inner', {}, 'run #2 · turn 2', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '第 5 次调模型'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '一批两个 toolCall：edit rate-limit.ts、toggle #2（→ done）'],
+    ['tools', '串行：门放行 edit → toggle #2', 'inner', { l2: 'pi.on("tool_call")；execute → set', l3: 'gate → 放行；runTool：#2 → done', l4: 'paint：页脚 [2/2]，widget 移除', tasks: '#1✓ #2✓' }, ''],
+    ['tend', 'turn_end', 'inner', {}, '有工具结果 → 内循环下一轮'],
+    ['tstart', 'turn_start', 'inner', {}, 'run #2 · turn 3', 0, 1],
+    ['llm', 'context → LLM', 'inner', {}, '第 6 次调模型'],
+    ['msg', 'message_end (assistant)', 'inner', {}, '“两项都完成了。”没有 toolCall'],
+    ['tend', 'turn_end', 'inner', {}, '内循环结束'],
+    ['aend', 'agent_end', 'outer', { l3: 'agentEnd：没有未完成任务 → 不催' }, '这次不是靠“已催过”停下，而是真做完了'],
+    ['post', '_handlePostAgentRun', 'outer', { l1: '队列为空 → 不续跑' }, ''],
+    ['settle', 'agent_before_settle', 'outer', {}, ''],
+    ['settled', 'agent_settled', 'outer', {}, '停稳：1 次 settle，外循环 2 圈 × 内循环各 3 个 turn = 6 次模型调用'],
   ],
 };
 const trace1 = document.getElementById('trace1');
