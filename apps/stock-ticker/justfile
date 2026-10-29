@@ -1,0 +1,27 @@
+# Stock Desk · 股票行情桌面应用（在此目录运行 just 即可）
+# 默认：安装依赖并启动 Electron
+[default]
+default: stocks
+
+# 安装依赖与 Electron 运行时
+install:
+    bun install
+
+# 启动桌面应用
+start:
+    bun run start
+
+# 安装依赖并启动，应用退出后返回命令行
+stocks: install start
+
+# 离线单元测试
+test:
+    bun run test
+
+# 实际启动 Electron，用固定上游响应验证 UI / IPC（需要图形桌面）
+smoke: install
+    bun run test:smoke
+
+# 访问真实行情接口（需联网）
+live:
+    bun run test:live

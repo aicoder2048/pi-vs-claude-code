@@ -18,12 +18,14 @@ just stocks-install
 just stocks
 ```
 
-或直接在此目录：
+或在此目录：
 
 ```bash
-bun install
-bun run start
+cd apps/stock-ticker        # 从仓库根目录进入
+just stocks                 # 安装依赖并启动；也可 bun install && bun run start
 ```
+
+关闭窗口、Cmd+Q 或 Ctrl+Q 都会结束应用，`just` 随之返回命令行。
 
 Bun 会通过 `trustedDependencies` 执行 Electron 的安装脚本、下载桌面运行时。首次下载可能较慢。无需额外前端构建或本地服务器。
 

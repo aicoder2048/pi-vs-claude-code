@@ -22,6 +22,13 @@ function createWindow() {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   window.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  // Ctrl+Q also quits on macOS, where the default app menu only binds Cmd+Q.
+  window.webContents.on('before-input-event', (event, input) => {
+    if (process.platform === 'darwin' && input.type === 'keyDown' && input.control && !input.meta && input.key.toLowerCase() === 'q') {
+      event.preventDefault();
+      app.quit();
+    }
+  });
   window.loadFile(indexPath);
   window.on('closed', () => { window = null; });
 }
@@ -52,4 +59,6 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+// Single-window app: closing the window ends the app on every platform, so
+// `just stocks` returns to the shell instead of leaving Electron resident.
+app.on('window-all-closed', () => app.quit());
