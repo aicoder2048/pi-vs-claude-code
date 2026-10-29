@@ -9,6 +9,10 @@
 <script src="assets/walkthrough.js"></script>
 <style>
 /* turn 内部：插入方式配色。改写 = hit，观察 = l2，队列 = l4，来源 = l3，固定 = muted */
+.turn-rule { border: 2px solid var(--hit); background: var(--hit-bg); border-radius: 12px; padding: 18px 22px; margin: 14px 0 18px; text-align: center; }
+.turn-rule-main { font-size: 24px; font-weight: 750; line-height: 1.5; color: var(--ink); }
+.turn-rule-main b { color: var(--hit); }
+.turn-rule-sub { margin-top: 6px; font-size: 15px; color: var(--muted); font-family: var(--mono); }
 .tt-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; color: var(--muted); margin: 6px 0 4px; }
 .tc-key { display: inline-block; font-size: 11.5px; font-weight: 650; padding: 0 8px; border-radius: 10px; border: 1.3px solid; line-height: 1.7; }
 .tc-key.rw { color: var(--hit); background: var(--hit-bg); border-color: var(--hit); }
@@ -76,6 +80,21 @@
 <h1>一个 turn 的内部：流程与插入点</h1>
 <p class="subtitle">把内循环的一个 turn 从 <code>turn_start</code> 拆到 <code>turn_end</code>：16 步里每一步是谁在插入（Agent Loop、Pi、扩展、第三方），用什么方式插入，能改变什么。读法见上一篇 <a href="guide-loops.html">怎么读“双循环与回调点”</a>。</p>
 </header>
+
+<h2 id="one-call">一句话：一个 turn 就是一次大模型调用</h2>
+<div class="turn-rule">
+  <div class="turn-rule-main">一个 turn = <b>一次大模型调用</b> + 这次回复里的那一批工具</div>
+  <div class="turn-rule-sub">turn 数 ≈ LLM 请求数 ≈ 花的钱和时间</div>
+</div>
+<p>这句话出自参考课程的“后厨比方”，那里把它列为两条铁律之一：<b>看一眼单子 = 一次模型调用</b>（<a href="../../../../../docs/10-pi-harness/teach/reference/kitchen-analogy.html">后厨比方</a>；同样的定义也写在 <a href="../../../../../docs/10-pi-harness/teach/GLOSSARY.md">GLOSSARY</a> 的“一轮（turn）”词条）。这篇后面所有的图都围绕这一次调用展开：第 0–6 行在为这次调用做准备，第 7 行就是这次调用本身，第 8–15 行在处理它的回复。</p>
+<div class="tbl"><table>
+<thead><tr><th>要点</th><th>依据</th></tr></thead>
+<tbody>
+<tr><td><b>为什么是“一次”</b>：内循环每转一圈，只调用模型一次</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L251"><code>agent-loop.ts:251</code></a> 每次 <code>while</code> 迭代只调用一次 <code>streamAssistantResponse</code></td></tr>
+<tr><td><b>工具不会多出 turn</b>：同一条回复里的多个 tool call 属于同一个 turn。模型看了工具结果想再做事，那是<b>下一个</b> turn，也就是下一次调用</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L278"><code>agent-loop.ts:278</code></a> 执行完这一批，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L192"><code>:192</code></a> 再决定要不要进下一圈</td></tr>
+<tr><td><b>turn 本身不是循环</b>：它是 run 循环转的那一圈</td><td><a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L192"><code>agent-loop.ts:192</code></a> 的内层 <code>while</code> 每转一次就是一个 turn</td></tr>
+<tr><td><b>为什么是“约等于”</b>：有几种 LLM 请求不算 turn</td><td>自动 compaction 生成摘要要另调一次模型，发生在第 0 行 <code>prepareNextTurn</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/agent-session.ts#L898"><code>agent-session.ts:898</code></a>）；agent-team、pi-pi 这类工具起的子 pi 进程，各自的调用算在子进程自己的 turn 里</td></tr>
+</tbody></table></div>
 
 <h2 id="flow">流程与插入点</h2>
 <p><a href="guide-loops.html">上一篇指南</a>里的双循环图把内循环画成 5 个格子。这里把<b>一个 turn</b> 拆开：从 <code>turn_start</code> 到 <code>turn_end</code>，<a href="../../../../../vendor/pi/packages/agent/src/agent-loop.ts#L188"><code>runLoop</code></a> 实际走了 16 步。每一步都可以有 4 类“插入者”往里插东西，插的方式分 5 种：</p>
@@ -159,6 +178,7 @@
 <h2 id="changelog">更新记录</h2>
 <ul class="small">
 <li>2026-10-28 · 初版（从《怎么读“双循环与回调点”》拆出）：16 步泳道图（5 个场景）、插入点总表、队列等待时间图、下一 turn 判定器。</li>
+<li>2026-10-28 · 新增开篇一节“一个 turn 就是一次大模型调用”：出处、源码依据，以及为什么是“约等于”。</li>
 </ul>
 
 </main>
