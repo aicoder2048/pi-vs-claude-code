@@ -14,7 +14,7 @@ just tilldone-desk
 just tilldone-desk-test
 ```
 
-Or from this directory: `bun run build`, `bun run start`, `bun run test`. `bun run typecheck` checks TypeScript. `bun run test:smoke` builds and opens real Electron with the fake Pi; no provider is contacted.
+Or from this directory: `just tilldone` installs dependencies, builds, and launches. Closing the window, Cmd+Q, or Ctrl+Q quits the app and stops the Pi child, and `just` returns to the shell. The plain scripts are `bun run build`, `bun run start`, `bun run test`. `bun run typecheck` checks TypeScript. `bun run test:smoke` builds and opens real Electron with the fake Pi; no provider is contacted.
 
 The input sends a prompt while idle. During a run, select steer or follow-up; Stop clears queued messages before aborting. Enter sends; Shift+Enter inserts a newline. Tools are initially collapsed and remain expanded if opened during updates. `/tilldone` only focuses the local task panel, even during a run.
 

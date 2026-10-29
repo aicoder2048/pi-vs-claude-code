@@ -1,0 +1,27 @@
+# 边牧任务桌面 · TillDone Desk（在此目录运行 just 即可）
+# 默认：安装依赖并启动 Electron
+[default]
+default: tilldone
+
+# 安装依赖与 Electron 运行时
+install:
+    bun install
+
+# 构建并启动桌面应用
+start:
+    bun run start
+
+# 安装依赖并启动，应用退出后（连同 pi 子进程）返回命令行
+tilldone: install start
+
+# 离线测试（不调用真实模型）
+test:
+    bun run test
+
+# TypeScript 类型检查
+typecheck:
+    bun run typecheck
+
+# 实际启动 Electron，用假 pi 验证 UI（需要图形桌面）
+smoke: install
+    bun run test:smoke
