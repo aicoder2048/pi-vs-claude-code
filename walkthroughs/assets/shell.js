@@ -12,6 +12,7 @@
     guides: [
       { title: "怎么读双循环与回调点", href: "guide-loops.html" },
       { title: "一个 turn 的内部", href: "guide-turn.html" },
+      { title: "四层架构：设计自定义 Harness", href: "guide-four-layers.html" },
     ],
     walks: [
       { n: "01", title: "minimal.ts", href: "minimal.html" },

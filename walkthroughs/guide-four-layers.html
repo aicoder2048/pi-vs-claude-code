@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阅读指南 · 四层架构</title>
+<link rel="stylesheet" href="assets/walkthrough.css">
+<script src="assets/shell.js"></script>
+<script src="assets/walkthrough.js"></script>
+<style>
+.stack-layer { cursor: pointer; }
+.stack-layer rect { transition: stroke-width .2s, opacity .2s; }
+.stack-layer.on rect { stroke-width: 3; }
+.stack-layer:not(.on) { opacity: .78; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.tabs button { font-size: 13.5px; padding: 5px 12px; border-radius: 7px; border: 1px solid var(--line); background: var(--paper); }
+.tabs button[aria-pressed="true"], .controls button[aria-pressed="true"] { background: var(--tint); border-color: var(--accent); color: var(--accent); font-weight: 650; }
+.hook-table tbody tr { cursor: pointer; }
+.hook-table tbody tr:hover { background: var(--canvas); }
+.hook-table tbody tr.on { background: var(--hit-bg); }
+pre.snip { background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; overflow-x: auto; margin: 8px 0 0; white-space: pre; }
+#trust-fig .node rect { fill: var(--paper); stroke: var(--line); stroke-width: 1.3; transition: all .3s; }
+#trust-fig .node.on rect { fill: var(--hit-bg); stroke: var(--hit); stroke-width: 2.2; }
+#trust-fig .node.off rect { fill: var(--warn-bg); stroke: var(--warn); }
+#trust-fig text { fill: var(--ink); }
+#trust-fig .mut { fill: var(--muted); }
+</style>
+</head>
+<body>
+<!--
+  会持续增补的阅读指南。维护约定：
+  - 新增一节：加带 id 的 <h2>，放在“更新记录”之前，并在“更新记录”里加一行。
+  - L2 插点总表、L3 三股力量都由下方脚本里的 HOOKS / FORCES 数组生成；新走读用到新的插点或案例，就在数组里加一项。
+  - 设计方向（Web / 桌面 UI、与 DeepSeek Harness 的取舍）不写在这里，见 discussions/2026-10-28-l4-web-desktop-and-plugin-harness.md。
+-->
+<main>
+<header class="lesson">
+<div class="kicker">走读 · 阅读指南</div>
+<h1>四层架构：设计自定义 Pi Harness</h1>
+<p class="subtitle">每篇走读都把扩展拆成 L1 Runtime、L2 扩展、L3 业务、L4 UI 四层。这篇指南横着看四层：每一层能不能动、靠什么动、放什么代码；以及为什么做一个领域专用的 Pi Agent Harness 时，L3 最难。具体案例链接到系列各篇，四层落成文件的完整例子见 <a href="tilldone-4-layers.html">12-b tilldone 四层版</a>。</p>
+</header>
+
+<!-- ═══════════ 总览 ═══════════ -->
+<h2 id="overview">四层一览</h2>
+<p>点一层，看它能不能改、靠什么改、在 tilldone 四层版里对应哪个文件。</p>
+<div class="fig fig-scroll">
+<svg viewBox="0 0 820 300" role="img" aria-label="四层结构总览，可点击">
+  <g class="stack-layer band l4" data-k="l4"><rect x="8" y="8" width="804" height="64" rx="10"/><text class="bt" x="22" y="36" font-size="14">L4 UI</text><text class="mut" x="22" y="56" font-size="10.5">TUI 组件、对话框、工具结果行 · 独立的数据通道，不进上下文</text><text class="mut" x="640" y="44" font-size="11">tilldone/ui.ts</text></g>
+  <g class="stack-layer band l3" data-k="l3"><rect x="8" y="80" width="804" height="64" rx="10"/><text class="bt" x="22" y="108" font-size="14">L3 业务</text><text class="mut" x="22" y="128" font-size="10.5">业务规则、给模型的文字、状态转移 · 决定什么值得让模型看到</text><text class="mut" x="640" y="116" font-size="11">tilldone/state.ts</text></g>
+  <g class="stack-layer band l2" data-k="l2"><rect x="8" y="152" width="804" height="64" rx="10"/><text class="bt" x="22" y="180" font-size="14">L2 扩展</text><text class="mut" x="22" y="200" font-size="10.5">ExtensionAPI：在双循环的固定位置挂回调、注册能力 · 胶水</text><text class="mut" x="640" y="188" font-size="11">tilldone/index.ts</text></g>
+  <g class="stack-layer band l1" data-k="l1"><rect x="8" y="224" width="804" height="64" rx="10"/><text class="bt" x="22" y="252" font-size="14">L1 Runtime</text><text class="mut" x="22" y="272" font-size="10.5">Pi 本体：双循环、会话树、compaction、模型调用 · 继承，不改</text><text class="mut" x="640" y="260" font-size="11">vendor/pi</text></g>
+</svg>
+</div>
+<div class="card" id="layer-card"></div>
+
+<!-- ═══════════ L1 ═══════════ -->
+<h2 id="l1">L1：继承 Pi，不改它</h2>
+<p>自定义 harness 不 fork Pi。双循环、会话树、compaction、工具执行顺序都按 Pi 的来；我们能改的是 Pi <b>留出来的口子</b>。下表左边是“动不了”的部分，右边是 Pi 在这一块留下的替换口。</p>
+<div class="tbl"><table>
+<thead><tr><th>Pi 提供的</th><th>不 fork 就动不了的</th><th>Pi 留的替换口</th></tr></thead>
+<tbody>
+<tr><td>双循环（settle 转 run，run 转 turn）</td><td>循环的形状、判断顺序（见 <a href="guide-turn.html">一个 turn 的内部</a>）</td><td>只能在 L2 的插点上影响它，例如 <code>turn_end</code> 要求续跑、<code>agent_end</code> 排消息</td></tr>
+<tr><td>会话树与投影</td><td>存储格式、投影规则</td><td>扩展往里写：工具结果的 <code>details</code>、<code>pi.appendEntry</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L1747"><code>types.ts:1747</code></a>）</td></tr>
+<tr><td>模型调用</td><td>请求流程</td><td><code>models.json</code>、自定义 provider（<code>pi.registerProvider</code>，<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L1859"><code>types.ts:1859</code></a>）、虚拟模型路由</td></tr>
+<tr><td>系统提示词</td><td>默认提示词的拼装方式</td><td><code>SYSTEM.md</code> 整个替换、<code>APPEND_SYSTEM.md</code> 追加、<code>before_agent_start</code> 按次替换</td></tr>
+<tr><td>内置工具</td><td>工具的执行机制</td><td><code>setActiveTools</code>（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L1778"><code>types.ts:1778</code></a>）、<code>--tools</code>、SDK 的 <code>tools</code> / <code>noTools</code> / <code>customTools</code></td></tr>
+<tr><td>运行宿主</td><td>–</td><td>交互式 TUI、print、JSON 事件流、RPC、SDK（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/sdk.ts#L191"><code>createAgentSession</code></a>）</td></tr>
+</tbody></table></div>
+<div class="callout"><b>对照：不是所有 harness 都把 L1 当成“动不了”。</b>DeepSeek Harness 建在 Cordis 插件内核上，模型适配、工具、会话、沙箱、存储、调度，连 agent loop 本身和 UI 都是插件，可以在配置里替换（<a href="https://www.datacamp.com/blog/what-is-deepseek-harness">DataCamp 介绍</a>、<a href="https://deepinfra.com/blog/deepseek-harness-review">DeepInfra 评测</a>）。Pi 的取舍相反：循环固定，开放的是循环上的插点。两种做法的利弊放在 <code>discussions/2026-10-28-l4-web-desktop-and-plugin-harness.md</code>，那是设计讨论，不是这套走读的前提。</div>
+
+<!-- ═══════════ L2 ═══════════ -->
+<h2 id="l2">L2：扩展插点的 where、when、what、how</h2>
+<p>每个插点回答四个问题：<b>where</b> 在双循环的哪个阶段；<b>when</b> 被什么触发；<b>what</b> 能改写还是只能观察，改的是什么；<b>how</b> 代码怎么写。点表里任意一行看代码和案例；用上面的按钮按类型筛选。</p>
+<div class="controls" id="hook-filter">
+  <span class="small muted">只看：</span>
+  <button data-f="" aria-pressed="true">全部</button>
+  <button data-f="改写">改写</button>
+  <button data-f="观察">观察</button>
+  <button data-f="注册">注册</button>
+  <button data-f="队列">队列 / 通信</button>
+  <button data-f="持久化">持久化</button>
+  <button data-f="界面">界面</button>
+</div>
+<div class="tbl"><table class="hook-table">
+<thead><tr><th>插点</th><th>where</th><th>when</th><th>what</th></tr></thead>
+<tbody id="hook-rows"></tbody>
+</table></div>
+<div class="card" id="hook-card"></div>
+
+<h2 id="how">L2 的 how：作用域、共享与调用 L3</h2>
+<p>扩展是一个 <code>export default function (pi)</code>。理解它的作用域，就知道状态放哪、回调之间怎么共享、L2 怎么调 L3。</p>
+<pre class="snip">export default function (pi: ExtensionAPI) {          // ① 每个 runtime 调一次工厂（loader.ts:627）
+  let model = INITIAL_MODEL;                            // ② 闭包变量：下面所有回调共享这一个格子
+
+  pi.on("tool_call", (e) =&gt; gate(model, e.toolName));   // ③ 读：把“当前状态 + 事件”交给 L3 纯函数
+
+  pi.registerTool({ name: "tilldone", /* … */
+    async execute(_id, params, _s, _u, ctx) {
+      const r = runTool(model, params);                 // ④ L3 返回新值，L2 只负责换格子
+      if (r.next) model = r.next;
+      paint(ctx.ui, model.list);                        // ⑤ ctx 每次事件都新给一份，用完即弃，不要存
+      return { content: [{ type: "text", text: r.text }], details: r.details };  // ⑥ details 进会话树
+    },
+  });
+
+  pi.on("session_start", (_e, ctx) =&gt; { model = restore(model, detailsOnBranch(ctx)); });  // ⑦ 从会话恢复
+}</pre>
+<div class="tbl"><table>
+<thead><tr><th>问题</th><th>答案</th><th>依据</th></tr></thead>
+<tbody>
+<tr><td>同一个扩展的不同回调怎么共享变量？</td><td>工厂函数里的闭包变量（②）。所有 <code>pi.on</code>、工具、命令都在同一次工厂调用里注册，读写同一个变量</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L627"><code>loader.ts:627</code></a> 调工厂</td></tr>
+<tr><td>闭包能活多久？</td><td>一个 runtime。<code>/reload</code>、新会话会换新 runtime、重新调工厂，旧闭包作废；旧 runtime 上的调用会抛 stale 错误</td><td><a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/loader.ts#L167"><code>loader.ts:167</code></a></td></tr>
+<tr><td>那状态怎么跨 reload、跨分支？</td><td>写进会话树（工具结果的 <code>details</code> 或 <code>pi.appendEntry</code>），在 <code>session_start</code> / <code>session_tree</code> 里恢复（⑥⑦）</td><td>tilldone 两版都这么做</td></tr>
+<tr><td>L2 怎么调 L3？</td><td>直接 import L3 的纯函数，传入“当前状态 + 输入”，拿回“新状态 + 要做的事”（③④）。L3 不 import Pi，也不 import L4</td><td><a href="tilldone-4-layers.html">12-b</a> 的结构测试强制这一点</td></tr>
+<tr><td><code>ctx</code> 是什么？</td><td>每次事件 Pi 新给的一份上下文：<code>ui</code>、<code>sessionManager</code>、<code>model</code>… 只在这次回调里用</td><td>⑤</td></tr>
+<tr><td>不同扩展之间怎么共享？</td><td><code>pi.events</code> 事件总线（<a href="../../../../../vendor/pi/packages/coding-agent/src/core/extensions/types.ts#L1917"><code>types.ts:1917</code></a>），或者各自读会话树。不要互相 import 对方的闭包</td><td>–</td></tr>
+</tbody></table></div>
+
+<h2 id="non-ext">扩展以外的插点</h2>
+<p>扩展不是唯一的插入方式。Pi 文档的建议是<b>先用能力最弱、刚好够用的机制</b>（quickstart 的 “Choose how to customize Pi”）。下表按“改什么”排，越往上越轻。</p>
+<div class="tbl"><table>
+<thead><tr><th>机制</th><th>放在哪</th><th>改什么</th><th>近似对应的层</th></tr></thead>
+<tbody>
+<tr><td><code>AGENTS.md</code> / <code>CLAUDE.md</code></td><td>agent 目录、项目目录及其上级</td><td>持久的上下文说明</td><td>L3 的“文字”部分</td></tr>
+<tr><td><code>SYSTEM.md</code> / <code>APPEND_SYSTEM.md</code></td><td><code>~/.pi/agent/</code> 或 <code>.pi/</code></td><td>整个替换 / 追加系统提示词</td><td>L3 的“文字”部分</td></tr>
+<tr><td>提示词模板</td><td><code>prompts/</code></td><td>复用的提示词，作为斜杠命令</td><td>L3 文字 + L2 命令</td></tr>
+<tr><td>Skill</td><td><code>skills/</code></td><td>按任务加载的说明和配套文件</td><td>L3</td></tr>
+<tr><td><code>settings.json</code>、<code>keybindings.json</code>、主题</td><td>agent 目录或 <code>.pi/</code></td><td>默认模型、工具、资源路径、按键、配色</td><td>L1 的配置面 / L4</td></tr>
+<tr><td>MCP、<code>models.json</code>、自定义 provider</td><td>agent 目录或 <code>.pi/</code>，provider 由扩展注册</td><td>外部工具、模型接入</td><td>L1 的替换口</td></tr>
+<tr><td><b>扩展</b></td><td><code>extensions/</code> 或 <code>-e</code></td><td>回调、工具、命令、UI：上一节的全部插点</td><td>L2（+ 它调用的 L3、L4）</td></tr>
+<tr><td>Pi package</td><td>npm / git / 本地目录</td><td>把以上资源打包分发</td><td>分发方式</td></tr>
+<tr><td>print / JSON 事件流 / RPC / SDK</td><td>宿主程序</td><td>由别的程序驱动 Pi：脚本、另一个进程、嵌进应用</td><td>L1 的宿主，也是自定义 L4 的入口（见 L4 一节）</td></tr>
+</tbody></table></div>
+<p class="small muted">来源：Pi 1.4.0 文档 <code>configuration.md</code>、<code>quickstart.md</code>、<code>index.md</code>（安装包内 <code>docs/</code>）。“近似对应的层”是本指南的归类，不是 Pi 文档的说法。</p>
+
+<!-- ═══════════ L3 ═══════════ -->
+<h2 id="l3">L3：为什么最难</h2>
+<p>L3 不只是“写业务代码”。它要同时满足三股力量，而且每一股都会把一部分逻辑推向 L2 或 L4。这也是讨论记录里那句话：<b>上下文管理是手段，业务语义是内容</b>。点一股力量，看它拆出哪些问题、各落在哪层、系列里哪几篇是案例。</p>
+<div class="tabs" id="force-tabs"></div>
+<div class="tbl"><table>
+<thead><tr><th>问题</th><th><span class="tag l2">L2</span> 用什么接</th><th><span class="tag l3">L3</span> 要决定什么</th><th><span class="tag l4">L4</span></th><th>案例</th></tr></thead>
+<tbody id="force-rows"></tbody>
+</table></div>
+
+<h2 id="trust">护栏与验证：信任链</h2>
+<p>Agent 时代，规模化的前提是信任，信任的前提是验证：<b>没有验证就没有信任，没有信任就放不了量</b>。勾选你的 harness 已经具备的环节，看信任链在哪里断掉。</p>
+<div class="grid c3" id="trust-in">
+  <label class="card small"><input type="checkbox" data-k="guard" checked> 护栏：危险动作在执行前被拦（L2 <code>tool_call</code>）</label>
+  <label class="card small"><input type="checkbox" data-k="test"> 业务规则可以单测（L3 纯函数）</label>
+  <label class="card small"><input type="checkbox" data-k="equiv"> 改动后能对照验证行为（真实 runtime + 假模型）</label>
+  <label class="card small"><input type="checkbox" data-k="trace" checked> 运行可追踪（工具计数、会话回放）</label>
+  <label class="card small"><input type="checkbox" data-k="human"> 人能看到并确认关键决定（L4 确认框、状态）</label>
+</div>
+<div class="fig fig-scroll" id="trust-fig"></div>
+<div class="card small" id="trust-out"></div>
+
+<!-- ═══════════ L4 ═══════════ -->
+<h2 id="l4">L4：Pi TUI 能画什么</h2>
+<p>L4 是独立于上下文的数据通道：画在屏幕上的东西模型看不到，也不经过模型转述。Pi 的 L4 是终端界面，下表是扩展能用的组件，以及它们在 RPC 模式（由别的程序驱动 Pi）下还剩什么。</p>
+<div class="tbl"><table>
+<thead><tr><th>组件</th><th>显示在哪</th><th>RPC 模式</th><th>案例</th></tr></thead>
+<tbody>
+<tr><td><code>setStatus</code></td><td>页脚状态区</td><td>转成协议消息，客户端自行显示</td><td><a href="tilldone.html">12</a></td></tr>
+<tr><td><code>setWidget</code></td><td>编辑器上方或下方</td><td>转成协议消息</td><td><a href="tool-counter-widget.html">03</a>、<a href="subagent-widget.html">16</a></td></tr>
+<tr><td><code>notify</code>、<code>setTitle</code></td><td>通知、终端标题</td><td>转成协议消息</td><td><a href="theme-cycler.html">09</a></td></tr>
+<tr><td><code>confirm</code> / <code>select</code> / <code>input</code> / <code>editor</code></td><td>对话框</td><td>请求 / 应答子协议，客户端回答</td><td><a href="tilldone.html">12</a>、<a href="system-select.html">10</a></td></tr>
+<tr><td><code>setFooter</code> / <code>setHeader</code></td><td>替换页脚 / 页头</td><td><b>不生效</b></td><td><a href="minimal.html">01</a>、<a href="pure-focus.html">02</a></td></tr>
+<tr><td><code>custom</code>（浮层 / 占位组件）</td><td>任意 TUI 组件</td><td><b>不生效</b>（返回 undefined）</td><td><a href="session-replay.html">07</a></td></tr>
+<tr><td><code>renderCall</code> / <code>renderResult</code></td><td>聊天区的工具行</td><td>由客户端自己渲染事件</td><td><a href="tilldone.html">12</a></td></tr>
+</tbody></table></div>
+<p class="small muted">RPC 一列来自 Pi 1.4.0 文档 <code>rpc-extension-ui.md</code>。这意味着：如果将来要做 Web 或桌面界面，依赖 <code>setFooter</code>、<code>custom</code> 的 L4 代码都得重写一份；而 L3 的选择器（例如 tilldone 的 <code>countByStatus</code>、<code>current</code>）可以原样复用。图片、three.js 动画、富表格这类视觉内容超出终端能力，可能的方向（扩展内起本地 web 服务、RPC/SDK 宿主 + Web 客户端、Electron 桌面壳）和取舍记在 <code>discussions/2026-10-28-l4-web-desktop-and-plugin-harness.md</code>。</p>
+
+<!-- ═══════════ 更新记录 ═══════════ -->
+<h2 id="changelog">更新记录</h2>
+<ul class="small">
+<li>2026-10-28 · 初版：四层一览、L1 替换口、L2 插点的 where/when/what/how 与作用域、扩展以外的插点、L3 的三股力量、信任链、L4 组件与 RPC 限制。</li>
+</ul>
+
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// ─────────── 四层一览 ───────────
+const LAYERS = {
+  l4: ['L4 UI', '能改：完全由你决定，但只能用 Pi 给的 TUI 组件（或在 RPC/SDK 宿主上自己做界面）。', '放：怎么画。状态条、widget、页脚、对话框、工具结果行。只读 L3 给的值，不写状态。', 'tilldone/ui.ts：<code>paint</code>、<code>renderCall/Result</code>、<code>showList</code>'],
+  l3: ['L3 业务', '能改：完全是你的代码，也是最难设计的一层（见“L3：为什么最难”）。', '放：规则和文字。什么算违规、给模型看什么、状态怎么转移、怎么从会话恢复。不 import Pi，可以单测。', 'tilldone/state.ts：<code>runTool</code>、<code>gate</code>、<code>agentEnd</code>、<code>toDetails/parseDetails</code>'],
+  l2: ['L2 扩展', '能改：只能在 Pi 开放的插点上挂（见 L2 插点表）。', '放：胶水。收到事件 → 调 L3 → 把结果交回 Pi 或交给 L4。持有唯一的可变状态。', 'tilldone/index.ts：5 个 <code>pi.on</code>、<code>registerTool</code>、<code>let model</code>'],
+  l1: ['L1 Runtime', '能改：不改（不 fork）。用 Pi 留的替换口：配置、provider、宿主模式。', '放：什么都不放，继承。', 'vendor/pi：<code>agent-session.ts</code>、<code>agent-loop.ts</code>'],
+};
+function showLayer(k) {
+  document.querySelectorAll('.stack-layer').forEach(g => g.classList.toggle('on', g.dataset.k === k));
+  const [t, can, put, ex] = LAYERS[k];
+  $('layer-card').innerHTML = `<b>${t}</b><div class="small" style="margin-top:4px">${can}</div><div class="small">${put}</div><div class="small muted">例：${ex}</div>`;
+}
+document.querySelectorAll('.stack-layer').forEach(g => g.addEventListener('click', () => showLayer(g.dataset.k)));
+showLayer('l3');
+
+// ─────────── L2 插点 ───────────
+// [插点, 类型, where, when, what, how 代码, 案例 [[篇名, href]]]
+const HOOKS = [
+  ['session_start', '观察', '循环外', '启动、/reload、/new、/resume、fork', '恢复状态、装界面；本身不改流程', 'pi.on("session_start", (e, ctx) => {\n  model = restore(model, detailsOnBranch(ctx));\n  paint(ctx.ui, model.list);\n});', [['tilldone', 'tilldone.html'], ['minimal', 'minimal.html']]],
+  ['input', '改写', '外循环之前（prompt() 里）', '用户回车；斜杠命令不触发', '返回 transform 改写用户输入，或返回 handled 让这次 settle 根本不开始', 'pi.on("input", (e) => {\n  if (!purpose) return { action: "handled" };\n  return { action: "continue" };\n});', [['purpose-gate', 'purpose-gate.html']]],
+  ['before_agent_start', '改写', '外循环入口，每次 settle 1 次', '一次提问开始', '系统提示词（只对本次 settle 有效，不落盘）', 'pi.on("before_agent_start", (e) => ({\n  systemPrompt: personaPrompt,\n}));', [['system-select', 'system-select.html'], ['agent-team', 'agent-team.html']]],
+  ['context', '改写', '内循环，每次调模型前（turn 第 5 行）', '每个 turn', '这一次请求的消息数组；不写回会话', 'pi.on("context", (e) => ({\n  messages: protect(trim(e.messages)),\n}));', [['一个 turn 的内部', 'guide-turn.html']]],
+  ['before_provider_request', '改写', '内循环，发请求时（turn 第 7 行）', '每个 turn', '发给 provider 的原始请求体', 'pi.on("before_provider_request", (e) => tweak(e.payload));', [['一个 turn 的内部', 'guide-turn.html']]],
+  ['tool_call', '改写', '内循环，每个工具执行前（turn 第 9 行）', '模型调用任何工具', '这个工具执不执行；block 的 reason 变成给模型的 toolResult', 'pi.on("tool_call", (e) => gate(model, e.toolName));\n// → { block: true, reason: "…" }', [['damage-control', 'damage-control.html'], ['tilldone', 'tilldone.html']]],
+  ['tool_result', '改写', '内循环，工具执行后（turn 第 11 行）', '每个工具结果', '结果的 content / details / isError', 'pi.on("tool_result", (e) => ({ content: redact(e.content) }));', [['一个 turn 的内部', 'guide-turn.html']]],
+  ['turn_end', '改写', '内循环末尾（finishTurn，turn 第 13 行）', '每个 turn 结束', '要求再跑一个 turn（流程）', 'pi.on("turn_end", () => needMore ? { continue: true } : undefined);', [['一个 turn 的内部', 'guide-turn.html']]],
+  ['agent_end + sendMessage', '改写', '外循环，每个 run 结束', 'run 结束', '排一条消息让外循环再起一个 run（流程）', 'pi.on("agent_end", () => {\n  const r = agentEnd(model); model = r.model;\n  if (r.nudge) pi.sendMessage(r.nudge, { triggerTurn: true });\n});', [['tilldone', 'tilldone.html'], ['coms', 'coms.html']]],
+  ['turn_start / message_* / tool_execution_*', '观察', '内循环各阶段', '每个 turn / 每条消息 / 每个工具', '只能看，改不了', 'pi.on("tool_execution_end", (e) => { counts[e.toolName]++; });', [['tool-counter', 'tool-counter.html'], ['tool-counter-widget', 'tool-counter-widget.html']]],
+  ['registerTool', '注册', '加载时登记；执行在内循环工具阶段', '模型决定调用它', '给模型一项新能力：描述进系统提示词，execute 由你实现', 'pi.registerTool({\n  name: "tilldone", description, parameters,\n  executionMode: "sequential",\n  async execute(id, params, signal, onUpdate, ctx) { … },\n});', [['tilldone', 'tilldone.html'], ['agent-team', 'agent-team.html']]],
+  ['registerCommand / Shortcut / Flag', '注册', '命令在 prompt() 入口截走；快捷键在编辑器里；flag 在启动参数', '用户输入 /xxx、按键、命令行参数', '不进循环；命令可以再调 sendUserMessage 发起一次 settle', 'pi.registerCommand("replay", { handler: async (args, ctx) => { … } });', [['session-replay', 'session-replay.html'], ['theme-cycler', 'theme-cycler.html'], ['coms', 'coms.html']]],
+  ['setActiveTools', '改写', '任何时候；下一个 turn 生效', '扩展自己决定', '模型这次能用哪些工具（会记进会话）', 'pi.setActiveTools(["read", "dispatch_agent"]);', [['agent-team', 'agent-team.html'], ['system-select', 'system-select.html']]],
+  ['sendMessage（steer / followUp）', '队列', '任何时候；loop 在固定检查点取', '扩展自己决定（子进程结束、socket 回调…）', '往队列放消息；agent 空闲时加 triggerTurn 会直接开一次 settle', 'pi.sendMessage(msg, { deliverAs: "steer", triggerTurn: true });', [['subagent-widget', 'subagent-widget.html'], ['coms-net', 'coms-net.html']]],
+  ['pi.events', '队列', '任何时候', '扩展之间约定的事件', '扩展之间通信，不经过模型', 'pi.events.on("my-ext:ready", (data) => { … });\npi.events.emit("my-ext:ready", { … });', [['（系列里未用到）', 'guide-four-layers.html#how']]],
+  ['details / appendEntry', '持久化', '写进会话树', '工具返回时 / 扩展自己决定', '状态跟着会话分支走，/tree、/resume、/reload 后可恢复', 'return { content, details: toDetails(model.list, action) };\npi.appendEntry("my-state", data);', [['tilldone 四层版', 'tilldone-4-layers.html']]],
+  ['ctx.ui.*', '界面', '任何时候（多在回调里）', '扩展自己决定', '屏幕上的东西；不进上下文', 'ctx.ui.setStatus("tilldone", text);\nctx.ui.setWidget("key", factory, { placement: "belowEditor" });', [['minimal', 'minimal.html'], ['pure-focus', 'pure-focus.html']]],
+];
+let hookFilter = '', hookSel = 0;
+function renderHooks() {
+  const tb = $('hook-rows'); tb.textContent = '';
+  HOOKS.forEach((h, i) => {
+    if (hookFilter && h[1] !== hookFilter) return;
+    const tr = document.createElement('tr');
+    tr.className = i === hookSel ? 'on' : '';
+    tr.innerHTML = `<td><code>${esc(h[0])}</code> <span class="tag ${h[1] === '观察' ? 'off' : 'hit'}">${h[1]}</span></td><td class="small">${esc(h[2])}</td><td class="small">${esc(h[3])}</td><td class="small">${esc(h[4])}</td>`;
+    tr.onclick = () => { hookSel = i; renderHooks(); };
+    tb.appendChild(tr);
+  });
+  const h = HOOKS[hookSel];
+  $('hook-card').innerHTML = `<b><code>${esc(h[0])}</code></b> · <span class="small">${esc(h[1])}</span>` +
+    `<div class="small" style="margin-top:4px"><b>where</b> ${esc(h[2])} · <b>when</b> ${esc(h[3])} · <b>what</b> ${esc(h[4])}</div>` +
+    `<pre class="snip">${esc(h[5])}</pre><div class="small" style="margin-top:6px">案例：${h[6].map(([t, href]) => `<a href="${href}">${esc(t)}</a>`).join('、')}</div>`;
+}
+document.querySelectorAll('#hook-filter button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#hook-filter button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  hookFilter = b.dataset.f;
+  const first = HOOKS.findIndex(h => !hookFilter || h[1] === hookFilter);
+  if (first >= 0 && hookFilter && HOOKS[hookSel][1] !== hookFilter) hookSel = first;
+  renderHooks();
+});
+renderHooks();
+
+// ─────────── L3 三股力量 ───────────
+// [问题, L2, L3, L4, 案例 [[篇名, href]]]
+const FORCES = {
+  'Pi 的切分': [
+    ['规则放哪', '回调只做转交', '规则、阈值、给模型的措辞', '只显示结果', [['12-b', 'tilldone-4-layers.html']]],
+    ['状态放哪', '持有唯一可变格子', '状态的形状和转移（纯函数）', '读值，不写', [['12-b', 'tilldone-4-layers.html']]],
+    ['状态怎么跨 reload', 'session_start 里恢复', '快照 / 解析的格式和校验', '–', [['12', 'tilldone.html'], ['12-b', 'tilldone-4-layers.html']]],
+    ['给模型看多少', 'context / tool_result 钩子', '摘要哪些字段、带什么标记（业务语义决定）', '完整数据留给界面', [['一个 turn 的内部', 'guide-turn.html']]],
+  ],
+  'Agent 设计': [
+    ['身份与角色', 'before_agent_start', '人设提示词、目的', '显示当前角色', [['10 system-select', 'system-select.html'], ['11 purpose-gate', 'purpose-gate.html']]],
+    ['工具', 'registerTool、setActiveTools', '工具语义、参数、结果文字', 'renderCall / renderResult', [['12 tilldone', 'tilldone.html'], ['13 agent-team', 'agent-team.html']]],
+    ['多 agent 架构', '工具里起子进程；sendMessage 回传', '分工、调度、结果怎么汇总', '子 agent 状态面板', [['13 agent-team', 'agent-team.html'], ['14 agent-chain', 'agent-chain.html'], ['15 pi-pi', 'pi-pi.html'], ['16 subagent-widget', 'subagent-widget.html'], ['17 coms', 'coms.html'], ['18 coms-net', 'coms-net.html']]],
+    ['持久性', 'details、appendEntry、session_start 恢复', '哪些状态要活过会话、存什么', '–', [['12 tilldone', 'tilldone.html'], ['17 coms', 'coms.html']]],
+  ],
+  '护栏与验证': [
+    ['安全护栏', 'tool_call 返回 block', '什么算危险（规则表）', '被拦时提示用户', [['05 damage-control', 'damage-control.html'], ['06 damage-control-continue', 'damage-control-continue.html']]],
+    ['行为纪律', 'tool_call 门 + agent_end 催办', '什么状态下允许干活', '进度、当前任务', [['12 tilldone', 'tilldone.html']]],
+    ['跟踪', 'tool_execution_end 等观察型事件', '统计口径', '计数、回放', [['04 tool-counter', 'tool-counter.html'], ['07 session-replay', 'session-replay.html']]],
+    ['验证', '–', '纯函数单测；真实 runtime + 假模型对照测试', '–', [['12-b', 'tilldone-4-layers.html']]],
+  ],
+};
+let force = 'Pi 的切分';
+function renderForces() {
+  const tabs = $('force-tabs'); tabs.textContent = '';
+  Object.keys(FORCES).forEach((k, i) => {
+    const b = document.createElement('button');
+    b.textContent = `(${i + 1}) ${k}`;
+    b.setAttribute('aria-pressed', String(k === force));
+    b.onclick = () => { force = k; renderForces(); };
+    tabs.appendChild(b);
+  });
+  const tb = $('force-rows'); tb.textContent = '';
+  FORCES[force].forEach(([q, l2, l3, l4, cases]) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><b>${esc(q)}</b></td><td class="small">${esc(l2)}</td><td class="small">${esc(l3)}</td><td class="small">${esc(l4)}</td><td class="small">${cases.map(([t, h]) => `<a href="${h}">${esc(t)}</a>`).join('、')}</td>`;
+    tb.appendChild(tr);
+  });
+}
+renderForces();
+
+// ─────────── 信任链 ───────────
+const TRUST = [['guard', '护栏', 'L2'], ['test', '单测', 'L3'], ['equiv', '对照验证', 'L3'], ['trace', '可追踪', 'L2/L4'], ['human', '人能确认', 'L4']];
+function renderTrust() {
+  const v = {};
+  document.querySelectorAll('#trust-in input').forEach(c => { v[c.dataset.k] = c.checked; });
+  const ok = TRUST.every(([k]) => v[k]);
+  let s = '<svg viewBox="0 0 820 130" role="img" aria-label="信任链">';
+  TRUST.forEach(([k, t, layer], i) => {
+    const x = 10 + i * 128;
+    s += `<g class="node ${v[k] ? 'on' : 'off'}"><rect x="${x}" y="20" width="112" height="44" rx="8"/><text x="${x + 56}" y="40" font-size="12" text-anchor="middle">${t}</text><text class="mut" x="${x + 56}" y="56" font-size="10" text-anchor="middle">${layer}</text></g>`;
+    s += `<text x="${x + 120}" y="46" font-size="14" class="mut">→</text>`;
+  });
+  s += `<g class="node ${ok ? 'on' : 'off'}"><rect x="650" y="14" width="160" height="56" rx="8"/><text x="730" y="38" font-size="13" text-anchor="middle">${ok ? '可信 → 可放量' : '信任链断开'}</text><text class="mut" x="730" y="56" font-size="10" text-anchor="middle">${ok ? '敢并行、敢无人值守' : '只能人盯着跑'}</text></g>`;
+  s += '<text class="mut" x="10" y="100" font-size="10.5">每一环都缺一不可：只有护栏没有验证，改一次规则就不知道有没有改坏；只有测试没有追踪，线上出事无从复盘。</text>';
+  $('trust-fig').innerHTML = s + '</svg>';
+  const miss = TRUST.filter(([k]) => !v[k]).map(([, t]) => t);
+  $('trust-out').innerHTML = miss.length ? `缺：<b>${miss.join('、')}</b>。系列里的对应做法见上一节“护栏与验证”页签。` : '五环齐全。12-b 的 tilldone 四层版覆盖了护栏、单测、对照验证；追踪和人工确认来自 Pi 的 UI 与观察型事件。';
+}
+document.querySelectorAll('#trust-in input').forEach(c => { c.onchange = renderTrust; });
+renderTrust();
+</script>
+</body>
+</html>

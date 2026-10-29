@@ -101,6 +101,21 @@
 
 <div class="callout"><b>为什么主题键用目录 URL。</b><code>themeMap.ts</code> 用文件名决定主题：<code>index.ts</code> 的文件名是 “index”，查不到映射就会落到 synthwave；终端标题取的是 argv 里第一个 <code>-e</code> 的文件名。所以 <a href="../extensions/tilldone/index.ts#L26"><code>index.ts:26</code></a> 传 <code>new URL(".", import.meta.url)</code>，文件名是 “tilldone”，得到原版的 everforest。启动也必须用目录形式：实测 <code>-e extensions/tilldone/index.ts</code> 会得到标题 “π - index”，而且主题不生效（themeMap 认为它不是主扩展）。</div>
 
+<!-- ═══════════ 放哪层 ═══════════ -->
+<h2 id="where">放哪层：判断准则</h2>
+<p>拆层时最常见的问题是“这段代码该放 L2、L3 还是 L4”。按顺序问三个问题，第一个答“是”的就是答案：</p>
+<div class="tbl"><table>
+<thead><tr><th>#</th><th>问题</th><th>是 → 放</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>它要知道 Pi 的事件、<code>ctx</code>、会话条目的形状吗？</td><td><span class="tag l2">L2</span> <code>index.ts</code></td><td>Pi 的接口只出现在一处，Pi 升级时只改这一个文件</td></tr>
+<tr><td>2</td><td>它要知道主题、终端宽度、TUI 组件吗？</td><td><span class="tag l4">L4</span> <code>ui.ts</code></td><td>换一种界面（例如 Web）时只重写这一层</td></tr>
+<tr><td>3</td><td>剩下的：规则、状态转移、给模型看的文字、存什么</td><td><span class="tag l3">L3</span> <code>state.ts</code></td><td>纯函数，不依赖 Pi 也能单测；业务语义集中在一处</td></tr>
+</tbody></table></div>
+<p class="small muted">两条补充：<b>“该不该问用户”是 L3，“怎么问”是 L2/L4</b>（所以 <code>runTool</code> 返回 <code>Ask</code>，弹框交给 L2 调 <code>ctx.ui.confirm</code>）；<b>L4 要用的统计数字由 L3 的选择器算</b>（<code>countByStatus</code>、<code>current</code>），L4 不自己数。</p>
+<p>点一张卡片，先自己判断它属于哪层，再看答案。片段摘自原版 <code>tilldone.ts</code>，有删节。</p>
+<div class="grid c2" id="quiz"></div>
+<p class="small">L2 的回调之间怎么共享这个唯一的 <code>model</code>、闭包能活多久、为什么必须在 <code>session_start</code> 里从会话恢复，见阅读指南 <a href="guide-four-layers.html#how">四层架构 · L2 的 how</a>；所有插点的 where / when / what 总表也在那篇。</p>
+
 <!-- ═══════════ 维度二 ═══════════ -->
 <h2 id="d2">② 提示词上下文</h2>
 <p>模型看到的内容和第 12 篇<b>逐字节相同</b>：工具描述、参数描述、每个动作的结果文字、三条门理由、催办消息。区别在于这些字符串现在全部住在 <code>state.ts</code> 一个文件里，L2 只是搬运。这正是讨论记录里说的“第三层决定什么进上下文”：要改给模型的措辞，只改 L3。</p>
@@ -438,6 +453,34 @@ $('t-go').onclick = () => {
 };
 $('a-reset').onclick = reset;
 reset();
+
+// ─────────── 放哪层：小测验 ───────────
+// [原版代码片段, 正确层, 解释]
+const QUIZ = [
+  ['if (tasks.length === 0) return { block: true, reason: "🚫 No TillDone tasks defined…" }', 'l3', '门的判断和理由文字是业务规则 → state.ts <code>gate</code>。L2 只剩 <code>pi.on("tool_call", e =&gt; gate(model, e.toolName))</code> 一行。'],
+  ['for (const entry of ctx.sessionManager.getBranch()) { if (entry.type === "message" …', 'l2', '要知道 Pi 会话条目的形状 → index.ts <code>restoreFrom</code>。取出的 details 交给 L3 <code>restore</code> 解析。'],
+  ['const confirmed = await ctx.ui.confirm("Clear TillDone list?", …)', 'l2', '“要不要问、问什么”在 L3（返回 Ask）；真正弹框要用 <code>ctx</code> → L2 调用，对话框本身由 Pi 的 UI 画。'],
+  ['ctx.ui.setStatus(`${label}: ${tasks.length} tasks (${remaining} remaining)`, …)', 'l4', '写状态条 → ui.ts <code>paint</code>；数字 remaining 由 L3 选择器 <code>countByStatus</code> 算出。'],
+  ['task.status = NEXT_STATUS[task.status];', 'l3', '状态转移 → state.ts <code>runTool</code> 的 toggle 分支，而且改成生成新对象，不再原地改（B1）。'],
+  ['theme.fg("accent", "● ") + theme.fg("dim", "WORKING ON  ")', 'l4', '依赖主题配色 → ui.ts 的 widget。'],
+  ['pi.sendMessage({ customType: "tilldone-nudge", content, display: true }, { triggerTurn: true })', 'l2', '发消息要用 <code>pi</code> → L2；但 content 文字和“该不该催”由 L3 <code>agentEnd</code> 决定。'],
+  ['description: "Manage your task list. You MUST add tasks before using any other tools. …"', 'l3', '给模型看的文字是业务语义 → state.ts <code>TOOL.description</code>；L2 只把它传给 <code>registerTool</code>。'],
+];
+const TAGN = { l2: 'L2 index.ts', l3: 'L3 state.ts', l4: 'L4 ui.ts' };
+QUIZ.forEach(([code, ans, why]) => {
+  const card = document.createElement('div');
+  card.className = 'card small';
+  const pre = document.createElement('code'); pre.textContent = code;
+  const btns = document.createElement('div'); btns.className = 'controls';
+  const out = document.createElement('div');
+  ['l2', 'l3', 'l4'].forEach(k => {
+    const b = document.createElement('button'); b.textContent = TAGN[k];
+    b.onclick = () => { out.innerHTML = `${k === ans ? '✔ 对。' : `✘ 应该是 <span class="tag ${ans}">${TAGN[ans]}</span>。`}${why}`; };
+    btns.appendChild(b);
+  });
+  card.append(pre, btns, out);
+  $('quiz').appendChild(card);
+});
 </script>
 </body>
 </html>
