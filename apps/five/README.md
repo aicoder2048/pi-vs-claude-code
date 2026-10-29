@@ -7,11 +7,11 @@
 需要 **Bun**、**Node.js ≥ 22.12** 和 **just**。
 
 ```sh
-cd /Users/szou/Python/Playground/LearnTopEngSkills/practice/harness-dual-loops/vendor/pi-vs-claude-code/apps/five
-just
+cd apps/five                # 从仓库根目录进入
+just five
 ```
 
-`just` / `just start` 会安装依赖、准备 Electron 运行时并打开桌面窗口。首次安装需要网络；之后对弈与音乐都不需要联网。
+`just five` / `just` / `just start` 会安装依赖、准备 Electron 运行时并打开桌面窗口。关闭窗口、Cmd+Q 或 Ctrl+Q 都会结束应用，`just` 随之返回命令行。首次安装需要网络；之后对弈与音乐都不需要联网。
 
 不使用 just 也可以：
 

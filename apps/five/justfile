@@ -11,6 +11,9 @@ install:
 start: install
     bun run start
 
+# 同 start：安装依赖并启动，应用退出后返回命令行
+five: start
+
 # 规则与三级 AI 自动化测试
 test:
     bun run test

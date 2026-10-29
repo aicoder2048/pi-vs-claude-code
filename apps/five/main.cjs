@@ -19,6 +19,13 @@ function createWindow() {
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
+  // Ctrl+Q also quits on macOS, where the app menu only binds Cmd+Q.
+  window.webContents.on("before-input-event", (event, input) => {
+    if (process.platform === "darwin" && input.type === "keyDown" && input.control && !input.meta && input.key.toLowerCase() === "q") {
+      event.preventDefault();
+      app.quit();
+    }
+  });
   window.loadFile(path.join(__dirname, "renderer", "index.html"));
   window.on("closed", () => {
     window = null;
@@ -60,6 +67,6 @@ app.whenReady().then(() => {
     if (!BrowserWindow.getAllWindows().length) createWindow();
   });
 });
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+// Single-window game: closing the window ends the app on every platform, so
+// `just five` returns to the shell instead of leaving Electron resident.
+app.on("window-all-closed", () => app.quit());
