@@ -1,0 +1,18 @@
+default:
+    @just --list
+
+install:
+    bun install
+
+# Build and open the Electron desktop
+start:
+    bun run start
+
+check:
+    bun run check
+
+smoke:
+    bun run test:smoke
+
+build:
+    bun run build
