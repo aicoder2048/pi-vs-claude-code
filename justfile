@@ -54,6 +54,10 @@ ext-subagent-widget:
 ext-tilldone:
     {{pi}} -e extensions/tilldone.ts -e extensions/theme-cycler.ts
 
+# 9b. TillDone, four-layer rewrite (extensions/tilldone/); same behavior with bugs B1-B3 fixed
+ext-tilldone-4layer:
+    {{pi}} -e extensions/tilldone -e extensions/theme-cycler.ts
+
 #g2
 
 # 10. Agent team: dispatcher orchestrator with team select and grid dashboard
