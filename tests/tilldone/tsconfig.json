@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "typeRoots": ["/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@types"],
+    "paths": {
+      "@mariozechner/pi-coding-agent": ["/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"],
+      "@mariozechner/pi-tui": ["/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.d.ts"],
+      "@mariozechner/pi-ai": ["/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.d.ts"],
+      "@sinclair/typebox": ["/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/index.d.mts"]
+    }
+  },
+  "files": ["../../extensions/tilldone/index.ts", "../../extensions/tilldone/state.ts", "../../extensions/tilldone/ui.ts", "equivalence.ts"]
+}
