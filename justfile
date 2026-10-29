@@ -94,6 +94,38 @@ ext-session-replay:
 ext-theme-cycler:
     {{pi}} -e extensions/theme-cycler.ts -e extensions/minimal.ts
 
+# Stock Desk desktop app
+
+# Install the standalone Electron app and its desktop runtime
+stocks-install:
+    cd apps/stock-ticker && bun install
+
+# Launch the stock quote desktop app
+stocks:
+    cd apps/stock-ticker && bun run start
+
+# Run offline stock quote tests
+stocks-test:
+    cd apps/stock-ticker && bun run test
+
+# Run the real Electron UI smoke test (requires a graphical desktop)
+stocks-smoke:
+    cd apps/stock-ticker && bun run test:smoke
+
+# TillDone desktop app
+
+# Install the standalone Electron app and its desktop runtime
+tilldone-desk-install:
+    cd apps/tilldone && bun install
+
+# Launch the TillDone desktop app
+tilldone-desk:
+    cd apps/tilldone && bun run start
+
+# Run offline TillDone desktop tests
+tilldone-desk-test:
+    cd apps/tilldone && bun run test
+
 # utils
 
 # Open pi with one or more stacked extensions in a new terminal: just open minimal tool-counter

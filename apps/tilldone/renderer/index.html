@@ -1,0 +1,96 @@
+<!doctype html>
+<!-- TillDone Desk L4: static, CSP-restricted shell; all external text is painted by renderer.ts. -->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'">
+  <title>边牧任务桌面</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="themes.css">
+  <script src="../dist/renderer.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <!-- L4: original local vector mark, with a collie's blaze, ears, collar, and AI circuitry. -->
+      <svg id="brand-logo" class="brand-logo" viewBox="0 0 80 80" role="img" aria-labelledby="brand-logo-title" xmlns="http://www.w3.org/2000/svg">
+        <title id="brand-logo-title">AI 边牧标志</title>
+        <rect class="logo-tile" x="2" y="2" width="76" height="76" rx="20"/>
+        <path fill="#202936" d="M18 39 12 12Q29 14 35 27L45 27Q53 14 68 12L62 41Z"/>
+        <path fill="#8e9bac" d="m18 20 4 15 8-8Zm44 0-4 15-8-8Z"/>
+        <path fill="#202936" d="M22 28Q40 17 58 28L65 44 68 52 61 52 64 59 56 60Q51 71 40 72 29 71 24 60L16 59 19 52 12 52 15 44Z"/>
+        <path fill="#fffaf1" d="M36 24Q40 22 44 24L43 39Q46 46 54 47L57 54Q52 67 40 69 28 67 23 54L26 47Q34 46 37 39Z"/>
+        <path fill="#fffaf1" d="m18 45 9 2 5 11-8 1-7-6Zm44 0-9 2-5 11 8 1 7-6Z"/>
+        <ellipse fill="#fffaf1" cx="28" cy="38" rx="3" ry="2.5"/>
+        <ellipse fill="#fffaf1" cx="52" cy="38" rx="3" ry="2.5"/>
+        <circle fill="#202936" cx="28.5" cy="38" r="1.4"/><circle fill="#202936" cx="51.5" cy="38" r="1.4"/>
+        <path fill="#202936" d="M35 50Q40 47 45 50L43 54 40 56 37 54Z"/>
+        <path fill="none" stroke="#202936" stroke-width="1.8" stroke-linecap="round" d="M40 55v5m-6-1q6 6 12 0"/>
+        <g class="logo-circuit" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m58 33 7-4v-7M22 65q18 10 36 0"/><circle cx="65" cy="19" r="3"/>
+        </g>
+        <rect class="logo-chip" x="35" y="65" width="10" height="9" rx="3"/>
+        <path fill="none" stroke="#fffaf1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="m38 69 1.5 1.5L42 68"/>
+      </svg>
+      <div class="brand-copy"><span id="workspace" class="eyebrow">PI · 任务工作台</span><h1 id="product-name">边牧任务桌面</h1><p id="brand-slogan" class="brand-slogan">交给边牧(AI牧羊犬)，安心放牧(任务必达)</p></div>
+    </div>
+    <div class="header-actions">
+      <div id="theme-shortcuts" class="theme-switcher" role="group" aria-label="快捷切换主题"></div>
+      <button id="settings-toggle" type="button" popovertarget="settings-panel"><span aria-hidden="true">⚙</span> <span id="settings-label">设置</span></button>
+    </div>
+  </header>
+  <section id="settings-panel" popover aria-labelledby="settings-title">
+    <h2 id="settings-title">设置</h2>
+    <div class="settings-row"><label for="theme" id="theme-label">主题</label><select id="theme"><option id="theme-system" value="system">系统</option><option id="theme-light" value="light">浅色</option><option id="theme-dark" value="dark">深色</option></select></div>
+    <div class="settings-row"><label for="language" id="language-label">语言</label><select id="language"><option value="zh-CN">中文</option><option value="en">English</option></select></div>
+    <button id="api-open" type="button"><span aria-hidden="true">⚿</span> <span id="api-entry-label">API Key 设置</span></button>
+  </section>
+  <section id="alert" role="alert" hidden><strong id="connection"></strong><p id="error"></p><button id="restart" type="button" hidden>重启 Pi</button></section>
+  <main>
+    <section id="chat" class="chat" aria-label="对话">
+      <div id="conversation" aria-live="polite"><p class="empty">让 Pi 制定计划，并逐项完成任务。</p></div>
+      <form id="composer">
+        <label for="prompt"><span id="message-label">发送消息给 Pi</span> <span id="keyboard-hint">Enter 发送 · Shift+Enter 换行</span></label>
+        <textarea id="prompt" rows="3" placeholder="你想完成什么任务？" required></textarea>
+        <div class="actions"><span id="input-hint">正在连接 Pi…</span><select id="mode" aria-label="运行中的消息发送方式" hidden><option id="mode-steer" value="steer">立即引导</option><option id="mode-followUp" value="followUp">后续跟进</option></select><button id="stop" type="button" disabled>停止</button><button id="send" type="submit" disabled>发送</button></div>
+        <p id="send-error" role="alert" hidden></p>
+      </form>
+    </section>
+    <aside id="tasks" tabindex="-1" aria-label="TillDone 任务面板">
+      <span id="task-list-label" class="eyebrow">任务列表</span><h2 id="list-title">TillDone</h2><p id="list-description"></p>
+      <div class="progress-row"><span id="progress-label">0 / 0 已完成</span><progress id="progress" max="1" value="0"></progress></div>
+      <p id="current">暂无进行中的任务</p><ol id="task-list"></ol>
+    </aside>
+  </main>
+  <footer><span id="model">正在连接…</span><span id="thinking"></span><span id="running"></span><span id="tilldone-status"></span><span id="cwd"></span></footer>
+  <details id="diagnostics" hidden><summary id="diagnostics-label">Pi 诊断信息</summary><pre id="stderr"></pre></details>
+  <dialog id="api-dialog" aria-labelledby="api-title" aria-describedby="api-description">
+    <form id="api-form">
+      <h2 id="api-title">连接 AI 服务</h2><p id="api-description"></p>
+      <p id="api-billing" class="api-billing"></p>
+      <p id="api-model"></p>
+      <div class="api-providers">
+        <section class="api-provider" data-provider="deepseek">
+          <div class="api-provider-heading"><h3>DeepSeek</h3><span id="api-deepseek-status"></span></div>
+          <button id="api-deepseek-link" class="api-link" type="button"></button>
+          <label for="api-deepseek-key" id="api-deepseek-label">DeepSeek API Key</label>
+          <div class="api-key-field"><input id="api-deepseek-key" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" maxlength="512"><button id="api-deepseek-show" type="button"></button></div>
+          <label class="api-remove"><input id="api-deepseek-remove" type="checkbox"><span id="api-deepseek-remove-label"></span></label>
+        </section>
+        <section class="api-provider" data-provider="openai">
+          <div class="api-provider-heading"><h3>OpenAI</h3><span id="api-openai-status"></span></div>
+          <button id="api-openai-link" class="api-link" type="button"></button>
+          <label for="api-openai-key" id="api-openai-label">OpenAI API Key</label>
+          <div class="api-key-field"><input id="api-openai-key" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" maxlength="512"><button id="api-openai-show" type="button"></button></div>
+          <label class="api-remove"><input id="api-openai-remove" type="checkbox"><span id="api-openai-remove-label"></span></label>
+        </section>
+      </div>
+      <p id="api-storage" class="api-note"></p><p id="api-auth-path" class="api-note"></p><p id="api-usage" class="api-note"></p><p id="api-precedence" class="api-note"></p>
+      <p id="api-error" role="alert" hidden></p><p id="api-saved" role="status" hidden></p>
+      <div class="actions"><button id="api-close" type="button">返回</button><button id="api-save" type="submit">保存配置</button></div>
+    </form>
+  </dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message"><h2 id="confirm-title"></h2><p id="confirm-message"></p><p id="countdown"></p><div class="actions"><button id="deny" type="button">拒绝</button><button id="allow" type="button">允许</button></div></dialog>
+</body>
+</html>
