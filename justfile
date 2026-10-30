@@ -126,6 +126,16 @@ tilldone-desk:
 tilldone-desk-test:
     cd apps/tilldone && bun run test
 
+# Chinese Chess · LLM desktop (four-layer Pi harness)
+chinese-chess:
+    cd apps/chinese-chess && bun install && bun run start
+
+chinese-chess-check:
+    cd apps/chinese-chess && bun run check
+
+chinese-chess-smoke:
+    cd apps/chinese-chess && bun run test:smoke
+
 # utils
 
 # Open pi with one or more stacked extensions in a new terminal: just open minimal tool-counter

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'">
+  <title>楚河 · 中国象棋</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="expert.css">
+</head>
+<body>
+<header><div class="brand"><span class="seal">弈</span><div><h1>楚河 <i>CHU HE</i></h1><p>中国象棋 · 对弈大模型版</p></div></div><div class="header-note">一枰楚汉，两岸风云。<small>HUMAN × LARGE LANGUAGE MODEL</small></div><button id="new-game" class="primary">＋ 新比赛 / 设置</button></header>
+<main>
+  <aside class="left panel">
+    <div class="eyebrow">THE MATCH / 对局</div>
+    <div class="match-heading"><h2 id="match-format">三局两胜</h2><span id="round-label"></span></div>
+    <div class="score"><div>你<strong id="human-wins">0</strong></div><span>:</span><div>大模型<strong id="machine-wins">0</strong></div></div>
+    <p id="match-detail" class="muted"></p>
+    <div id="machine-clock" class="clock"><div><span>◈ 大模型</span><small id="machine-color"></small></div><strong id="machine-time">10:00</strong><p id="machine-clock-info"></p></div>
+    <div id="human-clock" class="clock"><div><span>◎ 你</span><small id="human-color"></small></div><strong id="human-time">10:00</strong><p id="human-clock-info"></p></div>
+    <label class="eyebrow model-label" for="model">LLM / 模型棋手</label><select id="model" aria-label="选择对弈模型"></select>
+    <p class="fine">经 Pi Agent Loop 调用象棋工具落子。网络等待计入棋钟；调用可能产生 API 费用。</p>
+    <div class="left-actions"><button id="retry">继续 / 重试</button><button id="cancel">取消请求</button><button id="undo">练习悔棋</button><button id="resign" class="danger">本局认输</button></div>
+    <button id="export" class="export">↗ 导出完整棋谱</button>
+  </aside>
+  <section class="arena">
+    <div class="arena-top"><span id="status-badge">红方先行</span><span id="view-label" class="muted">经典中国象棋 · 9 × 10</span></div>
+    <div class="captured-line"><span>黑方损失</span><div id="black-captured"></div></div>
+    <div id="board-stage"><div id="board" role="group" aria-label="中国象棋棋盘，方向键选择位置，空格或回车选子与走子，Escape 取消选择" tabindex="0"><svg id="board-art" viewBox="0 0 900 1000" aria-hidden="true"></svg><div id="markers"></div><div id="pieces"></div><div id="effects" aria-hidden="true"></div></div></div>
+    <div class="captured-line"><span>红方损失</span><div id="red-captured"></div></div>
+    <div class="board-tools"><button id="flip" title="翻转棋盘">⇅ 翻转</button><button id="hints" aria-pressed="true">◎ 合法走法</button><button id="animation" aria-pressed="true">✧ 动画开</button><label class="sound"><input id="sound" type="checkbox" checked> 音效</label></div>
+    <div class="replay-bar"><button id="back" title="上一步">‹</button><input id="replay" type="range" min="0" max="0" value="0" aria-label="棋谱回看手数"><button id="forward" title="下一步">›</button><button id="live">回到实战</button></div>
+  </section>
+  <aside class="right panel">
+    <div class="eyebrow">ON THE BOARD / 棋局</div><h2 id="status-title">楚河汉界，落子有声</h2><p id="status-description" class="description"></p>
+    <button id="next-round" class="primary" hidden>开始下一局 →</button>
+    <section class="reason"><div class="eyebrow">LLM NOTE / 棋手手记</div><p id="reason-text">等大模型落子后，这里会记录它公开的落子理由。</p><small id="reason-meta"></small></section>
+    <div class="expert-actions"><button id="expert-open">♜ 专家参谋</button><button id="learning-open">复盘 / 案例库</button></div><small id="learning-badge">学习库启动中</small>
+    <div class="record-heading"><h3>棋谱</h3><span id="record-count">0 手</span></div><div id="moves" class="moves" aria-label="棋谱，点击回看"></div>
+    <p class="fine rule-note">将死、困毙均判负；单方长将判负，普通三次重复和棋。简化竞赛规则，非完整长捉裁决。</p>
+  </aside>
+</main>
+<footer><button id="layers-toggle">⌘ 四层链路 <span id="layer-status">DESKTOP → BUSINESS → EXTENSION → AGENT</span></button><div class="music"><button id="music" aria-pressed="false">♫ 播放配乐</button><select id="music-style" aria-label="背景音乐"><option value="piano">静夜 · 萨蒂钢琴</option><option value="jazz">夜港 · 电钢琴与萨克斯</option></select><input id="volume" type="range" min="0" max="50" value="12" aria-label="配乐音量"><button id="music-credits" aria-label="音乐署名">ⓘ</button></div></footer>
+<div id="layers" hidden><div class="layers-head"><h3>四层结构 · 每一步均经业务校验</h3><button id="layers-close">关闭</button></div><div class="layer-cards"><div>01 桌面层<small>Electron · 棋盘 / 棋钟 / 安全 IPC</small></div><div>02 业务层<small>规则 / 专家知识与反击审查 / 权威计时</small></div><div>03 Pi 扩展层<small>analyze_position / review_move / compare_moves / simulate_moves / move_piece</small></div><div>04 Agent Loop<small>原生 Pi SDK · 模型 ↔ 工具调用循环</small></div></div><div id="logs"></div></div>
+<dialog id="new-dialog"><form id="settings-form"><div class="eyebrow">A NEW MATCH / 新的较量</div><h2>摆开阵势，再弈一场</h2><p class="muted">开始后将结束当前比赛；取消、打开设置和回看均不停钟。</p><fieldset><legend>第一局你的执棋</legend><label><input type="radio" name="color" value="1" checked> 红方 · 先手</label><label><input type="radio" name="color" value="2"> 黑方 · 后手</label></fieldset><div class="form-grid"><label>赛制<select id="best-of"><option value="3">三局两胜</option><option value="5">五局三胜</option></select></label><label>计时<select id="time-control"><option value="fischer">每步加秒（Fischer）</option><option value="absolute">包干制</option></select></label><label>每方局时 / 分钟<input id="main-minutes" type="number" min="0.01" max="180" step="0.01" value="10" required></label><label>每步加秒 / 秒<input id="increment-seconds" type="number" min="0" max="60" step="1" value="5" required></label></div><label class="check-label"><input id="allow-undo" type="checkbox"> 练习模式允许悔棋（不返还用时）</label><p class="fine">每局交换红黑；和棋不计胜场、同色重赛。默认禁用悔棋。取消或重试模型请求不会重置棋钟。</p><div class="dialog-actions"><button type="button" id="settings-cancel">取消</button><button type="submit" class="primary" value="start">开始比赛</button></div></form></dialog>
+<dialog id="confirm-dialog"><h2 id="confirm-title"></h2><p id="confirm-text"></p><div class="dialog-actions"><button id="confirm-no">取消</button><button id="confirm-yes" class="primary">确认</button></div></dialog>
+<dialog id="music-dialog"><h2>配乐与署名</h2><p>“Gymnopedie No. 1” · Erik Satie 作曲<br>“Night on the Docks - Sax”</p><p>两首录音均由 <strong>Kevin MacLeod (incompetech.com)</strong> 提供。<br>Creative Commons: By Attribution 4.0<br>https://creativecommons.org/licenses/by/4.0/</p><p class="muted">附带原始完整 MP3，未修改录音；仅低音量循环播放和淡入淡出。完整来源见 assets/music/ATTRIBUTION.md。</p><div class="dialog-actions"><button id="music-close">知道了</button></div></dialog>
+<dialog id="expert-dialog"><div class="eyebrow">BUSINESS EXPERT / 业务层专家参谋</div><h2 id="expert-title" tabindex="-1" autofocus>不只看吃子，也看对手反击</h2><p id="expert-summary"></p><div id="expert-report"></div><p class="fine">合法攻击与终局反例是可验证计算；同格交换、位置分及棋理属于有限启发式。未知不等于安全，也不是胜率或完整象棋引擎。</p><div class="dialog-actions"><button id="expert-close">返回棋盘</button></div></dialog>
+<dialog id="learning-dialog"><div class="eyebrow">REVIEW → VERIFY → RECALL / 学习闭环</div><h2 id="learning-title" tabindex="-1" autofocus>赛后复盘与本地案例库</h2><p id="learning-status"></p><p id="learning-count"></p><div class="learning-controls"><select id="review-select" aria-label="选择已复盘棋局"></select><button id="review-load">查看复盘</button><button id="learning-rescan">回填已有棋谱</button></div><div id="review-details"></div><p class="fine">只自动复盘已结束棋局。双方失误均需具体反驳和较安全替代；候选不进入推理案例库。重启后继续未完成任务，不改变模型权重；此窗口和后台复盘均不停比赛棋钟。</p><div class="dialog-actions"><button id="learning-close">返回棋盘</button></div></dialog>
+<div id="toast" role="status" hidden></div><audio id="background-music" loop preload="none"></audio><script type="module" src="app.js"></script>
+</body></html>

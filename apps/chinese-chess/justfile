@@ -1,0 +1,26 @@
+default:
+    @just --list
+
+install:
+    bun install
+
+start:
+    bun run start
+
+# Install, build and launch; closing the window returns to the shell
+chinese-chess:
+    bun install
+    bun run start
+
+check:
+    bun run check
+
+smoke:
+    bun run test:smoke
+
+# Backfill finished local records (optional data directory argument)
+learn data_dir="":
+    bun run learn {{quote(data_dir)}}
+
+build:
+    bun run build
