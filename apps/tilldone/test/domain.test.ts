@@ -1,7 +1,7 @@
 /** TillDone Desk L3 tests: recorded protocol projection, pure transitions, and intent rules. */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { initialState, reduce, toViewModel, planIntent, immediateUIResponse } from "../src/domain.ts";
+import { initialState, reduce, toViewModel, planIntent, immediateUIResponse, viewChanged } from "../src/domain.ts";
 const records = readFileSync(new URL("fixtures/rpc-probe.jsonl", import.meta.url), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.dir === "out").map((r) => r.rec);
 const initial = () => initialState("openai-codex/gpt-6.1-sol", "/work");
 
@@ -97,4 +97,26 @@ test("intent planning handles local /tilldone, steer, follow-up and rejects stal
 	expect(planIntent(running, { type: "submit", message: "Hi", mode: "steer" }).commands[0].type).toBe("steer");
 	expect(planIntent(running, { type: "submit", message: "Hi", mode: "followUp" }).commands[0].type).toBe("follow_up");
 	expect(planIntent(s, { type: "confirm", id: "stale", confirmed: true }).commands).toHaveLength(0);
+});
+test("views stay put when only the clock or an unchanged state poll moves", () => {
+	const polled = { type: "response", command: "get_state", success: true, data: { model: { provider: "openai-codex", id: "gpt-6.1-sol" }, thinkingLevel: "low", isStreaming: false } };
+	const ready = reduce(initial(), polled);
+	expect(reduce(ready, polled)).toBe(ready);
+	const ticked = reduce(ready, { type: "desk_tick", now: 1000 });
+	expect(ticked.confirms).toBe(ready.confirms);
+	expect(viewChanged(ready, ticked)).toBe(false);
+	const asking = reduce(ticked, { type: "extension_ui_request", method: "confirm", id: "c", title: "t", message: "m", timeout: 5000 });
+	expect(viewChanged(ticked, asking)).toBe(true);
+	expect(viewChanged(asking, reduce(asking, { type: "desk_tick", now: 2000 }))).toBe(true);
+});
+test("streaming a token reuses view entries for the unchanged history", () => {
+	let state = reduce(initial(), { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "/a" } });
+	state = reduce(state, { type: "tool_execution_end", toolCallId: "t1", toolName: "read", result: { content: [{ type: "text", text: "x" }] }, isError: false });
+	state = reduce(state, { type: "message_start", message: { role: "assistant", content: [] } });
+	const before = toViewModel(state).conversation;
+	state = reduce(state, { type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hi" } });
+	const after = toViewModel(state).conversation;
+	expect(after[0]).toBe(before[0]);
+	expect(after[1]).not.toBe(before[1]);
+	expect(after[1].text).toBe("hi");
 });

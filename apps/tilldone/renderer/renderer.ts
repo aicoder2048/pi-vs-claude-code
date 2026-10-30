@@ -142,12 +142,18 @@ function render(view: View) {
 	setText("list-title", view.tasks.title); setText("list-description", view.tasks.description);
 	setText("progress-label", view.tasks.progress); setText("current", view.tasks.current);
 	const progress = $<HTMLProgressElement>("progress"); progress.max = Math.max(1, view.tasks.total); progress.value = view.tasks.done;
-	$("task-list").replaceChildren(...view.tasks.items.map((task) => {
-		const li = node("li", `${task.icon}  #${task.id}  ${task.text}`);
-		li.className = task.current ? "current" : task.status;
-		li.setAttribute("aria-label", `${task.statusLabel}: ${task.text}`);
-		return li;
-	}));
+	// Rebuild the list only when its content changes, not on every streamed view.
+	const taskList = $("task-list");
+	const taskSignature = JSON.stringify(view.tasks.items);
+	if (taskList.dataset.signature !== taskSignature) {
+		taskList.dataset.signature = taskSignature;
+		taskList.replaceChildren(...view.tasks.items.map((task) => {
+			const li = node("li", `${task.icon}  #${task.id}  ${task.text}`);
+			li.className = task.current ? "current" : task.status;
+			li.setAttribute("aria-label", `${task.statusLabel}: ${task.text}`);
+			return li;
+		}));
+	}
 	const panel = $("tasks");
 	if (panel.dataset.focus !== String(view.tasks.focus)) {
 		panel.dataset.focus = String(view.tasks.focus);

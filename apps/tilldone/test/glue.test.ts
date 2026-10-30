@@ -120,3 +120,22 @@ test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, cancels unsupp
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+test("Desk coalesces streamed records and stays quiet while idle", async () => {
+	let views = 0, last: ReturnType<Desk["view"]> | undefined;
+	const desk = new Desk(config(), (view) => { views++; last = view; });
+	desk.start();
+	try {
+		await until(() => last?.connection === "ready");
+		await desk.send({ type: "submit", mode: "steer", message: "replay" });
+		await until(() => Boolean(last?.confirm));
+		// The replay bursts ~150 records before the confirm; a view per record would publish that many.
+		expect(views).toBeLessThan(20);
+		await desk.send({ type: "confirm", id: last!.confirm!.id, confirmed: true });
+		await until(() => last!.conversation.at(-1)?.text === "ok" && !last!.status.running);
+		await Bun.sleep(300);
+		const settled = views;
+		// Idle: 250 ms clock ticks and 2 s state polls change nothing visible.
+		await Bun.sleep(2500);
+		expect(views).toBe(settled);
+	} finally { await desk.stop(); }
+});

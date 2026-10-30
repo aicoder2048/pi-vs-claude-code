@@ -1,11 +1,15 @@
 /** TillDone Desk L2: the mutable domain cell; transport facts in, JSON views out, intents to RPC. */
-import { initialState, reduce, toViewModel, parseIntent, planIntent, immediateUIResponse, type RecordValue } from "./domain.ts";
+import { initialState, reduce, toViewModel, parseIntent, planIntent, immediateUIResponse, viewChanged, type RecordValue } from "./domain.ts";
 import type { Config } from "./config.ts";
 import type { Preferences } from "./appearance.ts";
 import { PiProcess } from "./rpc.ts";
 import { CredentialError, type PiCredentials } from "./credentials.ts";
+// Streamed records arrive per token; publishing a full view for each one floods IPC and the renderer.
+const PUBLISH_INTERVAL_MS = 33;
 export class Desk {
 	private state;
+	private published: ReturnType<typeof initialState> | null = null;
+	private publishTimer: ReturnType<typeof setTimeout> | null = null;
 	private pi: PiProcess | null = null;
 	private clock: ReturnType<typeof setInterval> | null = null;
 	private polling = false;
@@ -26,6 +30,16 @@ export class Desk {
 			try { this.options.savePreferences?.(this.state.preferences); }
 			catch (error) { this.state = reduce(this.state, { type: "desk_error", error: `Cannot save preferences: ${String(error)}` }); }
 		}
+		if (!this.publishTimer && (!this.published || viewChanged(this.published, this.state))) {
+			this.publishTimer = setTimeout(() => this.flush(), PUBLISH_INTERVAL_MS);
+		}
+	}
+	/** Publish now if the view changed; intents and shutdown call this so their effects are visible on return. */
+	private flush(): void {
+		if (this.publishTimer) clearTimeout(this.publishTimer);
+		this.publishTimer = null;
+		if (this.published && !viewChanged(this.published, this.state)) return;
+		this.published = this.state;
 		this.publish(this.view());
 	}
 	private error = (error: unknown) => this.dispatch({ type: "desk_error", error: this.options.credentials?.redact(String(error)) ?? String(error) });
@@ -61,6 +75,10 @@ export class Desk {
 		finally { this.polling = false; }
 	}
 	async send(raw: unknown): Promise<void> {
+		try { await this.handle(raw); }
+		finally { this.flush(); }
+	}
+	private async handle(raw: unknown): Promise<void> {
 		const intent = parseIntent(raw);
 		if (!intent) throw new Error("Invalid desktop intent.");
 		this.dispatch({ type: "desk_tick", now: Date.now() });
@@ -96,5 +114,6 @@ export class Desk {
 		this.clock = null;
 		await this.pi?.stop();
 		this.generation++;
+		this.flush();
 	}
 }

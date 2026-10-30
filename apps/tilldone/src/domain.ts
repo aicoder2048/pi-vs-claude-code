@@ -77,6 +77,13 @@ function updateAssistant(state: State, change: (message: Message) => Message): S
 export function isRunning(state: State): boolean {
 	return state.runActive || state.streaming || state.compacting;
 }
+/** False when next renders the same view as previous: identical, or only the clock moved with no confirm counting down. */
+export function viewChanged(previous: State, next: State): boolean {
+	if (previous === next) return false;
+	if (next.confirms.length) return true;
+	for (const key of Object.keys(next) as (keyof State)[]) if (key !== "now" && previous[key] !== next[key]) return true;
+	return false;
+}
 
 export function reduce(state: State, record: RecordValue): State {
 	switch (record.type) {
@@ -86,8 +93,10 @@ export function reduce(state: State, record: RecordValue): State {
 		case "desk_api_saving": return { ...state, api: { ...state.api, saving: true, error: null, saved: false } };
 		case "desk_api_error": return { ...state, api: { ...state.api, saving: false, error: record.error, saved: false } };
 		case "desk_api_saved": return { ...state, api: { ...state.api, saving: false, error: null, summary: record.summary, savedRevision: state.api.savedRevision + 1, saved: true } };
-		case "desk_tick":
-			return { ...state, now: record.now, confirms: state.confirms.filter((c) => c.deadline === null || c.deadline > record.now) };
+		case "desk_tick": {
+			const confirms = state.confirms.filter((c) => c.deadline === null || c.deadline > record.now);
+			return { ...state, now: record.now, confirms: confirms.length === state.confirms.length ? state.confirms : confirms };
+		}
 		case "desk_preferences": {
 			const preferences = parsePreferences(record.preferences);
 			return preferences ? { ...state, preferences } : state;
@@ -102,8 +111,11 @@ export function reduce(state: State, record: RecordValue): State {
 			if (!record.success) return { ...state, error: `${record.command}: ${text(record.error)}` };
 			if (record.command !== "get_state" || !record.data) return state;
 			const data = record.data;
-			return { ...state, connection: "ready", model: data.model ? `${data.model.provider}/${data.model.id}` : state.model,
-				thinking: text(data.thinkingLevel) || "unknown", streaming: data.isStreaming === true, compacting: data.isCompacting === true };
+			const model = data.model ? `${data.model.provider}/${data.model.id}` : state.model;
+			const thinking = text(data.thinkingLevel) || "unknown", streaming = data.isStreaming === true, compacting = data.isCompacting === true;
+			// The 2 s state poll usually reports nothing new; keep identity so L2 can skip publishing.
+			if (state.connection === "ready" && state.model === model && state.thinking === thinking && state.streaming === streaming && state.compacting === compacting) return state;
+			return { ...state, connection: "ready", model, thinking, streaming, compacting };
 		}
 		case "agent_start": return { ...state, runActive: true, error: "" };
 		// agent_end is intentionally not an idle transition: a nudge may start another run.
@@ -216,6 +228,17 @@ export function immediateUIResponse(record: RecordValue): RecordValue | undefine
 	}
 }
 const pretty = (value: unknown) => JSON.stringify(value, null, 2) ?? "";
+type Entry = { id: string; kind: string; label: string; text: string; error: string; args: string; result: string };
+// Messages and tools are immutable, so an entry stays valid while its source object and copy are unchanged.
+// Without this, every streamed token re-serializes the whole history, including every tool result.
+const entries = new WeakMap<Message | Tool, { ui: ReturnType<typeof copyFor>; entry: Entry }>();
+function entryFor(source: Message | Tool, ui: ReturnType<typeof copyFor>, build: () => Entry): Entry {
+	const cached = entries.get(source);
+	if (cached?.ui === ui) return cached.entry;
+	const entry = build();
+	entries.set(source, { ui, entry });
+	return entry;
+}
 export function toViewModel(state: State) {
 	const ui = copyFor(state.preferences.language);
 	const counts = countByStatus(state.list);
@@ -236,11 +259,11 @@ export function toViewModel(state: State) {
 		conversation: state.timeline.map((entry) => {
 			if (entry.kind === "tool") {
 				const t = tools.get(entry.id)!;
-				return { id: t.id, kind: "tool", label: `${t.name} · ${{ running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]}`, text: "", args: pretty(t.args), result: pretty(t.result), error: "" };
+				return entryFor(t, ui, () => ({ id: t.id, kind: "tool", label: `${t.name} · ${{ running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]}`, text: "", args: pretty(t.args), result: pretty(t.result), error: "" }));
 			}
 			const m = messages.get(entry.id)!;
-			return { id: m.id, kind: m.kind, label: { assistant: ui.assistant, user: ui.user, nudge: ui.nudge, notice: ui.notice }[m.kind],
-				text: Object.entries(m.blocks).sort(([a], [b]) => Number(a) - Number(b)).map(([, value]) => value).join("\n"), error: m.error, args: "", result: "" };
+			return entryFor(m, ui, () => ({ id: m.id, kind: m.kind, label: { assistant: ui.assistant, user: ui.user, nudge: ui.nudge, notice: ui.notice }[m.kind],
+				text: Object.entries(m.blocks).sort(([a], [b]) => Number(a) - Number(b)).map(([, value]) => value).join("\n"), error: m.error, args: "", result: "" }));
 		}),
 		confirm: state.confirms.length ? { ...state.confirms[0], remainingSeconds: state.confirms[0].deadline === null ? null : Math.max(0, Math.ceil((state.confirms[0].deadline - state.now) / 1000)) } : null,
 	};
