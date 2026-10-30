@@ -11,7 +11,7 @@ interface View {
 		shortcuts: { id: string; label: string; icon: string; selected: boolean }[] };
 	connection: string; error: string; diagnostics: string;
 	status: { model: string; thinking: string; running: boolean; cwd: string; tilldone: string };
-	input: { enabled: boolean; running: boolean };
+	input: { enabled: boolean; running: boolean; newSession: boolean };
 	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number;
 		items: { id: number; text: string; status: string; statusLabel: string; icon: string; current: boolean }[] };
 	conversation: { id: string; kind: string; label: string; text: string; error: string; args: string; result: string }[];
@@ -89,7 +89,8 @@ function render(view: View) {
 	for (const [id, key] of Object.entries({ "product-name": "productName", "brand-slogan": "slogan", "brand-logo-title": "logo", workspace: "workspace", "settings-label": "settings", "settings-title": "settings", "theme-label": "theme", "language-label": "language",
 		"message-label": "message", "keyboard-hint": "keyboard",
 		"mode-steer": "steer", "mode-followUp": "followUp", stop: "stop", send: "send", restart: "restart", "task-list-label": "taskList",
-		"diagnostics-label": "diagnostics", deny: "deny", allow: "allow" })) setText(id, ui[key]);
+		"diagnostics-label": "diagnostics", deny: "deny", allow: "allow", "new-session-label": "newSession", "new-session-title": "newSessionTitle",
+		"new-session-message": "newSessionMessage", "new-session-cancel": "cancel", "new-session-confirm": "newSessionConfirm" })) setText(id, ui[key]);
 	$<HTMLTextAreaElement>("prompt").placeholder = ui.placeholder;
 	$("chat").setAttribute("aria-label", ui.chat);
 	$("tasks").setAttribute("aria-label", ui.taskPanel);
@@ -106,6 +107,9 @@ function render(view: View) {
 	$("diagnostics").hidden = !view.diagnostics;
 	setText("stderr", view.diagnostics);
 	$<HTMLButtonElement>("send").disabled = !view.input.enabled;
+	$<HTMLButtonElement>("new-session").disabled = !view.input.newSession;
+	const newSessionDialog = $<HTMLDialogElement>("new-session-dialog");
+	if (!view.input.newSession && newSessionDialog.open) newSessionDialog.close();
 	$<HTMLButtonElement>("stop").disabled = !view.input.enabled || !view.input.running;
 	$("mode").hidden = !view.input.running;
 	setText("input-hint", !view.input.enabled ? view.connection === "exited" ? ui.restartHint : ui.connecting : view.input.running ? ui.busy : ui.ready);
@@ -185,6 +189,9 @@ $("prompt").addEventListener("keydown", (event) => {
 });
 $("stop").onclick = () => { void send({ type: "abort" }); };
 $("restart").onclick = () => { void send({ type: "restart" }); };
+$("new-session").onclick = () => { const dialog = $<HTMLDialogElement>("new-session-dialog"); dialog.showModal(); $("new-session-cancel").focus(); };
+$("new-session-cancel").onclick = () => { $<HTMLDialogElement>("new-session-dialog").close(); };
+$("new-session-confirm").onclick = () => { $<HTMLDialogElement>("new-session-dialog").close(); void send({ type: "newSession" }); };
 function saveAppearance() {
 	void send({ type: "preferences", preferences: { theme: $<HTMLSelectElement>("theme").value, language: $<HTMLSelectElement>("language").value } });
 }

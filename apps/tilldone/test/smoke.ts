@@ -155,7 +155,8 @@ try {
 	await page.locator("#allow").click();
 	await page.locator("#confirm-dialog").waitFor({ state: "hidden" });
 	await page.waitForFunction(() => document.getElementById("conversation")!.textContent!.includes("ok"));
-	assert.equal(await page.locator("#task-list li").count(), 0);
+	// Views are coalesced, so wait for the cleared list instead of sampling it once.
+	await page.waitForFunction(() => document.querySelectorAll("#task-list li").length === 0);
 	await page.locator("details.tool summary").first().click();
 	await page.waitForTimeout(350);
 	assert.equal(await page.locator("details.tool[open]").count(), 1);
@@ -167,9 +168,18 @@ try {
 	await page.locator("#prompt").fill("markup"); await page.locator("#send").click();
 	await page.waitForFunction(() => document.getElementById("conversation")!.textContent!.includes("<img"));
 	assert.equal(await page.locator("#conversation img").count(), 0);
+	await page.locator("#new-session").click();
+	await page.locator("#new-session-dialog").waitFor();
+	await page.locator("#new-session-cancel").click();
+	assert.ok(await page.locator(".message").count() > 0, "Cancelling a new session keeps the conversation");
+	await page.locator("#new-session").click();
+	await page.locator("#new-session-confirm").click();
+	await page.waitForFunction(() => document.querySelectorAll(".message").length === 0 && !(document.querySelector("#send") as HTMLButtonElement).disabled);
 	const records = (await readFile(log, "utf8")).trim().split("\n").map((l) => JSON.parse(l));
 	assert.equal(records.some((r) => r.message === "/tilldone"), false);
-	process.kill(records.find((r) => r.type === "launch").pid, "SIGKILL");
+	const launches = records.filter((r) => r.type === "launch");
+	assert.equal(launches.length, 2, "New session launches a fresh Pi");
+	process.kill(launches.at(-1).pid, "SIGKILL");
 	await page.locator("#restart").waitFor();
 	assert.match(await page.locator("#error").innerText(), /Pi exited/);
 	await page.locator("#restart").click();

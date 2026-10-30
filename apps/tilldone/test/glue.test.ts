@@ -108,12 +108,18 @@ test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, cancels unsupp
 		const launches = readLog().filter((r) => r.type === "launch");
 		expect(launches[0].args).toEqual(["--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--model", config().model, "-e", config().extension]);
 		expect(launches[0].cwd).toBe(app);
+		await desk.send({ type: "submit", mode: "steer", message: "markup" });
+		await until(() => view!.conversation.length > 0);
+		await desk.send({ type: "newSession" });
+		await until(() => view!.connection === "ready");
+		expect(view!.conversation).toHaveLength(0);
+		expect(readLog().filter((r) => r.type === "launch")).toHaveLength(2);
 		await desk.stop();
 		expect(view!.connection).toBe("exited");
 		await desk.send({ type: "restart" });
 		await until(() => view!.connection === "ready");
 		expect(view!.conversation).toHaveLength(0);
-		expect(readLog().filter((r) => r.type === "launch")).toHaveLength(2);
+		expect(readLog().filter((r) => r.type === "launch")).toHaveLength(3);
 	} finally {
 		await desk.stop();
 		if (old === undefined) delete process.env.FAKE_PI_LOG; else process.env.FAKE_PI_LOG = old;

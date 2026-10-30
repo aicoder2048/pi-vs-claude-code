@@ -172,7 +172,7 @@ export function reduce(state: State, record: RecordValue): State {
 }
 
 export type Intent = { type: "submit"; message: string; mode: "steer" | "followUp" }
-	| { type: "abort" | "restart" | "focusTasks" }
+	| { type: "abort" | "restart" | "newSession" | "focusTasks" }
 	| { type: "confirm"; id: string; confirmed: boolean }
 	| { type: "preferences"; preferences: Preferences }
 	| { type: "apiOpen" | "apiClose" }
@@ -184,7 +184,7 @@ export function parseIntent(raw: unknown): Intent | undefined {
 	if (r.type === "apiOpen" || r.type === "apiClose") return { type: r.type };
 	if (r.type === "apiLink" && isApiProvider(r.provider)) return { type: "apiLink", provider: r.provider };
 	if (r.type === "apiSave") return { type: "apiSave", result: parseCredentialChanges(r.providers) };
-	if (["abort", "restart", "focusTasks"].includes(r.type)) return { type: r.type } as Intent;
+	if (["abort", "restart", "newSession", "focusTasks"].includes(r.type)) return { type: r.type } as Intent;
 	if (r.type === "submit" && typeof r.message === "string" && r.message.length <= 100000 && ["steer", "followUp"].includes(r.mode)) {
 		return { type: "submit", message: r.message, mode: r.mode };
 	}
@@ -211,6 +211,8 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 	}
 	if (intent.type === "preferences") return { commands: [], events: [{ type: "desk_preferences", preferences: intent.preferences }] };
 	if (intent.type === "restart") return { ...empty, restart: state.connection === "exited" };
+	// A new session is a fresh --no-session Pi process; mid-run, Stop first.
+	if (intent.type === "newSession") return { ...empty, restart: state.connection === "ready" && !isRunning(state) };
 	if (state.connection !== "ready") return empty;
 	if (intent.type === "confirm") {
 		if (!state.confirms.some((c) => c.id === intent.id && (c.deadline === null || c.deadline > state.now))) return empty;
@@ -251,7 +253,7 @@ export function toViewModel(state: State) {
 		appearance: appearanceView(state.preferences, state.systemDark),
 		connection: state.connection, error: state.error, diagnostics: state.diagnostics,
 		status: { model: state.model, thinking: state.thinking, running: isRunning(state), cwd: state.cwd, tilldone: state.statuses.tilldone ?? "" },
-		input: { enabled: state.connection === "ready", running: isRunning(state) },
+		input: { enabled: state.connection === "ready", running: isRunning(state), newSession: state.connection === "ready" && !isRunning(state) },
 		tasks: { title: state.list.title ?? "TillDone", description: state.list.description ?? "", done: counts.done,
 			total: state.list.tasks.length, progress: `${counts.done} / ${state.list.tasks.length} ${ui.done}`,
 			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus,

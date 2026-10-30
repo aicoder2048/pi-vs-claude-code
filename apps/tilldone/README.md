@@ -84,7 +84,7 @@ The subprocess command is:
 pi --mode rpc --no-session --no-extensions --no-skills --model <model> -e <repo>/extensions/tilldone
 ```
 
-Closing the app shuts down the child (stdin EOF, then bounded signal escalation if needed). A crash or exit shows an explicit warning and Restart button. Restart creates a **fresh, non-persisted Pi session**, losing the old conversation/task state; appearance preferences are retained. The app does not submit a prompt automatically.
+Closing the app shuts down the child (stdin EOF, then bounded signal escalation if needed). A crash or exit shows an explicit warning and Restart button. Restart creates a **fresh, non-persisted Pi session**, losing the old conversation/task state; appearance preferences are retained. The app does not submit a prompt automatically. The header's **New session (新会话)** button does the same restart on demand: it is enabled only while Pi is connected and idle (Stop a run first), asks for confirmation, and then replaces the child with a fresh `--no-session` Pi, so the model starts with an empty context and an empty task list.
 
 ## Four layers
 

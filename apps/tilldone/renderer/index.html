@@ -37,6 +37,7 @@
     </div>
     <div class="header-actions">
       <div id="theme-shortcuts" class="theme-switcher" role="group" aria-label="快捷切换主题"></div>
+      <button id="new-session" type="button" disabled><span aria-hidden="true">＋</span> <span id="new-session-label">新会话</span></button>
       <button id="settings-toggle" type="button" popovertarget="settings-panel"><span aria-hidden="true">⚙</span> <span id="settings-label">设置</span></button>
     </div>
   </header>
@@ -91,6 +92,7 @@
       <div class="actions"><button id="api-close" type="button">返回</button><button id="api-save" type="submit">保存配置</button></div>
     </form>
   </dialog>
+  <dialog id="new-session-dialog" aria-labelledby="new-session-title" aria-describedby="new-session-message"><h2 id="new-session-title">开始新会话？</h2><p id="new-session-message"></p><div class="actions"><button id="new-session-cancel" type="button">取消</button><button id="new-session-confirm" type="button">开始新会话</button></div></dialog>
   <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message"><h2 id="confirm-title"></h2><p id="confirm-message"></p><p id="countdown"></p><div class="actions"><button id="deny" type="button">拒绝</button><button id="allow" type="button">允许</button></div></dialog>
 </body>
 </html>

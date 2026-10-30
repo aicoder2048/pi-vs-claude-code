@@ -98,6 +98,16 @@ test("intent planning handles local /tilldone, steer, follow-up and rejects stal
 	expect(planIntent(running, { type: "submit", message: "Hi", mode: "followUp" }).commands[0].type).toBe("follow_up");
 	expect(planIntent(s, { type: "confirm", id: "stale", confirmed: true }).commands).toHaveLength(0);
 });
+test("new session restarts Pi only while connected and idle", () => {
+	const ready = reduce(initial(), { type: "response", command: "get_state", success: true, data: {} });
+	expect(planIntent(ready, { type: "newSession" }).restart).toBe(true);
+	expect(toViewModel(ready).input.newSession).toBe(true);
+	const running = reduce(ready, { type: "agent_start" });
+	expect(planIntent(running, { type: "newSession" }).restart).toBeFalsy();
+	expect(toViewModel(running).input.newSession).toBe(false);
+	expect(planIntent(initial(), { type: "newSession" }).restart).toBeFalsy();
+	expect(planIntent(reduce(ready, { type: "desk_exit", error: "gone" }), { type: "newSession" }).restart).toBeFalsy();
+});
 test("views stay put when only the clock or an unchanged state poll moves", () => {
 	const polled = { type: "response", command: "get_state", success: true, data: { model: { provider: "openai-codex", id: "gpt-6.1-sol" }, thinkingLevel: "low", isStreaming: false } };
 	const ready = reduce(initial(), polled);
