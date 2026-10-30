@@ -323,9 +323,9 @@ describe("restore (T:302-323)", () => {
 
 describe("gate (T:335-361)", () => {
 	const noTasks =
-		"🚫 No TillDone tasks defined. You MUST use `tilldone new-list` or `tilldone add` to define your tasks before using any other tools. Plan your work first!";
+		"🚫 No TillDone tasks defined. You MUST use `tilldone new-list` or `tilldone add` to define your tasks before using any other tools (read-only tools — read, grep, find, ls — stay available for planning). Plan your work first!";
 	const allDone =
-		"🚫 All TillDone tasks are done. You MUST use `tilldone add` for new tasks or `tilldone new-list` to start a fresh list before using any other tools.";
+		"🚫 All TillDone tasks are done. You MUST use `tilldone add` for new tasks or `tilldone new-list` to start a fresh list before using any other tools (read-only tools — read, grep, find, ls — stay available for planning).";
 	const noneActive = "🚫 No task is in progress. You MUST use `tilldone toggle` to mark a task as inprogress before doing any work.";
 
 	test("tilldone always passes", () => {
@@ -334,10 +334,18 @@ describe("gate (T:335-361)", () => {
 
 	test("reasons in order", () => {
 		const m = withTasks("a");
-		expect(gate(INITIAL_MODEL, "read")).toEqual({ block: true, reason: noTasks });
-		expect(gate(run(m, { action: "toggle", id: 1 }, { action: "toggle", id: 1 }), "read")).toEqual({ block: true, reason: allDone });
-		expect(gate(m, "read")).toEqual({ block: true, reason: noneActive });
+		expect(gate(INITIAL_MODEL, "bash")).toEqual({ block: true, reason: noTasks });
+		expect(gate(run(m, { action: "toggle", id: 1 }, { action: "toggle", id: 1 }), "bash")).toEqual({ block: true, reason: allDone });
+		expect(gate(m, "bash")).toEqual({ block: true, reason: noneActive });
 		expect(gate(run(m, { action: "toggle", id: 1 }), "bash")).toEqual({ block: false });
+	});
+
+	test("read-only tools pass without an active task, so a plan can be based on files", () => {
+		const done = run(withTasks("a"), { action: "toggle", id: 1 }, { action: "toggle", id: 1 });
+		for (const m of [INITIAL_MODEL, withTasks("a"), done]) {
+			for (const tool of ["read", "grep", "find", "ls"]) expect(gate(m, tool)).toEqual({ block: false });
+			for (const tool of ["bash", "edit", "write"]) expect(gate(m, tool).block).toBe(true);
+		}
 	});
 });
 

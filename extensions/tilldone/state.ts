@@ -77,7 +77,7 @@ export const TOOL = {
 	name: "tilldone",
 	label: "TillDone",
 	description:
-		"Manage your task list. You MUST add tasks before using any other tools. " +
+		"Manage your task list. You MUST add tasks before using any other tools; read-only tools (read, grep, find, ls) stay available for planning. " +
 		"Actions: new-list (text=title, description), add (text or texts[] for batch), toggle (id) — cycles idle→inprogress→done, remove (id), update (id + text), list, clear. " +
 		"Always toggle a task to inprogress before starting work on it, and to done when finished. " +
 		"Use new-list to start a themed list with a title and description. " +
@@ -94,9 +94,9 @@ export const TOOL = {
 
 export const GATE_REASON = {
 	noTasks:
-		"🚫 No TillDone tasks defined. You MUST use `tilldone new-list` or `tilldone add` to define your tasks before using any other tools. Plan your work first!",
+		"🚫 No TillDone tasks defined. You MUST use `tilldone new-list` or `tilldone add` to define your tasks before using any other tools (read-only tools — read, grep, find, ls — stay available for planning). Plan your work first!",
 	allDone:
-		"🚫 All TillDone tasks are done. You MUST use `tilldone add` for new tasks or `tilldone new-list` to start a fresh list before using any other tools.",
+		"🚫 All TillDone tasks are done. You MUST use `tilldone add` for new tasks or `tilldone new-list` to start a fresh list before using any other tools (read-only tools — read, grep, find, ls — stay available for planning).",
 	noneActive:
 		"🚫 No task is in progress. You MUST use `tilldone toggle` to mark a task as inprogress before doing any work.",
 } as const;
@@ -330,8 +330,11 @@ const ask = (title: string, message: string): Ask => ({ kind: "ask", title, mess
 
 export type Verdict = { readonly block: false } | { readonly block: true; readonly reason: string };
 
+// Reading changes nothing, and a plan often depends on it (e.g. a spec in a file).
+export const READ_ONLY_TOOLS: readonly string[] = ["read", "grep", "find", "ls"];
+
 export function gate(model: Model, toolName: string): Verdict {
-	if (toolName === TOOL.name) return { block: false };
+	if (toolName === TOOL.name || READ_ONLY_TOOLS.includes(toolName)) return { block: false };
 	const { tasks } = model.list;
 	if (tasks.length === 0) return { block: true, reason: GATE_REASON.noTasks };
 	if (tasks.every((t) => t.status === "done")) return { block: true, reason: GATE_REASON.allDone };
