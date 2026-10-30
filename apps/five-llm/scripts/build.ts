@@ -12,4 +12,5 @@ for (const [entrypoint, outfile, target, format] of [
 }
 for (const file of ['index.html', 'styles.css']) await cp(`src/renderer/${file}`, `dist/renderer/${file}`);
 await cp('src/renderer/assets', 'dist/renderer/assets', { recursive: true });
-console.log('Built Electron main, isolated preload and renderer → dist/');
+await cp('src/business/knowledge', 'dist/business/knowledge', { recursive: true });
+console.log('Built Electron main, isolated preload, renderer and domain knowledge → dist/');

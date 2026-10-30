@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { GameService, type AgentDriver, type TurnPort } from '../src/business/game-service';
 import { DEFAULT_SETTINGS } from '../src/business/clock';
+import { KNOWLEDGE_VERSION, validateCandidate, type DecisionTrace } from '../src/business/decision';
 const model = { provider: 'test', id: 'fake', name: 'Test' };
 const tick = () => new Promise(resolve => setTimeout(resolve, 10));
 class ControlledDriver implements AgentDriver {
@@ -17,6 +18,25 @@ describe('authoritative game service', () => {
     const state = service.snapshot(); expect(state.status).toBe('human'); expect(state.evaluations).toHaveLength(2);
     expect(state.position.moves.map(m => m.color)).toEqual([1, 2]); expect(state.notes[0].reason).toBe('控制中腹。');
     expect(service.record().format).toBe('five-llm/v1'); service.dispose();
+  });
+  test('decision evidence is optional, cloned at commit/export and removed by undo/new game', () => {
+    const driver = new ControlledDriver(), service = new GameService(driver, model, { settings: { ...DEFAULT_SETTINGS, allowUndo: true } });
+    service.humanMove({ x: 7, y: 7 }, 0);
+    const port = driver.turns[0], point = { x: 8, y: 8 };
+    const decision: DecisionTrace = { version: KNOWLEDGE_VERSION, revision: port.state.revision, playbook: 'opening',
+      knowledgeRead: ['gomoku-coach', 'opening'], validation: validateCandidate(port.state.position, point),
+      steps: [{ id: 'compare', status: 'skipped', evidence: '未调用可选变化试算' }] };
+    port.commit(point, '联络', decision);
+    decision.knowledgeRead.push('midgame'); decision.validation.warnings.push('外部修改');
+    const record = service.record();
+    expect(record.notes[0].decision?.knowledgeRead).toEqual(['gomoku-coach', 'opening']);
+    expect(record.notes[0].decision?.validation.warnings).toEqual([]);
+    record.notes[0].decision!.steps[0].evidence = '修改导出对象';
+    expect(service.record().notes[0].decision?.steps[0].evidence).toBe('未调用可选变化试算');
+    expect(service.undo().notes).toEqual([]);
+    service.newGame(1); expect(service.record().notes).toEqual([]);
+    expect(() => port.commit(point, '过期', decision)).toThrow();
+    expect(service.record().notes).toEqual([]); service.dispose();
   });
   test('invalid model move can be corrected, duplicate commit rejected', () => {
     const driver = new ControlledDriver(), service = new GameService(driver, model);

@@ -1,6 +1,7 @@
 import type { Analysis, Color, Move, Position } from '../business/engine';
 export interface ModelChoice { provider: string; id: string; name: string }
-export interface TurnNote { ply: number; reason: string; model: string; elapsedMs: number }
+import type { DecisionTrace } from '../business/decision';
+export interface TurnNote { ply: number; reason: string; model: string; elapsedMs: number; decision?: DecisionTrace }
 export interface LogEntry { time: string; layer: 'business' | 'extension' | 'agent'; text: string }
 export interface MatchSettings {
   bestOf: 3 | 5;

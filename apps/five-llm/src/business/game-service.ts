@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { analyze, emptyPosition, other, play, replay, type Color, type Point, type Position } from './engine';
 import { chargeClock, DEFAULT_SETTINGS, newClock, switchClock, validateSettings } from './clock';
+import type { DecisionTrace } from './decision';
 import type { GameRecord, GameState, LogEntry, MatchSettings, MatchState, ModelChoice, ResultReason } from '../shared/types';
 
 // Dependency inversion: the domain knows this port, not Pi's implementation.
@@ -8,7 +9,7 @@ export interface TurnPort {
   state: GameState;
   signal: AbortSignal;
   log(layer: LogEntry['layer'], text: string): void;
-  commit(point: Point, reason: string): void;
+  commit(point: Point, reason: string, decision?: DecisionTrace): void;
 }
 export interface AgentDriver { run(port: TurnPort): Promise<void> }
 export interface ServiceOptions { now?: () => number; settings?: MatchSettings }
@@ -170,7 +171,7 @@ export class GameService {
     const port: TurnPort = {
       state: snapshot, signal: controller.signal,
       log: (layer, text) => { if (valid()) this.log(layer, text); },
-      commit: (point, reason) => {
+      commit: (point, reason, decision) => {
         this.charge(); // a late response cannot win against an expired clock
         if (!valid() || committed) throw new Error('过期、超时或重复的落子请求已拒绝');
         if (this.state.position.next !== other(this.state.human)) throw new Error('不是机器方回合');
@@ -178,7 +179,8 @@ export class GameService {
         const position = play(this.state.position, point);
         committed = true;
         this.state.notes.push({ ply: position.moves.length, reason: reason.trim(), elapsedMs: this.now() - started,
-          model: `${snapshot.model!.provider}/${snapshot.model!.id}` });
+          model: `${snapshot.model!.provider}/${snapshot.model!.id}`,
+          ...(decision ? { decision: structuredClone(decision) } : {}) });
         this.calculate(position);
       },
     };
