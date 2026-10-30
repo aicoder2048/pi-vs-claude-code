@@ -31,6 +31,23 @@ API Key 也可通过 `OPENAI_API_KEY` 等 Pi 支持的环境变量提供。OpenA
 
 调用可能产生 API 费用，模型强度不保证。密钥只在主进程中使用，不发给渲染器。应用使用 `@earendil-works/pi-coding-agent` / `pi-ai` **1.4.0**，与参考应用一致。
 
+### Mac 安装包
+
+```bash
+cd apps/chinese-chess
+just dist          # → release/chuhe-1.0.0-mac-arm64.dmg（Apple 芯片）
+just smoke-dist    # 在打包后的 楚河.app 上跑同一套桌面 smoke
+```
+
+由 electron-builder 生成，内含 Electron 与 Pi SDK，使用者无需安装 Bun 或 Node。但模型认证仍读使用者本机的 `~/.pi/agent/`：对方需要先安装 Pi 并 `/login`（或提供 API Key 环境变量），否则只会提示未发现模型。
+
+签名与安全：
+
+- 本机没有 Developer ID 证书，因此**只做 ad-hoc 签名，未经 Apple 公证**。签名覆盖整个 `.app`（含 `_CodeSignature/CodeResources`），从 DMG 拷出后 `codesign --verify --deep --strict` 仍然通过。不要对 `.app` 做二次修改或用会丢签名的方式重新打 zip；需要 zip 时用 `ditto -c -k --keepParent 楚河.app 楚河.zip`。
+- 打包时删除了 Electron 默认的 `NSAppTransportSecurity`（`NSAllowsArbitraryLoads` 及 127.0.0.1 明文 HTTP 例外），见 `scripts/after-pack.cjs`。应用只访问 HTTPS 模型接口。
+- 从微信、邮件或浏览器收到的副本带隔离标记，Gatekeeper 会拒绝。对方确认来源可信后，在「系统设置 → 隐私与安全性」点「仍要打开」，或执行 `xattr -dr com.apple.quarantine /Applications/楚河.app`。这等于绕过 Gatekeeper，只应对信任的发送者这样做；每个新版本都要重新放行。
+- 正式对外分发需要 Developer ID 签名 + `notarytool` 公证（electron-builder 的 `mac.identity`、`hardenedRuntime` 与 `notarize` 配置），目前未做。
+
 ## 棋局与桌面功能
 
 - 经典 9 × 10 棋盘：楚河汉界、九宫斜线、兵炮位置标志、红黑汉字棋子。黑方执棋时自动翻转，也可手动翻转。

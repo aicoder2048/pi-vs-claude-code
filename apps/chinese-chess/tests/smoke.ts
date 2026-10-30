@@ -3,7 +3,9 @@ import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { HUMAN_MISTAKES } from './fixtures/human-mistakes';
 await mkdir('artifacts', { recursive: true });
-const application = await electron.launch({ args: ['.'], env: { ...process.env, CHINESE_CHESS_SMOKE: '1' }, timeout: 30000 });
+// CHINESE_CHESS_APP points at a packaged executable to smoke-test the release build.
+const packaged = process.env.CHINESE_CHESS_APP;
+const application = await electron.launch({ ...(packaged ? { executablePath: packaged, args: [] } : { args: ['.'] }), env: { ...process.env, CHINESE_CHESS_SMOKE: '1' }, timeout: 30000 });
 let dataDir = '';
 try {
   dataDir = await application.evaluate(({ app }) => app.getPath('userData'));

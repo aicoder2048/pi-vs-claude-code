@@ -24,3 +24,12 @@ learn data_dir="":
 
 build:
     bun run build
+
+# Build the ad-hoc signed Apple Silicon DMG into release/
+dist:
+    bun install
+    bun run dist
+
+# Smoke-test the packaged app produced by `just dist`
+smoke-dist:
+    CHINESE_CHESS_APP="$PWD/release/mac-arm64/楚河.app/Contents/MacOS/楚河" bun tests/smoke.ts
