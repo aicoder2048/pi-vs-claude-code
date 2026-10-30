@@ -6,7 +6,7 @@ import { retrieveKnowledge } from '../business/knowledge';
 import type { TurnPort } from '../business/game-service';
 const point = Type.Object({ x: Type.Integer({ minimum: 0, maximum: 8 }), y: Type.Integer({ minimum: 0, maximum: 9 }) });
 const move = { from: point, to: point };
-export const XIANGQI_TOOLS = ['analyze_position', 'review_move', 'compare_moves', 'simulate_moves', 'move_piece'];
+export const XIANGQI_TOOLS = ['analyze_position', 'search_position', 'review_move', 'compare_moves', 'simulate_moves', 'update_plan', 'move_piece'];
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], details: value });
 export function xiangqiExtension(port: TurnPort): ExtensionFactory {
   return pi => {
@@ -24,7 +24,18 @@ export function xiangqiExtension(port: TurnPort): ExtensionFactory {
       name: 'analyze_position', label: '象棋局势计算', executionMode: 'sequential',
       description: 'Return the authoritative board, ALL legal moves and business expert report: legal attackers vs geometric defenders, pinned/loose pieces, phase-specific principles and candidate counter-replies. Read coverage/limitations; estimates are not proofs or win probabilities.',
       parameters: Type.Object({}),
-      async execute() { active(); return result({ revision: port.state.revision, board: boardText(port.state.position), analysis: port.state.analysis.expert ? port.state.analysis : analyzeExpert(port.state.position) }); },
+      async execute() { active(); return result({ revision: port.state.revision, board: boardText(port.state.position), plan: port.state.plan, analysis: port.state.analysis.expert ? port.state.analysis : analyzeExpert(port.state.position) }); },
+    }));
+    pi.registerTool(defineTool({
+      name: 'search_position', label: '有界多步对抗搜索', executionMode: 'sequential',
+      description: 'Search alternating legal replies with iterative deepening, check extensions and capture/evasion quiescence. Omit moves to search ALL legal roots, or compare 1–6 candidates. Read completedDepth, rootScope and stopped: budgets never guarantee a depth; incomplete search is unknown, scores are not win probabilities. No move is committed.',
+      parameters: Type.Object({ moves: Type.Optional(Type.Array(Type.Object(move), { minItems: 1, maxItems: 6 })),
+        maxMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 1000 })), maxDepth: Type.Optional(Type.Integer({ minimum: 1, maximum: 6 })) }),
+      async execute(_id, params, signal) {
+        active(); if (signal?.aborted) throw new Error('搜索请求已取消');
+        if (!port.search) throw new Error('未配置实战多步搜索端口');
+        const search = await port.search(params, signal); active(); return result({ revision: port.state.revision, search });
+      },
     }));
     pi.registerTool(defineTool({
       name: 'review_move', label: '专家走法审查', executionMode: 'sequential',
@@ -51,14 +62,27 @@ export function xiangqiExtension(port: TurnPort): ExtensionFactory {
       },
     }));
     pi.registerTool(defineTool({
+      name: 'update_plan', label: '复核连续计划', executionMode: 'sequential',
+      description: 'Stage a PUBLIC strategic plan for this move, not private reasoning. Recheck against current threats/search: continue an unexpired plan with a reason, revise with objective/problem/opponentThreat/1–3 nextSteps/abandonWhen, or abandon. Invalidated plans require revise. Saved ONLY after a successful move; never overrides safety or executes future steps automatically.',
+      parameters: Type.Object({ action: Type.Union([Type.Literal('continue'), Type.Literal('revise'), Type.Literal('abandon')]),
+        reason: Type.String({ minLength: 2, maxLength: 160 }), objective: Type.Optional(Type.String({ minLength: 2, maxLength: 160 })),
+        problem: Type.Optional(Type.String({ minLength: 2, maxLength: 160 })), opponentThreat: Type.Optional(Type.String({ minLength: 2, maxLength: 160 })),
+        nextSteps: Type.Optional(Type.Array(Type.String({ minLength: 2, maxLength: 120 }), { minItems: 1, maxItems: 3 })),
+        abandonWhen: Type.Optional(Type.String({ minLength: 2, maxLength: 160 })) }),
+      async execute(_id, params) {
+        active(); if (!port.updatePlan) throw new Error('未配置连续计划端口');
+        return result({ revision: port.state.revision, plan: port.updatePlan(params), staged: true });
+      },
+    }));
+    pi.registerTool(defineTool({
       name: 'move_piece', label: '移动棋子', executionMode: 'sequential',
       description: 'Commit ONE legal move. The business layer ALWAYS re-reviews it. A direct losing reply or estimated material loss >=250 requires correction or riskAcknowledgement (12–400 Chinese characters explaining concrete sacrifice compensation or unavoidable loss). Do not add acknowledgement routinely to bypass review. Coordinates A..I=0..8, black home y=0, red home y=9. Correct revision required. Success ends turn.',
       parameters: Type.Object({ ...move, revision: Type.Integer({ minimum: 0 }), reason: Type.String({ minLength: 1, maxLength: 600 }),
         riskAcknowledgement: Type.Optional(Type.String({ minLength: 12, maxLength: 400, description: 'Only if deliberately accepting a reported risk; explain concrete compensation or unavoidable loss, not generic attacking slogans.' })) }),
-      async execute(_id, params) {
-        active();
+      async execute(_id, params, signal) {
+        active(); if (signal?.aborted) throw new Error('落子请求已取消');
         if (params.revision !== port.state.revision) throw new Error(`版本错误：当前 revision=${port.state.revision}`);
-        port.commit(params, params.reason, params.riskAcknowledgement); committed = true;
+        await port.commit(params, params.reason, params.riskAcknowledgement, signal); committed = true;
         return { ...result({ accepted: true, move: moveText(params) }), terminate: true };
       },
     }));

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { emptyPosition, play } from '../src/business/engine';
 import { analyzeExpert, reviewMove } from '../src/business/expert';
+import { searchPosition } from '../src/business/search';
 import { normalizeRecord, recallExperience, replayCasePrefix, reviewFinishedGame, transformMove, validateCase, SYMMETRIES, type LearningRecord, type PostGameReview, type TacticalCase } from '../src/business/learning';
 import { GameService, type TurnPort } from '../src/business/game-service';
 import { LearningLibrary } from '../src/learning/library';
@@ -70,13 +71,13 @@ describe('review → verification → tactical library', () => {
     expect(recallExperience(q, analyzeExpert(q, { candidateLimit: 0 }).expert, [c], [r]).length).toBeGreaterThan(0);
     expect(recallExperience(q, analyzeExpert(q).expert, [{ ...c, validator: 'obsolete' } as any], [r])).toEqual([]);
   });
-  test('learned HUMAN mistake becomes a machine opportunity in the next model-turn snapshot', () => {
+  test('learned HUMAN mistake becomes a machine opportunity in the next model-turn snapshot', async () => {
     const turns: TurnPort[] = [];
-    const service = new GameService({ async run(port) { turns.push(port); await new Promise<void>(() => {}); } }, { provider: 'test', id: 'fixture', name: 'fixture' }, { now: () => 0, cases: () => second.cases });
+    const service = new GameService({ async run(port) { turns.push(port); await new Promise<void>(() => {}); } }, { provider: 'test', id: 'fixture', name: 'fixture' }, { now: () => 0, cases: () => second.cases, search: { async search(p) { return searchPosition(p, { maxMs: 0, maxNodes: 0 }); } } });
     for (const move of HUMAN_MISTAKES.slice(0, 31)) {
       const state = service.snapshot();
       if (state.position.next === state.human) service.humanMove(move, state.revision);
-      else turns.at(-1)!.commit(move, '重放用于学习集成验证', '回归测试重现历史走法，明确接受该走法可能出现的风险。');
+      else await turns.at(-1)!.commit(move, '重放用于学习集成验证', '回归测试重现历史走法，明确接受该走法可能出现的风险。');
     }
     const hints = turns.at(-1)!.state.analysis.expert!.experiences!;
     expect(hints.some(h => h.match === 'exact-punish' && h.currentLine[0].includes('吃车'))).toBe(true);

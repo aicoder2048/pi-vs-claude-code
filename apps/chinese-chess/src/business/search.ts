@@ -1,5 +1,6 @@
 import { at, inCheck, index, legalCaptures, legalMoves, other, play, same, VALUES, type Color, type MoveInput, type Position } from './engine';
 import { phaseOf, pieceValue, type Phase } from './expert';
+import { evaluatePosition } from './evaluation';
 export const MATE_SCORE = 1000000;
 const INF = MATE_SCORE * 2;
 export interface SearchOptions { maxMs?: number; maxNodes?: number; maxDepth?: number; quiescenceDepth?: number; extensions?: number; moves?: MoveInput[]; signal?: AbortSignal }
@@ -18,15 +19,10 @@ export function staticScore(p: Position, perspective = p.next, phase: Phase = ph
   let score = 0;
   for (const x of p.board) {
     if (!x) continue;
-    const center = 4 - Math.abs(4 - x.x), advanced = x.color === 1 ? 9 - x.y : x.y;
-    let value = pieceValue(x, phase);
-    if (x.kind === 'horse') value += center * 5 + Math.min(advanced, 5) * 2;
-    if (x.kind === 'pawn') value += center * 2 + advanced * 2;
-    if (x.kind === 'rook') {
-      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) for (let a = x.x + dx, b = x.y + dy; a >= 0 && a < 9 && b >= 0 && b < 10; a += dx, b += dy) { if (at(p.board, { x: a, y: b })) break; value += 2; }
-    }
+    const value = pieceValue(x, phase);
     score += x.color === perspective ? value : -value;
   }
+  score += evaluatePosition(p, perspective, phase).total - evaluatePosition(p, other(perspective), phase).total;
   // No positional heuristic is ever allowed to masquerade as a mate score.
   return Math.max(-50000, Math.min(50000, score));
 }

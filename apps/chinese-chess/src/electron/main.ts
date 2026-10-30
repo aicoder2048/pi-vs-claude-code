@@ -10,6 +10,7 @@ import { analyze, inside } from '../business/engine';
 import { validGameId } from '../business/learning';
 import { LearningCoordinator } from '../learning/coordinator';
 import { validateSettings } from '../business/clock';
+import { WorkerSearchDriver } from '../learning/search-driver';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let window: BrowserWindow | null = null;
@@ -68,7 +69,9 @@ async function initialize(): Promise<void> {
         // animation tests; this fixture is not a chess-strength benchmark.
         const move = analyze(port.state.position).candidates[0];
         port.log('extension', 'UI fixture · move_piece');
-        port.commit(move, '仅用于桌面自动化测试的固定应答。');
+        port.updatePlan?.({ action: 'revise', reason: '仅用于桌面测试的计划展示，不是棋力评测。', objective: 'UI fixture · 协调车炮',
+          problem: '展示结构化计划与保存链路', opponentThreat: '测试仍须按规则检查直接威胁', nextSteps: ['验证当前走法与风险'], abandonWhen: '下一次走子时重新复核' });
+        await port.commit(move, '仅用于桌面自动化测试的固定应答。');
       } };
     } else {
       const pi = await PiDriver.create(app.getPath('userData'));
@@ -84,7 +87,8 @@ async function initialize(): Promise<void> {
     ? '未发现已认证的 Pi 模型。请运行 pi → /login，或设置相应 API Key，再重新启动本应用。'
     : startup.error;
   learning = new LearningCoordinator(app.getPath('userData'), path.join(here, 'learning-worker.js'));
-  service = new GameService(driver, selected, { cases: () => learning.cases });
+  service = new GameService(driver, selected, { cases: () => learning.cases,
+    search: new WorkerSearchDriver(path.join(here, 'search-worker.js')) });
   let learnedCases = learning.cases;
   learning.subscribe(overview => {
     if (learning.cases !== learnedCases) { learnedCases = learning.cases; service.refreshExperience(); }

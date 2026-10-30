@@ -131,7 +131,7 @@ function renderRecord() {
   });
   if (view === null) list.scrollTop = list.scrollHeight;
 }
-const RISK_TEXT: Record<Risk, string> = { win: '终局获胜', loss: '已发现直接败着反例', 'material-loss': '明显亏子估计', 'exchange-risk': '交换风险', uncertain: '覆盖不足，不能判安全', 'no-direct-loss-found': '未发现直接亏子，非安全证明' };
+const RISK_TEXT: Record<Risk, string> = { win: '终局获胜', loss: '已发现败着反例', 'material-loss': '明显亏子估计', 'exchange-risk': '交换风险', uncertain: '覆盖不足，不能判安全', 'no-direct-loss-found': '未发现直接亏子，非安全证明' };
 function renderExpert() {
   const container = el('expert-report'); container.replaceChildren();
   if (view !== null && view > 0 && !evaluations.has(view)) {
@@ -159,6 +159,24 @@ function renderExpert() {
   for (const e of report.experiences ?? []) { const article = document.createElement('article'); article.append(node('h4', e.title), node('p', `${e.match} · ${e.advice}`), node('p', `当前变化：${e.currentLine.join(' → ')} · 交换估计 ${e.currentNet}`), node('small', `来自 ${e.sourceCount} 个已验证样本；案例 ${e.caseId}。历史变例仅供参考，不自动落子。`)); learned.append(article); }
   const formation = section('子力协调与九宫');
   for (const [label, f] of [['红方', report.formation.red], ['黑方', report.formation.black]] as const) formation.append(node('p', `${label}：${f.advisors} 士仕 / ${f.elephants} 相象；将帅合法出口 ${f.legalKingExits}；未离底线车马 ${f.undevelopedMajors.join('、') || '无'}；${f.horseMobility.map(x => `${x.piece} ${x.destinations} 个合法落点`).join('，')}`));
+  if (report.position) {
+    const position = section('局面评价 · 启发式而非胜率');
+    for (const [label, e] of [['红方', report.position.red], ['黑方', report.position.black]] as const) {
+      position.append(node('p', `${label}：出子 ${e.development} / 活动 ${e.mobility} / 协同 ${e.coordination} / 九宫压力 ${e.kingPressure} / 牵制 ${e.constraints} / 往返 ${e.wastedTempo}`),
+        node('small', `待激活子力：${e.inactiveMajors.join('、') || '无'}；九宫线牵制：${e.kingLineConstraints.join('、') || '无'}。几何压力不等于合法或强制攻杀。`));
+    }
+  }
+  if (report.search) {
+    const search = section('有界多步搜索');
+    search.append(node('p', `完成 ${report.search.completedDepth} 层 / 尝试 ${report.search.attemptedDepth} 层；${report.search.nodes} 节点；${report.search.rootScope}；停止原因 ${report.search.stopped}。未完成不是安全证明。`));
+    for (const c of report.search.candidates.slice(0, 3)) search.append(node('p', `${c.score}：${c.line.join(' → ')}`));
+  }
+  const plan = view === null ? state.plan : [...state.notes].reverse().find(n => n.ply <= view!)?.plan;
+  if (plan) {
+    const s = section('连续计划 · 每回合须重验');
+    s.append(node('p', `${plan.status} · ${plan.objective}`), node('p', `当前问题：${plan.problem}；对方计划：${plan.opponentThreat}`),
+      node('p', `近期步骤：${plan.nextSteps.join('；')}`), node('p', `放弃条件：${plan.abandonWhen}`), node('small', plan.reviewReason));
+  }
   const principles = section('按当前局面触发的专家知识');
   for (const rule of report.principles) { const article = document.createElement('article'); article.append(node('h4', rule.title), node('p', rule.advice), node('small', `依据：${rule.evidence.join('；') || '当前阶段'}`)); principles.append(article); }
   const safety = section('受攻击棋子与将帅牵制');
@@ -173,6 +191,12 @@ function renderExpert() {
   }
   const note = [...state.notes].reverse().find(n => n.ply <= (view ?? state.position.moves.length));
   if (note?.review) { const s = section('最近一次机器提交的独立复查'); s.append(node('p', `第 ${note.ply} 手：${note.review.notation} · ${RISK_TEXT[note.review.risk]} · 交换估计 ${note.review.estimatedNet}`)); if (note.riskAcknowledgement) s.append(node('p', `模型明确接受风险：${note.riskAcknowledgement}`)); }
+  if (note?.review?.search) {
+    const search = note.review.search, s = section('实际落子的多步复查');
+    s.append(node('p', `完成 ${search.completedDepth} 层 · ${search.nodes} 节点 · ${search.stopped}；不是完备求解。`));
+    for (const c of search.candidates.slice(0, 1)) s.append(node('p', c.line.join(' → ')));
+  }
+  if (note?.review?.searchError || report.searchError) section('搜索未完成 · 结果未知').append(node('p', note?.review?.searchError ?? report.searchError!));
   const limits = section('计算边界'); for (const limit of report.limitations) limits.append(node('p', limit));
 }
 function renderLogs() { text('logs', state.logs.map(l => `${new Date(l.time).toLocaleTimeString()} [${l.layer}] ${l.text}`).join('\n') || '等待第一步走子。'); if (!el('layers').hidden) el('logs').scrollTop = el('logs').scrollHeight; }

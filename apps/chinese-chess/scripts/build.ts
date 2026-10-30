@@ -4,6 +4,7 @@ await mkdir('dist/renderer', { recursive: true });
 for (const [entrypoint, outfile, target, format] of [
   ['src/electron/main.ts', 'dist/electron/main.js', 'node', 'esm'],
   ['src/learning/worker.ts', 'dist/electron/learning-worker.js', 'node', 'esm'],
+  ['src/learning/search-worker.ts', 'dist/electron/search-worker.js', 'node', 'esm'],
   ['src/electron/preload.ts', 'dist/electron/preload.cjs', 'node', 'cjs'],
   ['src/renderer/app.ts', 'dist/renderer/app.js', 'browser', 'esm'],
 ] as const) {

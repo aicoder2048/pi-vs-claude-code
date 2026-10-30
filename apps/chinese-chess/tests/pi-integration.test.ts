@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +9,9 @@ import { GameService, type TurnPort } from '../src/business/game-service';
 import { analyzeExpert, MoveRiskError, needsRiskAcknowledgement, reviewMove } from '../src/business/expert';
 import { retrieveKnowledge } from '../src/business/knowledge';
 import { XIANGQI_TOOLS } from '../src/extensions/xiangqi';
+import { searchPosition, type SearchOptions } from '../src/business/search';
+import { updatePlan } from '../src/business/plan';
+import { DEFAULT_SETTINGS } from '../src/business/clock';
 import { RECORDED_GAME } from './fixtures/recorded-game';
 import type { GameState } from '../src/shared/types';
 
@@ -34,7 +37,7 @@ async function fixture(responder: (request: Record<string, any>, n: number) => R
     models: [{ id: 'xiangqi', name: 'SSE Fixture', contextWindow: 65536, maxTokens: 1024 }],
   } } }));
   const runtime = await ModelRuntime.create({ authPath: path.join(dir, 'auth.json'), modelsPath, modelsStorePath: path.join(dir, 'catalog.json') });
-  return { driver: new PiDriver(runtime, dir, 5000), runtime, dir, requests };
+  return { driver: new PiDriver(runtime, dir), runtime, dir, requests };
 }
 function tool(name: string, args: unknown, n: number): Response {
   const base = { id: `fixture-${n}`, object: 'chat.completion.chunk', created: 1, model: 'xiangqi' };
@@ -83,17 +86,89 @@ describe('real Pi harness + inline Xiangqi extension, local SSE transport', () =
     expect(requests).toHaveLength(2); expect(commits).toEqual([{ move: { ...safer, revision: 41, reason: '先保住受攻击的炮。' }, reason: '先保住受攻击的炮。' }]);
     expect(requests[1].messages.some((m: any) => m.role === 'tool' && m.content.includes('900') && m.content.includes('红车 B0 → B2 吃车'))).toBe(true);
   }, 15000);
+  test('real loop sees automatic search, calls bounded search, stages a plan and awaits async commit', async () => {
+    const next = { from: { x: 0, y: 3 }, to: { x: 0, y: 4 } };
+    const plan = { action: 'revise' as const, reason: '比较后优先疏通车路。', objective: '协调车炮', problem: '部分子力尚未出动',
+      opponentThreat: '对手准备推进边兵', nextSteps: ['先查直接威胁', '择机疏通车路'], abandonWhen: '出现直接杀棋时放弃原路线' };
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('analyze_position', {}, n);
+      if (n === 2) return tool('search_position', { moves: [next], maxDepth: 4, maxMs: 100 }, n);
+      if (n === 3) return tool('update_plan', plan, n);
+      return tool('move_piece', { ...next, revision: 1, reason: '先协调兵力，不盲目进攻。' }, n);
+    });
+    const state = initialState(), searches: SearchOptions[] = []; let committed = false;
+    await driver.run({ state, signal: new AbortController().signal, log() {},
+      async search(options = {}) {
+        searches.push(options); const report = searchPosition(state.position, { ...options, maxMs: 0, maxNodes: 0 });
+        state.analysis.expert!.search = report; return report;
+      },
+      updatePlan(input) { state.plan = updatePlan(state.position, state.plan, input); return state.plan; },
+      async commit(move) { await Bun.sleep(20); play(state.position, move); committed = true; },
+    });
+    expect(committed).toBe(true); expect(requests).toHaveLength(4); expect(searches).toHaveLength(2);
+    expect(searches[0]).toEqual({}); expect(searches[1].moves).toEqual([next]); expect(state.plan?.objective).toBe('协调车炮');
+    expect(JSON.stringify(requests[0].messages)).toContain('completedDepth');
+    expect(requests[2].messages.some((m: any) => m.role === 'tool' && m.content.includes('requested-subset'))).toBe(true);
+    expect(requests[3].messages.some((m: any) => m.role === 'tool' && m.content.includes('staged'))).toBe(true);
+  }, 15000);
   test('request budget stops a model that endlessly requests analysis', async () => {
     const { driver, requests } = await fixture((_request, n) => tool('analyze_position', {}, n));
     let commits = 0;
     await expect(driver.run({ state: initialState(), signal: new AbortController().signal, log() {}, commit() { commits++; } })).rejects.toThrow('上限');
     expect(requests.length).toBeLessThanOrEqual(8); expect(commits).toBe(0);
   }, 10000);
-  test('timeout aborts slow transport without a commit', async () => {
-    const { runtime, dir } = await fixture(async () => { await Bun.sleep(300); return tool('move_piece', { from: { x: 0, y: 3 }, to: { x: 0, y: 4 }, revision: 1, reason: '迟到' }, 1); });
+  test('slow transport has no application 90-second deadline and may finish while its clock is live', async () => {
+    const { driver, requests } = await fixture(async (_request, n) => { await Bun.sleep(150); return tool('move_piece', { from: { x: 0, y: 3 }, to: { x: 0, y: 4 }, revision: 1, reason: '仍有余时，合法完成落子。' }, n); });
     let commits = 0;
-    await expect(new PiDriver(runtime, dir, 70).run({ state: initialState(), signal: new AbortController().signal, log() {}, commit() { commits++; } })).rejects.toThrow('超时');
-    expect(commits).toBe(0);
+    // Inspect deadline registration rather than waiting 90 real seconds.
+    const timers = spyOn(globalThis, 'setTimeout');
+    try {
+      await driver.run({ state: initialState(), signal: new AbortController().signal, log() {}, commit() { commits++; } });
+      expect(timers.mock.calls.some(([, ms]) => ms === 90000)).toBe(false);
+    } finally { timers.mockRestore(); }
+    expect(commits).toBe(1);
+    expect(JSON.stringify(requests[0].messages)).toContain('不另设单步时间上限');
+    expect(JSON.stringify(requests[0].messages)).toContain('加 20 秒');
+  }, 10000);
+  test('game cancellation signal reaches an already-running async move tool', async () => {
+    const { driver } = await fixture((_request, n) => tool('move_piece', { from: { x: 0, y: 3 }, to: { x: 0, y: 4 }, revision: 1, reason: '等待独立搜索复查。' }, n));
+    const controller = new AbortController(); let committed = false, toolSignal: AbortSignal | undefined;
+    await expect(driver.run({ state: initialState(), signal: controller.signal, log() {},
+      async commit(_move, _reason, _ack, signal) {
+        toolSignal = signal; controller.abort(); await Bun.sleep(20);
+        if (signal?.aborted) throw new Error('工具已取消，拒绝迟到落子');
+        committed = true;
+      },
+    })).rejects.toThrow('取消');
+    expect(toolSignal).toBeDefined(); expect(toolSignal!.aborted).toBe(true); expect(committed).toBe(false);
+  }, 10000);
+  test('real Pi service turn can spend more than 90 seconds of its remaining game clock', async () => {
+    let now = 0, service!: GameService, run!: Promise<void>;
+    const { driver } = await fixture((_request, n) => {
+      now = 120000; service.tick();
+      return tool('move_piece', { from: { x: 0, y: 3 }, to: { x: 0, y: 4 }, revision: 1, reason: '长考后按余时及时落子。' }, n);
+    });
+    service = new GameService({ run(port) { run = driver.run(port); return run; } }, { provider: 'fixture', id: 'xiangqi', name: 'SSE Fixture' },
+      { now: () => now, search: { async search(p) { return searchPosition(p, { maxMs: 0, maxNodes: 0 }); } } });
+    cleanups.push(() => service.dispose());
+    service.humanMove({ from: { x: 0, y: 6 }, to: { x: 0, y: 5 } }, 0); await run;
+    expect(service.snapshot().outcome).toBeNull(); expect(service.snapshot().position.moves).toHaveLength(2);
+    expect(service.snapshot().notes[0].elapsedMs).toBe(120000);
+    expect(service.snapshot().clock.players[2].mainMs).toBe(DEFAULT_SETTINGS.mainTimeMs - 120000 + 20000);
+  }, 10000);
+  test('remaining game clock aborts real Pi network work and prevents a late increment or move', async () => {
+    let now = 0, service!: GameService, run!: Promise<void>, signal!: AbortSignal;
+    const { driver } = await fixture((_request, n) => {
+      now = DEFAULT_SETTINGS.mainTimeMs; service.tick();
+      return tool('move_piece', { from: { x: 0, y: 3 }, to: { x: 0, y: 4 }, revision: 1, reason: '迟到响应不能补救超时。' }, n);
+    });
+    service = new GameService({ run(port) { signal = port.signal; run = driver.run(port); return run; } }, { provider: 'fixture', id: 'xiangqi', name: 'SSE Fixture' },
+      { now: () => now, search: { async search(p) { return searchPosition(p, { maxMs: 0, maxNodes: 0 }); } } });
+    cleanups.push(() => service.dispose());
+    service.humanMove({ from: { x: 0, y: 6 }, to: { x: 0, y: 5 } }, 0); await expect(run).rejects.toThrow();
+    expect(signal.aborted).toBe(true); expect(service.snapshot().outcome).toMatchObject({ winner: 1, reason: 'main-time' });
+    expect(service.snapshot().notes).toHaveLength(0); expect(service.snapshot().position.moves).toHaveLength(1);
+    expect(service.snapshot().clock.players[2].mainMs).toBe(0);
   }, 10000);
   test('abort interrupts pending network work without a commit', async () => {
     const { driver } = await fixture(async () => { await Bun.sleep(300); return tool('move_piece', { from: { x: 0, y: 3 }, to: { x: 0, y: 4 }, revision: 1, reason: '不应落子' }, 1); });

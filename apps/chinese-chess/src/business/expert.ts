@@ -4,6 +4,7 @@ import {
 } from './engine';
 
 import type { SearchReport } from './search';
+import { evaluatePosition, type PositionalEvaluation } from './evaluation';
 import type { ExperienceHint } from './learning';
 import type { KnowledgeHint } from './knowledge';
 // Business-owned, bounded tactical assistance, NOT a substitute chess player.
@@ -30,11 +31,14 @@ export interface MoveReview {
   losingReply: { move: MoveInput; reason: string } | null;
   coverage: { checkedReplies: number; totalReplies: number; complete: boolean; exchangeComplete: boolean; nodes: number };
   warnings: string[];
+  search?: SearchReport;
+  searchError?: string;
 }
 export interface ExpertReport {
   version: 'xiangqi-expert/v1'; phase: Phase; perspective: Color;
   experiences?: ExperienceHint[]; knowledge?: KnowledgeHint[]; search?: SearchReport; searchError?: string;
   material: { red: number; black: number; balanceForSideToMove: number };
+  position: { red: PositionalEvaluation; black: PositionalEvaluation; balanceForSideToMove: number };
   safety: PieceSafety[]; formation: { red: Formation; black: Formation }; lastMove: string | null; priorities: string[];
   principles: Principle[]; candidates: MoveReview[];
   coverage: { reviewedMoves: number; totalMoves: number; nodes: number; budgetExhausted: boolean };
@@ -74,30 +78,7 @@ function material(p: Position, color: Color, phase: Phase): number {
   return p.board.reduce((sum, x) => sum + (x?.color === color ? pieceValue(x, phase) : 0), 0);
 }
 function positional(p: Position, color: Color, phase: Phase): number {
-  let score = 0;
-  for (const piece of p.board) {
-    if (!piece || piece.color !== color) continue;
-    const forward = color === 1 ? 9 - piece.y : piece.y;
-    const center = 4 - Math.abs(4 - piece.x);
-    if (piece.kind === 'horse') {
-      // Count usable horse destinations, not just geographical centrality.
-      const mobility = legalMoves({ ...p, next: color, winner: null }, piece).length;
-      score += mobility * 5 + center * 3;
-      if (phase === 'opening' && forward > 0) score += 18;
-    } else if (piece.kind === 'rook') {
-      let freedom = 0;
-      for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
-        for (let x = piece.x + dx, y = piece.y + dy; x >= 0 && x < 9 && y >= 0 && y < 10; x += dx, y += dy) {
-          if (at(p.board, { x, y })) break;
-          freedom++;
-        }
-      }
-      score += freedom * 2;
-      if (phase === 'opening' && forward > 0) score += 12;
-    } else if (piece.kind === 'pawn') score += forward * 2 + center;
-    else if (piece.kind === 'king' && phase !== 'endgame') score -= forward * 8;
-  }
-  return score;
+  return evaluatePosition(p, color, phase).total - evaluatePosition(p, other(color), phase).total;
 }
 export function inspectSafety(p: Position, phase = phaseOf(p)): PieceSafety[] {
   return p.board.flatMap(piece => {
@@ -240,10 +221,16 @@ export function analyzeExpert(p: Position, options: ExpertOptions = {}): Analysi
   const count = Math.max(0, Math.min(all.length, options.candidateLimit ?? 12));
   // Cheap positional diversity stops a greedy capture-only shortlist. Rank all
   // roots by positional delta as well, then mix with tactical candidates.
-  const positionalOrder = all.map(move => { const q = play(p, move); return { move, score: q.winner === p.next ? 1000000 : positional(q, p.next, phase) }; }).sort((a, b) => b.score - a.score);
+  const positionalOrder = all.map(move => { const q = play(p, move); return { move, after: q, score: q.winner === p.next ? 1000000 : positional(q, p.next, phase) }; }).sort((a, b) => b.score - a.score);
+  // Preserve real escape candidates when richer positional terms favor keeping
+  // an attacked piece on an attractive square. Heuristics must not crowd out
+  // the old free-piece safeguards.
+  const threatened = safety.filter(x => x.color === p.next && x.value >= 250 && x.legalAttackers.length);
+  const escapes = positionalOrder.filter(({ move, after }) => threatened.some(x => same(x.square, move.from))
+    && legalCapturesTo({ ...after, next: other(p.next) }, move.to).length === 0);
   const shortlist: MoveInput[] = [];
   for (let i = 0; shortlist.length < count && i < all.length; i++) {
-    for (const move of [all[i], positionalOrder[i]?.move]) {
+    for (const move of [all[i], escapes[i]?.move, positionalOrder[i]?.move]) {
       if (move && !shortlist.some(x => same(x.from, move.from) && same(x.to, move.to))) shortlist.push(move);
       if (shortlist.length >= count) break;
     }
@@ -261,11 +248,18 @@ export function analyzeExpert(p: Position, options: ExpertOptions = {}): Analysi
   }
   candidates.sort((a, b) => b.score - a.score);
   const red = material(p, 1, phase), black = material(p, 2, phase);
+  const redPosition = evaluatePosition(p, 1, phase), blackPosition = evaluatePosition(p, 2, phase);
+  const ownPosition = p.next === 1 ? redPosition : blackPosition;
   const ownThreats = safety.filter(x => x.color === p.next && x.legalAttackers.length).sort((a, b) => b.value - a.value);
   const expert: ExpertReport = { version: 'xiangqi-expert/v1', phase, perspective: p.next, material: { red, black, balanceForSideToMove: p.next === 1 ? red - black : black - red },
+    position: { red: redPosition, black: blackPosition, balanceForSideToMove: p.next === 1 ? redPosition.total - blackPosition.total : blackPosition.total - redPosition.total },
     safety, formation: { red: formation(p, 1), black: formation(p, 2) }, lastMove: p.moves.at(-1)?.notation ?? null,
     priorities: [base.inCheck ? '当前被将军，必须先应将。' : '先审查对方将军与直接杀，再评估吃子、交换和布局。', ...ownThreats.slice(0, 4).map(x => `${x.piece} 可被 ${x.legalAttackers.join('、')} 合法攻击${x.loose ? '，无几何保护' : '；有保护仍须验算交换'}。`)],
-    principles: knowledge(p, phase, safety), candidates,
+    principles: [...knowledge(p, phase, safety),
+      ...(ownPosition.inactiveMajors.length ? [{ id: 'activate-idle-pieces', title: '把闲置子力接入战斗', evidence: ownPosition.inactiveMajors,
+        advice: '比较疏通车路、调炮与解除牵制；不能只修补眼前受攻点。闲子指标是启发式，不可为出子忽略直接杀或送大子。' }] : []),
+      ...(ownPosition.repeatedMoves.length ? [{ id: 'tempo-waste', title: '无收益往返需要重新制定计划', evidence: ownPosition.repeatedMoves,
+        advice: '检查是否必须防守；若非必要，比较解围、兑换进攻子和发展其他子力，而非继续往返。' }] : [])], candidates,
     coverage: { reviewedMoves: candidates.length, totalMoves: all.length, nodes: budget.nodes, budgetExhausted: budget.exhausted },
     limitations: ['反击检查覆盖候选后的对方一手；未覆盖候选和预算截断不代表安全。', '同格交换最多6次后续吃子，允许放弃交换；不完整搜索异地战术、强制应将及长期弃子补偿。', '动态子力、活动性与专家原则均为启发式，不是胜率；战术计算不含完整开残局库或外部引擎，来源定式与案例另行按需注入。'] };
   return { ...base, redScore: red, blackScore: black, expert,

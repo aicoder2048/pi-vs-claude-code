@@ -14,7 +14,12 @@ try {
   await expect(page.locator('#pieces .piece')).toHaveCount(32);
   await expect(page.locator('#match-format')).toHaveText('三局两胜');
   await expect(page.locator('#status-title')).toHaveText('楚河汉界，落子有声');
-  await page.locator('#new-game').click(); await page.locator('#allow-undo').check(); await page.locator('button[value=start]').click();
+  await expect(page.locator('#machine-time')).toHaveText('50:00');
+  await expect(page.locator('#machine-clock-info')).toContainText('每步 +20 秒');
+  await page.locator('#new-game').click();
+  await expect(page.locator('#main-minutes')).toHaveValue('50'); await expect(page.locator('#increment-seconds')).toHaveValue('20');
+  await expect(page.locator('#new-dialog')).toContainText('不另设单步时限');
+  await page.locator('#allow-undo').check(); await page.locator('button[value=start]').click();
   await expect(page.locator('#new-dialog')).not.toBeVisible();
   // Select red soldier; exactly one legal dot. Invalid destination must not move it.
   await page.getByRole('button', { name: '红兵 A6', exact: true }).click();
@@ -36,10 +41,13 @@ try {
   await page.locator('#live').click(); await expect(page.locator('#pieces .piece')).toHaveCount(31);
   await page.locator('#flip').click(); await page.locator('#flip').click();
   await page.locator('#animation').click(); await page.locator('#animation').click();
-  await page.locator('#layers-toggle').click(); await expect(page.locator('#layers')).toContainText('review_move'); await expect(page.locator('#layers')).toContainText('compare_moves'); await page.locator('#layers-close').click();
+  await page.locator('#layers-toggle').click(); await expect(page.locator('#layers')).toContainText('review_move'); await expect(page.locator('#layers')).toContainText('compare_moves'); await expect(page.locator('#layers')).toContainText('search_position'); await expect(page.locator('#layers')).toContainText('update_plan'); await page.locator('#layers-close').click();
   await page.locator('#expert-open').click(); await expect(page.locator('#expert-dialog')).toBeVisible();
   await expect(page.locator('#expert-report')).toContainText('炮架是动态资源');
   await expect(page.locator('#expert-report')).toContainText('最近一次机器提交的独立复查');
+  await expect(page.locator('#expert-report')).toContainText('局面评价 · 启发式而非胜率');
+  await expect(page.locator('#expert-report')).toContainText('连续计划 · 每回合须重验');
+  await expect(page.locator('#expert-report')).toContainText('实际落子的多步复查');
   await expect(page.locator('#expert-report')).toContainText('计算边界');
   await page.screenshot({ path: 'artifacts/expert-report.png' }); await page.locator('#expert-close').click();
   // Backfill an independently stored finished game, not the current live board.
@@ -109,9 +117,12 @@ try {
   const files = await Array.fromAsync(new Bun.Glob('records/*.json').scan(dataDir)); expect(files.length).toBeGreaterThanOrEqual(3);
   const records = await Promise.all(files.map(f => Bun.file(path.join(dataDir, f)).json()));
   expect(records.every(r => r.format === 'chinese-chess/v1')).toBe(true);
+  expect(records.some(r => r.match?.settings.mainTimeMs === 3000000 && r.match?.settings.incrementMs === 20000)).toBe(true);
   const library = await Bun.file(path.join(dataDir, 'learning/library.json')).json();
   expect(library.cases).toHaveLength(2); expect(library.reviews.some((r: any) => r.gameId === 'smoke-learning-game')).toBe(true);
   expect(records.some(r => r.notes.some((n: any) => n.review?.coverage))).toBe(true);
+  expect(records.some(r => r.notes.some((n: any) => n.review?.search?.version === 'xiangqi-search/v1'))).toBe(true);
+  expect(records.some(r => r.notes.some((n: any) => n.plan?.objective?.includes('UI fixture')))).toBe(true);
   expect(records.some(r => r.evaluations?.some((a: any) => a.expert?.version === 'xiangqi-expert/v1'))).toBe(true);
   console.log('PASS: real Electron + 32-piece board / capture / keyboard / replay / undo + no-scroll 900/760/700 + BO3/BO5 + clocks/timeout + offline music decoding + isolated IPC + autosave');
 } finally { await application.close(); if (dataDir.includes('chinese-chess-smoke-')) await rm(dataDir, { recursive: true, force: true }); }
