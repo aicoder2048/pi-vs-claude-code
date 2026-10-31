@@ -58,15 +58,17 @@ describe("new-list (T:405-442)", () => {
 		expect(r.next!.list.description).toBeUndefined();
 	});
 
-	test("asks when the list is titled but empty", () => {
-		const m = step(INITIAL_MODEL, { action: "new-list", text: "T" });
+	test("asks while a task is not done", () => {
+		const m = run(INITIAL_MODEL, { action: "new-list", text: "T" }, { action: "add", texts: ["a", "b"] }, { action: "toggle", id: 1 }, { action: "toggle", id: 1 });
 		const a = ask(runTool(m, { action: "new-list", text: "U" }));
-		expect([a.title, a.message, a.timeoutMs]).toEqual(["Start a new list?", 'This will replace "T" (0 task(s)). Continue?', 30000]);
+		expect([a.title, a.message, a.timeoutMs]).toEqual(["Start a new list?", 'This will replace "T" (2 task(s), 1 not done). Continue?', 30000]);
+		expect(ask(runTool(withTasks("a"), { action: "new-list", text: "U" })).message).toBe("This will replace the current list (1 task(s), 1 not done). Continue?");
 	});
 
-	test("asks when the list is untitled with tasks", () => {
-		const a = ask(runTool(withTasks("a"), { action: "new-list", text: "U" }));
-		expect(a.message).toBe("This will replace the current list (1 task(s)). Continue?");
+	test("replaces a titled-but-empty or all-done list without asking", () => {
+		const titled = step(INITIAL_MODEL, { action: "new-list", text: "T" });
+		const done = run(withTasks("a"), { action: "toggle", id: 1 }, { action: "toggle", id: 1 });
+		for (const m of [titled, done]) expect(reply(runTool(m, { action: "new-list", text: "U" })).next!.list.title).toBe("U");
 	});
 
 	test("denied consent cancels and keeps the list in details", () => {
@@ -197,11 +199,16 @@ describe("clear (T:582-609)", () => {
 		}
 	});
 
-	test("asks when tasks exist", () => {
+	test("asks while a task is not done", () => {
 		const m = run(INITIAL_MODEL, { action: "new-list", text: "T" }, { action: "add", texts: ["a", "b"] });
 		const a = ask(runTool(m, { action: "clear" }));
-		expect([a.title, a.message, a.timeoutMs]).toEqual(["Clear TillDone list?", 'This will remove all 2 task(s) from "T". Continue?', 30000]);
-		expect(ask(runTool(withTasks("a"), { action: "clear" })).message).toBe("This will remove all 1 task(s). Continue?");
+		expect([a.title, a.message, a.timeoutMs]).toEqual(["Clear TillDone list?", 'This will remove all 2 task(s) from "T", 2 not done. Continue?', 30000]);
+		expect(ask(runTool(withTasks("a"), { action: "clear" })).message).toBe("This will remove all 1 task(s), 1 not done. Continue?");
+	});
+
+	test("clears an all-done list without asking", () => {
+		const done = run(withTasks("a"), { action: "toggle", id: 1 }, { action: "toggle", id: 1 });
+		expect(reply(runTool(done, { action: "clear" })).text).toBe("Cleared 1 task(s)");
 	});
 
 	test("denied and granted", () => {

@@ -247,8 +247,7 @@ function listText(list: ListState): string {
 /**
  * The whole tool behavior. Pure and synchronous.
  *
- * Without `consent`, new-list on a non-empty-or-titled list and clear on a
- * non-empty list return Ask. With `consent` (the user's answer; no UI, timeout
+ * Without `consent`, new-list and clear return Ask while some task is not done. With `consent` (the user's answer; no UI, timeout
  * and decline all arrive as false) the result is always a Reply. L2 re-runs on
  * the current model after the dialog, which mirrors the original reading state
  * after its await.
@@ -261,12 +260,14 @@ export function runTool(model: Model, params: Params, consent?: boolean): Ask | 
 	if (!v.ok) return fail(list, v.action, v.text, v.error);
 	const cmd = v.cmd;
 	const n = list.tasks.length;
+	// Asking only protects unfinished work; a finished list is recoverable from the session branch.
+	const open = list.tasks.filter((t) => t.status !== "done").length;
 
 	switch (cmd.kind) {
 		case "new-list": {
-			if (n > 0 || list.title) {
+			if (open > 0) {
 				if (consent === undefined) {
-					return ask("Start a new list?", `This will replace${list.title ? ` "${list.title}"` : " the current list"} (${n} task(s)). Continue?`);
+					return ask("Start a new list?", `This will replace${list.title ? ` "${list.title}"` : " the current list"} (${n} task(s), ${open} not done). Continue?`);
 				}
 				if (!consent) return fail(list, "new-list", "New list cancelled by user.", "cancelled");
 			}
@@ -313,9 +314,9 @@ export function runTool(model: Model, params: Params, consent?: boolean): Ask | 
 			return ok(model, "update", makeList(tasks, list.nextId, list.title, list.description), `Updated #${task.id}: "${task.text}" → "${cmd.text}"`);
 		}
 		case "clear": {
-			if (n > 0) {
+			if (open > 0) {
 				if (consent === undefined) {
-					return ask("Clear TillDone list?", `This will remove all ${n} task(s)${list.title ? ` from "${list.title}"` : ""}. Continue?`);
+					return ask("Clear TillDone list?", `This will remove all ${n} task(s)${list.title ? ` from "${list.title}"` : ""}, ${open} not done. Continue?`);
 				}
 				if (!consent) return fail(list, "clear", "Clear cancelled by user.", "cancelled");
 			}
