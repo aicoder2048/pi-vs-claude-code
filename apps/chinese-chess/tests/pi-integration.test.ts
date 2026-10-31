@@ -76,6 +76,33 @@ describe('real Pi harness + inline Xiangqi extension, local SSE transport', () =
     expect(JSON.stringify(requests[0].messages)).toContain('source');
     expect(requests[5].messages.some((m: any) => m.role === 'tool' && m.content.includes('自己的棋子'))).toBe(true);
   }, 15000);
+  test('resign_game rejects stale revision, then ends real Pi/service turn without a move or follow-up', async () => {
+    let service!: GameService, run!: Promise<void>;
+    const { driver, requests } = await fixture((_request, n) => tool('resign_game', {
+      revision: n === 1 ? 0 : 1, reason: '当前无已验证解围手段，主动认输。',
+    }, n));
+    service = new GameService({ run(port) { run = driver.run(port); return run; } }, { provider: 'fixture', id: 'xiangqi', name: 'fixture' },
+      { now: () => 0, search: { async search(p) { return searchPosition(p, { maxMs: 0, maxNodes: 0 }); } } });
+    cleanups.push(() => service.dispose());
+    service.humanMove({ from: { x: 0, y: 6 }, to: { x: 0, y: 5 } }, 0); await run;
+    expect(requests).toHaveLength(2); expect(service.record().moves).toHaveLength(1);
+    expect(requests[1].messages.some((m: any) => m.role === 'tool' && m.content.includes('版本错误'))).toBe(true);
+    expect(service.snapshot().outcome).toMatchObject({ winner: 1, reason: 'resign' });
+    expect(service.snapshot().error).toBeNull(); expect(service.record().notes).toHaveLength(0);
+    expect(service.record().resignation?.decision?.tools).toEqual([{ name: 'resign_game', ok: false }, { name: 'resign_game', ok: true }]);
+    expect(service.record().resignation?.timing?.spans.filter(s => s.name === 'resign_game').map(s => s.status)).toEqual(['error', 'ok']);
+    expect(JSON.stringify(requests[0].messages)).toContain('不要用无补偿送子');
+  }, 15000);
+  test('successful resign_game blocks a sibling move in the same model batch', async () => {
+    const { driver, requests } = await fixture((_request, n) => toolCalls([
+      { name: 'resign_game', args: { revision: 1, reason: '主动结束对局。' } },
+      { name: 'move_piece', args: { from: { x: 0, y: 3 }, to: { x: 0, y: 4 }, revision: 1, reason: '认输后不能再动。' } },
+    ], n));
+    let resignations = 0, commits = 0;
+    await driver.run({ state: initialState(), signal: new AbortController().signal, log() {},
+      resign() { resignations++; }, commit() { commits++; } });
+    expect(resignations).toBe(1); expect(commits).toBe(0); expect(requests).toHaveLength(1);
+  }, 15000);
   test('real tool loop receives the free-rook counterexample and corrects it', async () => {
     const safer = { from: { x: 3, y: 6 }, to: { x: 2, y: 6 } };
     const { driver, requests } = await fixture((_request, n) => tool('move_piece', { ...(n === 1 ? RECORDED_GAME[41] : safer), revision: 41, reason: n === 1 ? '平车捉车' : '先保住受攻击的炮。' }, n));
@@ -183,6 +210,16 @@ describe('real Pi harness + inline Xiangqi extension, local SSE transport', () =
       setDecision(value) { trace = structuredClone(value); }, commit() { commits++; } });
     expect(commits).toBe(0); expect(trace!.skillsRead).toHaveLength(16);
     expect(trace!.tools).toHaveLength(17); expect(trace!.tools.at(-1)?.ok).toBe(false);
+    expect(requests[1].messages.some((m: any) => m.role === 'tool' && m.content.includes('预算已耗尽'))).toBe(true);
+  }, 10000);
+  test('analysis budget exhaustion does not remove the resignation exit', async () => {
+    const { driver, requests } = await fixture((_request, n) => n === 1 ?
+      toolCalls(Array.from({ length: 17 }, () => ({ name: 'read_skill', args: { name: 'coordinates' } })), n) :
+      tool('resign_game', { revision: 1, reason: '主动认输，不用等待超时。' }, n));
+    let resignations = 0;
+    await driver.run({ state: initialState(), signal: new AbortController().signal, log() {},
+      resign() { resignations++; }, commit() { throw new Error('不应落子'); } });
+    expect(resignations).toBe(1); expect(requests).toHaveLength(2);
     expect(requests[1].messages.some((m: any) => m.role === 'tool' && m.content.includes('预算已耗尽'))).toBe(true);
   }, 10000);
   test('request budget stops a model that endlessly requests analysis', async () => {

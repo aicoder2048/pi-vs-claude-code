@@ -22,6 +22,7 @@ export interface TurnPort {
   updatePlan?(input: PlanUpdate): StrategicPlan | null;
   setDecision?(trace: DecisionTrace): void;
   telemetry?(event: TimingEvent): void;
+  resign?(reason: string, signal?: AbortSignal): Promise<void> | void;
   commit(point: MoveInput, reason: string, riskAcknowledgement?: string, signal?: AbortSignal): Promise<void> | void;
 }
 export interface AgentDriver { run(port: TurnPort): Promise<void> }
@@ -162,6 +163,7 @@ export class GameService {
   resign(): GameState {
     this.charge();
     if (this.state.outcome) throw new Error('本局已结束');
+    this.state.resignation = { color: this.state.human, afterPly: this.state.position.moves.length, reason: '玩家主动认输' };
     this.finish(other(this.state.human), 'resign'); return this.view();
   }
   setModel(model: ModelChoice): GameState {
@@ -276,6 +278,22 @@ export class GameService {
         planUpdate = structuredClone(input); snapshot.plan = structuredClone(stagedPlan);
         return structuredClone(stagedPlan);
       },
+      resign: async (reason, signal) => {
+        this.charge(); // deadline wins over a late resignation, just as with moves
+        if (signal?.aborted) throw new Error('认输请求已取消');
+        if (!valid() || committed || submitting || searching) throw new Error('过期、超时、并发或重复的认输请求已拒绝');
+        if (this.state.position.next !== other(this.state.human)) throw new Error('不是机器方回合');
+        if (typeof reason !== 'string' || !reason.trim() || reason.length > 600) throw new Error('请提供不超过 600 字的简短认输理由');
+        committed = true;
+        const timing = timer.finish(true), decision = stagedDecision ? structuredClone(stagedDecision) : undefined;
+        if (decision) recordDecisionTool(decision, 'resign_game', true);
+        this.turnTimer = undefined; this.stopAttempt = undefined; delete this.state.progress;
+        this.state.resignation = { color: snapshot.position.next, afterPly: snapshot.position.moves.length,
+          reason: reason.trim(), model: `${snapshot.model!.provider}/${snapshot.model!.id}`, timing, ...(decision ? { decision } : {}) };
+        // No fake move, increment, staged plan or move note. finish emits the
+        // complete resignation transaction and invalidates every late request.
+        this.finish(this.state.human, 'resign');
+      },
       commit: async (point, reason, riskAcknowledgement, signal) => {
         this.charge(); // a late response cannot win against an expired clock
         if (signal?.aborted) throw new Error('落子请求已取消');
@@ -337,7 +355,7 @@ export class GameService {
     };
     // Request errors, retries and cancel never reset the competition clock.
     void this.driver.run(port).then(() => {
-      if (valid() && !committed) throw new Error('模型未调用落子工具，请重试或切换支持工具调用的模型');
+      if (valid() && !committed) throw new Error('模型未调用落子或认输工具，请重试或切换支持工具调用的模型');
     }).catch(error => {
       this.charge();
       if (valid() && !committed) {
@@ -353,7 +371,8 @@ export class GameService {
       evaluations: structuredClone(this.state.evaluations), notes: structuredClone(this.state.notes), plan: structuredClone(this.state.plan),
       result: this.state.outcome?.winner ?? null, outcome: structuredClone(this.state.outcome),
       clock: structuredClone(this.state.clock), match: structuredClone(this.state.match),
-      ...(this.state.attempts?.length ? { attempts: structuredClone(this.state.attempts) } : {}) };
+      ...(this.state.attempts?.length ? { attempts: structuredClone(this.state.attempts) } : {}),
+      ...(this.state.resignation ? { resignation: structuredClone(this.state.resignation) } : {}) };
   }
   dispose(): void { this.invalidate('cancelled'); this.state.clock.running = null; this.listeners.clear(); }
 }

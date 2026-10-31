@@ -7,16 +7,17 @@ import type { TurnPort } from '../business/game-service';
 import { SKILLS_VERSION } from '../business/decision';
 const point = Type.Object({ x: Type.Integer({ minimum: 0, maximum: 8 }), y: Type.Integer({ minimum: 0, maximum: 9 }) });
 const move = { from: point, to: point };
-export const XIANGQI_TOOLS = ['analyze_position', 'search_position', 'review_move', 'compare_moves', 'simulate_moves', 'update_plan', 'move_piece', 'read_skill'];
+export const XIANGQI_TOOLS = ['analyze_position', 'search_position', 'review_move', 'compare_moves', 'simulate_moves', 'update_plan', 'move_piece', 'resign_game', 'read_skill'];
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], details: value });
 export interface SkillReader { names: string[]; read(name: string, reference?: string): string }
-export function xiangqiExtension(port: TurnPort, skills: SkillReader, onRead: (id: string) => void): ExtensionFactory {
+export function xiangqiExtension(port: TurnPort, skills: SkillReader, onRead: (id: string) => void, onFinish: () => void = () => {}): ExtensionFactory {
   return pi => {
     let calls = 0, committed = false;
     const active = () => { if (port.signal.aborted || committed) throw new Error('本回合已结束或取消'); };
     pi.on('tool_call', event => {
       active();
-      if (++calls > 16) return { block: true, reason: '单回合工具调用预算已耗尽' };
+      // Exhausting analysis/skill budget must not remove the ability to finish.
+      if (++calls > 16 && !['move_piece', 'resign_game'].includes(event.toolName)) return { block: true, reason: '单回合工具调用预算已耗尽；请落子或认输' };
       if (isToolCallEventType<'move_piece', { from: { x: number; y: number }; to: { x: number; y: number }; revision: number; reason: string }>('move_piece', event)) {
         port.log('extension', `校验走子：${moveText(event.input)} · revision ${event.input.revision}`);
       } else port.log('extension', `工具调用：${event.toolName}`);
@@ -88,6 +89,19 @@ export function xiangqiExtension(port: TurnPort, skills: SkillReader, onRead: (i
       },
     }));
     pi.registerTool(defineTool({
+      name: 'resign_game', label: '机器认输', executionMode: 'sequential',
+      description: 'Voluntarily resign this game with current revision and a brief Chinese public reason. Immediately awards the human a win, saves reason, stops clocks and ends turn. No move required; do not sacrifice pieces or wait for timeout to resign.',
+      parameters: Type.Object({ revision: Type.Integer({ minimum: 0 }), reason: Type.String({ minLength: 1, maxLength: 600 }) }),
+      async execute(_id, params, signal) {
+        active(); if (signal?.aborted) throw new Error('认输请求已取消');
+        if (params.revision !== port.state.revision) throw new Error(`版本错误：当前 revision=${port.state.revision}`);
+        if (!port.resign) throw new Error('未配置机器认输端口');
+        await port.resign(params.reason, signal);
+        committed = true; onFinish();
+        return { ...result({ accepted: true, resigned: true }), terminate: true };
+      },
+    }));
+    pi.registerTool(defineTool({
       name: 'move_piece', label: '移动棋子', executionMode: 'sequential',
       description: 'Submit from/to, current revision, Chinese public reason and optional 12–400 character riskAcknowledgement. Independently reviewed; returns accepted or risk error. Success ends turn.',
       parameters: Type.Object({ ...move, revision: Type.Integer({ minimum: 0 }), reason: Type.String({ minLength: 1, maxLength: 600 }),
@@ -100,7 +114,7 @@ export function xiangqiExtension(port: TurnPort, skills: SkillReader, onRead: (i
           if (!(error instanceof MoveRiskError)) throw error;
           return { content: [{ type: 'text' as const, text: error.message }], details: { review: error.review }, isError: true };
         }
-        committed = true;
+        committed = true; onFinish();
         return { ...result({ accepted: true, move: moveText(params) }), terminate: true };
       },
     }));

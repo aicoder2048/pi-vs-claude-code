@@ -26,7 +26,7 @@ export function recordDecisionTool(trace: DecisionTrace, name: string, ok: boole
   if (!ok) return;
   const step: DecisionStep | undefined = name === 'analyze_position' ? 'observe' :
     ['review_move', 'compare_moves', 'search_position'].includes(name) ? 'compare' :
-    name === 'update_plan' ? 'plan' : name === 'move_piece' ? 'commit' : undefined;
+    name === 'update_plan' ? 'plan' : ['move_piece', 'resign_game'].includes(name) ? 'commit' : undefined;
   if (step) Object.assign(trace.steps.find(s => s.id === step)!, { status: 'done', evidence: `${name} 执行成功` });
 }
 type TurnState = Pick<GameState, 'position' | 'analysis' | 'clock' | 'match' | 'notes' | 'outcome'>;

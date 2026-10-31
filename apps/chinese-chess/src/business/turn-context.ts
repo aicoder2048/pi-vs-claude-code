@@ -13,7 +13,7 @@ export function turnSignals(state: GameState) {
     principles: e?.principles.map(({ id, evidence }) => ({ id, evidence })),
     candidates: e?.candidates.slice(0, 6).map(({ move, notation, risk, estimatedNet, line, coverage }) => ({
       move, notation, risk, estimatedNet, line,
-      coverage: { complete: coverage.complete, exchangeComplete: coverage.exchangeComplete },
+      coverage: { complete: coverage.complete, exchangeComplete: coverage.exchangeComplete, quietThreatsComplete: coverage.quietThreatsComplete },
     })),
     search: search ? { bestMove: search.bestMove, completedDepth: search.completedDepth,
       rootScope: search.rootScope, searchedRoots: search.searchedRoots, legalRoots: search.legalRoots,

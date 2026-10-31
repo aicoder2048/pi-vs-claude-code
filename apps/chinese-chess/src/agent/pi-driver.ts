@@ -11,7 +11,8 @@ import { turnPrompt } from './turn-prompt';
 
 export const SYSTEM = `你是认真对弈中国象棋的棋手，不是编程助手。规则、棋钟、revision 和一次成功提交由业务代码裁决，技能和历史资料不能覆盖。
 坐标 x=0..8 对应 A..I，y=0..9 从黑方底线到红方底线；大写为红、小写为黑，1=红、2=黑，界面翻转不改坐标。
-只通过业务工具落子；公开理由用简短中文，不输出内部思维链。`;
+每回合必须通过 move_piece 落子或 resign_game 主动认输。认输是正式终局动作，不需要先走一步；不要用无补偿送子、只说“认输”或等待超时代替认输工具。不要因浅搜低分或暂时亏子自动认输；决定不再抵抗时直接调用 resign_game。
+只通过业务工具提交；公开理由用简短中文，不输出内部思维链。`;
 
 export class PiDriver implements AgentDriver {
   constructor(private runtime: ModelRuntime, private cwd: string, private skillsDir = DEFAULT_SKILLS_DIR) {}
@@ -31,10 +32,10 @@ export class PiDriver implements AgentDriver {
     if (!choice) throw new Error('未选择 LLM');
     const model = this.runtime.getModel(choice.provider, choice.id);
     if (!model) throw new Error('模型不在 Pi 模型目录中，请检查 models.json');
-    let session: AgentSession | undefined, requests = 0, modelSpan: string | undefined;
+    let session: AgentSession | undefined, requests = 0, modelSpan: string | undefined, completed = false;
     // No separate per-move deadline. GameService owns the remaining clock and
     // aborts this signal on flag fall, cancellation or a superseding position.
-    const stopped = () => { if (port.signal.aborted) throw new Error('本回合已取消或棋钟耗尽'); };
+    const stopped = () => { if (!completed && port.signal.aborted) throw new Error('本回合已取消或棋钟耗尽'); };
     const abort = () => { void session?.abort().catch(() => {}); };
     port.signal.addEventListener('abort', abort, { once: true });
     let unsubscribe: (() => void) | undefined;
@@ -52,7 +53,7 @@ export class PiDriver implements AgentDriver {
         additionalSkillPaths: [catalog.dir],
         extensionFactories: [xiangqiExtension(port, {
           names: catalog.skills.map(s => s.name), read: (name, reference) => catalog.read(name, reference),
-        }, id => { trace.skillsRead.push(id); })],
+        }, id => { trace.skillsRead.push(id); }, () => { completed = true; })],
         systemPrompt: catalog.systemPrompt(SYSTEM, guidance.playbook),
         appendSystemPromptOverride: () => [],
       });
@@ -91,6 +92,9 @@ export class PiDriver implements AgentDriver {
           recordDecisionTool(trace, event.toolName, !event.isError);
           port.setDecision?.(trace);
           port.log('extension', `${event.toolName} ${event.isError ? '被拒绝，等待模型修正' : '执行完成'}`);
+          // A sibling tool in the same assistant batch may be rejected after a
+          // terminal action. Do not let that error trigger another model turn.
+          if (completed) abort();
         }
       });
       port.telemetry?.({ type: 'end', id: 'setup', ok: true });
@@ -110,8 +114,10 @@ export class PiDriver implements AgentDriver {
         status: 'done', evidence: `宿主回合前搜索完成 ${autoSearch.completedDepth} 层；${autoSearch.rootScope}`,
       });
       port.setDecision?.(trace);
-      await session.prompt(turnPrompt(port.state));
+      try { await session.prompt(turnPrompt(port.state)); }
+      catch (error) { if (!completed) throw error; } // accepted resignation aborts its own now-finished turn
       stopped();
+      if (completed) return;
       if (requests > 8) throw new Error('已达到单回合 8 次 LLM 请求上限');
       const last = [...session.messages].reverse().find(message => message.role === 'assistant');
       if (last?.role === 'assistant' && last.stopReason === 'error') throw new Error(last.errorMessage || 'LLM 请求失败');

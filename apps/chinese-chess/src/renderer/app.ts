@@ -6,6 +6,7 @@ import { conditionalText, motifText, principleText } from './skill-text';
 import { progressText, timingLines, timingSummary } from './turn-feedback';
 import { Ambience, type MusicStyle } from './audio';
 import { newRoundWinner, VictoryCelebration } from './celebration';
+import { lastMoveHighlight } from './last-move';
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const text = (id: string, value: string) => { el(id).textContent = value; };
 const button = (id: string) => el<HTMLButtonElement>(id);
@@ -44,6 +45,21 @@ function staticBoard() {
   el('board-art').innerHTML = `<rect x="32" y="32" width="836" height="936" rx="2" fill="none" stroke="#866131" stroke-width="4"/><g class="grid">${lines.join('')}</g><text x="250" y="518" font-size="51" letter-spacing="24" text-anchor="middle">楚河</text><text x="650" y="518" font-size="51" letter-spacing="24" text-anchor="middle">汉界</text>${labels}`;
 }
 function marker(kind: string, p: Point) { const n = document.createElement('div'); n.className = `marker ${kind}`; place(n, p); el('markers').append(n); }
+function renderLastMove(p: Position) {
+  const highlight = lastMoveHighlight(p, state.human, flipped, view !== null);
+  // Persistent state, never a timed effect: app switching, clock heartbeats,
+  // disabling animations or selecting another piece must not erase this guide.
+  el('last-move-overlay').innerHTML = highlight ? `<defs><marker id="last-move-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="4.5" markerHeight="4.5" orient="auto"><path d="M1 1L11 6L1 11Z" fill="#756957"/></marker></defs>
+    <path class="last-move-route" d="${highlight.path}" marker-end="url(#last-move-arrow)"/>
+    <circle class="last-move-origin" cx="${highlight.from.x}" cy="${highlight.from.y}" r="26"/>
+    <text class="last-move-origin-label" x="${highlight.from.x}" y="${highlight.from.y}">起</text>
+    <circle class="last-move-glow" cx="${highlight.to.x}" cy="${highlight.to.y}" r="52"/>
+    <circle class="last-move-rim" cx="${highlight.to.x}" cy="${highlight.to.y}" r="48"/>
+    <circle class="last-move-destination" cx="${highlight.to.x}" cy="${highlight.to.y}" r="48"/>` : '';
+  const caption = highlight?.caption ?? '青色光晕＝落点 · 虚线箭头＝从起点走来';
+  if (el('last-move-caption').textContent !== caption) text('last-move-caption', caption);
+  el('last-move-caption').title = `${caption}。起字圈为原位置，青色光晕为新位置；虚线仅表示起终点方向，不表示实际行棋路径。`;
+}
 function transient(node: HTMLElement, ms: number) { el('effects').append(node); setTimeout(() => node.remove(), ms); }
 function effect(move: Move) {
   if (!animations) return;
@@ -76,7 +92,7 @@ function renderBoard(animate = false) {
   }
   for (const [id, n] of nodes) if (!ids.has(id)) { n.remove(); nodes.delete(id); }
   el('markers').replaceChildren();
-  if (last) marker('origin', last.from);
+  renderLastMove(p);
   if (cursor) marker('cursor', cursor);
   if (selected && live && hints) for (const m of legalMoves(p, selected)) marker(at(p.board, m.to) ? 'capture-ring' : 'legal-dot', m.to);
   text('black-captured', p.moves.filter(m => m.captured?.color === 2).map(m => glyph(m.captured!)).join(''));
@@ -101,7 +117,7 @@ function renderStatus() {
   let description = state.error || (state.status === 'thinking' ? `${state.progress ? progressText(state.progress) : '大模型正在分析棋局'}。网络与计算均计入棋钟。` : state.status === 'human' ? '点击己方棋子，再点击目标位置。绿点为合法走法，红圈为可吃棋子。' : '请求已停止，棋钟继续。点击「继续 / 重试」让大模型行棋。');
   if (state.outcome) {
     title = state.outcome.winner === 'draw' ? '此局言和，再论高下' : state.outcome.winner === state.human ? '你赢下了这一局' : '大模型赢下了这一局';
-    description = `${REASON_TEXT[state.outcome.reason]}。${state.match.winner ? `比赛结束，${state.match.winner === 'human' ? '你' : '大模型'}赢得本场比赛。` : '下一局重新配时；胜负局交换红黑，和棋同色重赛。'}`;
+    description = `${state.outcome.reason === 'resign' ? state.outcome.winner === state.human ? '大模型认输' : '你已认输' : REASON_TEXT[state.outcome.reason]}。${state.resignation ? `理由：${state.resignation.reason}。` : ''}${state.match.winner ? `比赛结束，${state.match.winner === 'human' ? '你' : '大模型'}赢得本场比赛。` : '下一局重新配时；胜负局交换红黑，和棋同色重赛。'}`;
   }
   if (reviewing) { title = `回看 · 第 ${view} 手`; description = '当前为历史局面，不能走子。实战棋钟仍在运行，点击「回到实战」继续。'; }
   text('status-badge', badge); text('status-title', title); text('status-description', description);
@@ -115,10 +131,11 @@ function renderStatus() {
   button('cancel').disabled = state.status !== 'thinking'; button('resign').disabled = !!state.outcome;
   button('undo').disabled = !!state.outcome || !state.match.settings.allowUndo || !state.position.moves.some(m => m.color === state.human);
   const note = [...state.notes].reverse().find(n => n.ply <= (view ?? state.position.moves.length));
-  text('reason-text', note?.reason || '等大模型落子后，这里会记录它公开的落子理由。');
-  text('reason-meta', note ? `第 ${note.ply} 手 · ${(note.elapsedMs / 1000).toFixed(1)} 秒 · ${note.model}` : '只记录公开落子理由，不展示私有思维链。');
+  const resignation = view === null ? state.resignation : undefined;
+  text('reason-text', resignation?.reason || note?.reason || '等大模型落子后，这里会记录它公开的落子理由。');
+  text('reason-meta', resignation ? `${resignation.color === state.human ? '玩家' : '大模型'}认输 · 第 ${resignation.afterPly} 手后${resignation.model ? ` · ${resignation.model}` : ''}` : note ? `第 ${note.ply} 手 · ${(note.elapsedMs / 1000).toFixed(1)} 秒 · ${note.model}` : '只记录公开落子理由，不展示私有思维链。');
   const attempt = view === null && state.status !== 'thinking' ? state.attempts?.at(-1) : undefined;
-  text('reason-timing', attempt && (!note || attempt.ply > note.ply) ? `最近未落子尝试：${timingSummary(attempt.timing)}` :
+  text('reason-timing', resignation ? resignation.timing ? timingSummary(resignation.timing) : '玩家主动认输。' : attempt && (!note || attempt.ply > note.ply) ? `最近未落子尝试：${timingSummary(attempt.timing)}` :
     note?.timing ? timingSummary(note.timing) : note ? '此棋谱未记录耗时分解。' : '落子后显示模型往返、工具与复查耗时。');
   const range = input('replay'); range.max = String(state.position.moves.length); range.value = String(view ?? state.position.moves.length);
   button('back').disabled = (view ?? state.position.moves.length) === 0; button('forward').disabled = view === null || view >= state.position.moves.length;

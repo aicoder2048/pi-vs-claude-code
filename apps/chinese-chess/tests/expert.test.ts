@@ -2,12 +2,38 @@ import { describe, expect, test } from 'bun:test';
 import { at, emptyPosition, legalCapturesTo, legalMoves, other, play, positionFromPieces, replay, same, type Color, type Kind, type MoveInput, type Piece } from '../src/business/engine';
 import { analyzeExpert, compareMoves, inspectSafety, needsRiskAcknowledgement, phaseOf, pieceValue, reviewMove } from '../src/business/expert';
 import { RECORDED_GAME } from './fixtures/recorded-game';
+import { CANNON_TRAP_GAME } from './fixtures/cannon-trap-game';
 const full = { maxMs: 10000, maxNodes: 50000 };
 const m = (x: number, y: number, a: number, b: number): MoveInput => ({ from: { x, y }, to: { x: a, y: b } });
 const piece = (kind: Kind, color: Color, x: number, y: number): Piece => ({ id: `${color}-${kind}-${x}-${y}`, kind, color, x, y });
 const board = (extra: Piece[], next: Color = 1) => positionFromPieces([piece('king', 1, 4, 9), piece('king', 2, 4, 0), piece('pawn', 1, 4, 5), ...extra], next);
 
 describe('real game blunder regressions (portable coordinates, no user profile needed)', () => {
+  test('ply 8: quiet cannon redeployment traps the OTHER rook before the capture exists', () => {
+    const p = replay(CANNON_TRAP_GAME.slice(0, 7)), before = structuredClone(p);
+    const r = reviewMove(p, CANNON_TRAP_GAME[7], full);
+    expect(r.risk).toBe('material-loss'); expect(r.estimatedNet).toBe(-450);
+    expect(r.bestReply).toEqual(CANNON_TRAP_GAME[8]);
+    expect(r.warnings.join('')).toContain('炮线陷阱'); expect(r.coverage.quietThreatsComplete).toBe(true);
+    let q = p; for (const move of r.variation) q = play(q, move);
+    expect(q.moves.at(-2)?.captured?.kind).toBe('rook'); expect(p).toEqual(before);
+    // Moving the right cannon opens a lateral rook escape; advancing the screen
+    // lets the rook itself move behind it. Do not outlaw every cannon alignment.
+    for (const safer of [m(7, 2, 7, 0), m(8, 3, 8, 4), m(1, 2, 1, 4)]) {
+      expect(needsRiskAcknowledgement(reviewMove(p, safer, full))).toBe(false);
+    }
+    const rotated = positionFromPieces(p.board.filter(Boolean).map(x => ({ ...x!, x: 8 - x!.x, y: 9 - x!.y, color: other(x!.color) })), 1);
+    expect(reviewMove(rotated, m(8, 9, 8, 8), full).estimatedNet).toBe(-450);
+    const limited = reviewMove(p, CANNON_TRAP_GAME[7], { maxNodes: 60, maxMs: 10000 });
+    expect(limited.coverage.quietThreatsComplete).toBe(false);
+    expect(limited.risk).toBe('uncertain'); expect(limited.warnings.join('')).toContain('未知');
+  });
+  test('ply 64: second rook donation remains a risk; the model may resign instead', () => {
+    const p = replay(CANNON_TRAP_GAME.slice(0, 63)), r = reviewMove(p, CANNON_TRAP_GAME[63], full);
+    expect(needsRiskAcknowledgement(r)).toBe(true); expect(r.estimatedNet).toBe(-900);
+    expect(play(play(p, r.move), CANNON_TRAP_GAME[64]).moves.at(-1)?.captured?.kind).toBe('rook');
+    expect(replay(CANNON_TRAP_GAME).winner).toBeNull(); // historical game ended on the clock, not on board
+  });
   test('original 71 plies replay to red checkmate', () => { expect(replay(RECORDED_GAME)).toMatchObject({ winner: 1, endReason: 'checkmate' }); });
   test('ply 42: rejects the story “attack their rook” when actually giving away our rook', () => {
     const p = replay(RECORDED_GAME.slice(0, 41)), r = reviewMove(p, RECORDED_GAME[41], full);

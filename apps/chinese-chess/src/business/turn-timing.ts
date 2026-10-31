@@ -76,7 +76,7 @@ export class TurnTimer {
     if (!this.finished) {
       const timing = this.snapshot();
       for (const span of timing.spans) if (span.status === 'running') {
-        span.status = accepted && span.kind === 'tool' && span.name === 'move_piece' ? 'ok' : 'interrupted';
+        span.status = accepted && span.kind === 'tool' && ['move_piece', 'resign_game'].includes(span.name) ? 'ok' : 'interrupted';
       }
       this.finished = timing;
     }

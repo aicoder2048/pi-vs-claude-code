@@ -79,7 +79,14 @@ export function normalizeRecord(raw: unknown): LearningRecord {
     if (![1, 2, 'draw'].includes(o.winner) || !reasons.includes(o.reason)) throw new Error('无效的终局结果');
     if (p.winner && (p.winner !== o.winner || p.endReason !== o.reason)) throw new Error('保存的终局结果与规则重放不一致');
     if (!p.winner && !['resign', 'main-time'].includes(o.reason)) throw new Error('棋盘未达到所声称的终局');
-    if (o.reason === 'resign' && o.winner !== other(r.human)) throw new Error('认输结果不一致');
+    if (o.reason === 'resign') {
+      // Legacy records only allowed human resignation. New records explicitly
+      // identify the resigning side; never infer it from model prose or winner.
+      const note = r.resignation, color = note?.color ?? r.human;
+      if ((color !== 1 && color !== 2) || o.winner !== other(color)) throw new Error('认输结果不一致');
+      if (note && (note.afterPly !== moves.length || typeof note.reason !== 'string' || !note.reason.trim() || note.reason.length > 600
+        || (color !== r.human && color !== p.next))) throw new Error('认输记录与当前棋局不一致');
+    }
     if (o.reason === 'main-time' && o.winner !== other(p.next)) throw new Error('超时结果不一致');
   }
   return { id: r.id, human: r.human, moves, outcome: o ? { winner: o.winner, reason: o.reason } : null,
@@ -118,7 +125,7 @@ function motifOf(p: Position, r: MoveReview): Motif {
   }
   return last.check ? 'checking-blunder' : last.captured ? 'poisoned-capture' : 'unsafe-destination';
 }
-const fullEnough = (r: MoveReview) => r.coverage.complete && r.coverage.exchangeComplete;
+const fullEnough = (r: MoveReview) => r.coverage.complete && r.coverage.exchangeComplete && r.coverage.quietThreatsComplete !== false;
 const reviewOptions = (o: ReviewOptions) => ({ maxMs: o.maxMsPerMove ?? 120, maxNodes: o.maxNodesPerMove ?? 10000 });
 function localEvidence(p: Position, r: MoveReview): TacticalCase['evidence'] | null {
   if (!r.bestReply || !fullEnough(r)) return null;

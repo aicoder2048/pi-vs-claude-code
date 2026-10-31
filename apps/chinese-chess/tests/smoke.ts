@@ -15,6 +15,8 @@ try {
   page.on('request', r => { if (r.resourceType() === 'media' && /^https?:/.test(r.url())) remoteMedia.push(r.url()); });
   await expect(page.locator('#model')).toContainText('fixture');
   await expect(page.locator('#pieces .piece')).toHaveCount(32);
+  await expect(page.locator('#last-move-overlay circle')).toHaveCount(0);
+  await expect(page.locator('#last-move-caption')).toContainText('青色光晕');
   await expect(page.locator('#match-format')).toHaveText('三局两胜');
   await expect(page.locator('#status-title')).toHaveText('楚河汉界，落子有声');
   await expect(page.locator('#machine-time')).toHaveText('30:00');
@@ -42,15 +44,42 @@ try {
   await expect(page.locator('#pieces .piece')).toHaveCount(31);
   await page.screenshot({ path: 'artifacts/capture.png' });
   await expect(page.locator('#red-captured')).toContainText('马');
+  const guideBoot = await page.evaluate(() => window.chess.bootstrap()); if (!guideBoot.ok) throw new Error(guideBoot.error);
+  const lastMove = guideBoot.value.state.position.moves.at(-1)!;
+  async function expectGuide(flipped = false) {
+    for (const [selector, point] of [['.last-move-origin', lastMove.from], ['.last-move-destination', lastMove.to]] as const) {
+      await expect(page.locator(selector)).toHaveAttribute('cx', String(50 + (flipped ? 8 - point.x : point.x) * 100));
+      await expect(page.locator(selector)).toHaveAttribute('cy', String(50 + (flipped ? 9 - point.y : point.y) * 100));
+    }
+    await expect(page.locator('.last-move-route')).toHaveAttribute('marker-end', 'url(#last-move-arrow)');
+    await expect(page.locator('#last-move-caption')).toContainText(`LLM · ${lastMove.notation}`);
+  }
+  await expectGuide();
+  // Return after the transient capture/shout effects have expired: guide remains.
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].blur());
+  await page.waitForTimeout(1600);
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
+  await expectGuide();
+  expect(await page.locator('#last-move-overlay').evaluate(n => getComputedStyle(n).pointerEvents)).toBe('none');
+  await page.screenshot({ path: 'artifacts/last-move-guide.png' });
   // Replay cannot mutate the live game. Rewinding restores the captured piece.
   await page.locator('#moves button').first().click(); await expect(page.locator('#status-badge')).toHaveText('棋谱回看');
   await expect(page.locator('#pieces .piece')).toHaveCount(32);
+  await expect(page.locator('#last-move-caption')).toContainText('回看此步 · 你 · 红兵 A6 → A5');
+  await expect(page.locator('.last-move-origin')).toHaveAttribute('cy', '650');
+  await expect(page.locator('.last-move-destination')).toHaveAttribute('cy', '550');
   await page.locator('#board').press('ArrowRight'); await page.locator('#board').press('Enter');
   await expect(page.locator('#record-count')).toHaveText('2 手');
   await page.locator('#live').click(); await expect(page.locator('#pieces .piece')).toHaveCount(31);
-  await page.locator('#flip').click(); await page.locator('#flip').click();
-  await page.locator('#animation').click(); await page.locator('#animation').click();
-  await page.locator('#layers-toggle').click(); await expect(page.locator('#layers')).toContainText('review_move'); await expect(page.locator('#layers')).toContainText('compare_moves'); await expect(page.locator('#layers')).toContainText('search_position'); await expect(page.locator('#layers')).toContainText('update_plan'); await page.locator('#layers-close').click();
+  await expectGuide();
+  await page.locator('#flip').click(); await expectGuide(true);
+  await page.screenshot({ path: 'artifacts/last-move-guide-flipped.png' });
+  await page.locator('#flip').click(); await expectGuide();
+  await page.locator('#animation').click(); await expectGuide(); await page.locator('#animation').click();
+  await page.locator('#hints').click(); await expectGuide(); await page.locator('#hints').click();
+  await page.emulateMedia({ reducedMotion: 'reduce' }); await expectGuide();
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.locator('#layers-toggle').click(); await expect(page.locator('#layers')).toContainText('review_move'); await expect(page.locator('#layers')).toContainText('compare_moves'); await expect(page.locator('#layers')).toContainText('search_position'); await expect(page.locator('#layers')).toContainText('update_plan'); await expect(page.locator('#layers')).toContainText('resign_game'); await page.locator('#layers-close').click();
   await page.locator('#expert-open').click(); await expect(page.locator('#expert-dialog')).toBeVisible();
   await expect(page.locator('#expert-report')).toContainText('炮架是动态资源');
   await expect(page.locator('#expert-report')).toContainText('最近一次机器提交的独立复查');
@@ -92,6 +121,8 @@ try {
     await page.screenshot({ path: `artifacts/layout-${size.width}x${size.height}.png` });
   }
   await page.locator('#undo').click(); await expect(page.locator('#record-count')).toHaveText('0 手'); await expect(page.locator('#pieces .piece')).toHaveCount(32);
+  await expect(page.locator('#last-move-overlay circle')).toHaveCount(0);
+  await expect(page.locator('#last-move-overlay path')).toHaveCount(0);
   // Cancel a live model fixture: preserve interrupted timing and autosave it,
   // then retry without accepting late events from the cancelled attempt.
   await page.getByRole('button', { name: '红兵 A6', exact: true }).click();
@@ -154,7 +185,7 @@ try {
   await expect(page.locator('#status-badge')).toHaveText('本局结束', { timeout: 8000 }); await page.keyboard.press('Escape');
   await expect(page.locator('#human-time')).toHaveText('00:00'); await expect(page.locator('#status-description')).toContainText('棋钟耗尽');
   await page.screenshot({ path: 'artifacts/timeout.png' });
-  // Human win through the real state bridge: confetti, chord (6 notes), no machine styling.
+  // Machine resignation through the real state bridge: reason, confetti and chord (6 notes).
   const boot = await page.evaluate(() => window.chess.bootstrap()); if (!boot.ok) throw new Error(boot.error);
   async function sendState(value: GameState): Promise<void> {
     await application.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].webContents.send('chess:state', value), value);
@@ -166,8 +197,12 @@ try {
   const notesBefore = await page.evaluate(() => (window as any).victoryNotes as number);
   const win: GameState = structuredClone(active);
   win.revision++; win.status = 'over'; win.match.humanWins = 1;
-  win.outcome = { gameId: win.id, number: 1, humanColor: win.human, winner: win.human, reason: 'checkmate' };
+  win.outcome = { gameId: win.id, number: 1, humanColor: win.human, winner: win.human, reason: 'resign' };
+  win.resignation = { color: win.human === 1 ? 2 : 1, afterPly: win.position.moves.length, reason: '已无可靠解围手段，主动认输。' };
   await sendState(win);
+  await expect(page.locator('#status-description')).toContainText('大模型认输');
+  await expect(page.locator('#reason-text')).toHaveText('已无可靠解围手段，主动认输。');
+  await expect(page.locator('#reason-meta')).toContainText('大模型认输');
   await expect(page.locator('#victory')).toBeVisible(); await expect(page.locator('#victory')).not.toHaveClass(/machine/);
   await expect(page.locator('#victory-message')).toHaveText('好棋，你赢了这一局！');
   await expect.poll(() => page.evaluate(() => (window as any).victoryNotes)).toBe(notesBefore + 6);

@@ -7,6 +7,7 @@ import { searchPosition, type SearchDriver, type SearchOptions, type SearchRepor
 import type { PlanUpdate } from '../src/business/plan';
 import type { Position } from '../src/business/engine';
 import { PASSIVE_GAME } from './fixtures/passive-game';
+import { CANNON_TRAP_GAME } from './fixtures/cannon-trap-game';
 const model = { provider: 'test', id: 'live', name: 'Live search fixture' };
 const red = { from: { x: 0, y: 6 }, to: { x: 0, y: 5 } }, black = { from: { x: 0, y: 3 }, to: { x: 0, y: 4 } };
 const draft: PlanUpdate = { action: 'revise', reason: '先疏通车路，必要时转入防守。', objective: '协调车炮并解除牵制', problem: '闲置子力尚未参加战斗',
@@ -79,6 +80,20 @@ describe('authoritative asynchronous search and commits', () => {
     await h.port.commit(black, '保留单步审查，不把搜索失败当安全。');
     const review = h.service.record().notes[0].review!;
     expect(review.searchError).toBe('worker unavailable'); expect(review.warnings.join('')).toContain('未知'); h.service.dispose();
+  });
+  test('quiet cannon trap is rejected at ply 8 even with no model analysis or useful search', async () => {
+    const driver = new Driver(), service = new GameService(driver, model, { now: () => 0,
+      search: { async search(p) { return unknown(p); } } });
+    for (const move of CANNON_TRAP_GAME.slice(0, 7)) {
+      const s = service.snapshot();
+      if (s.position.next === s.human) service.humanMove(move, s.revision);
+      else await driver.turns.at(-1)!.commit(move, '重放炮线陷阱前的开局。');
+    }
+    const port = driver.turns.at(-1)!, before = service.snapshot();
+    await expect(port.commit(CANNON_TRAP_GAME[7], '只顾左车出动。')).rejects.toThrow('炮线陷阱');
+    expect(service.snapshot().position).toEqual(before.position); expect(service.record().notes).toEqual(before.notes);
+    await port.commit({ from: { x: 7, y: 2 }, to: { x: 7, y: 0 } }, '先撤炮，给右车留出横向逃路。');
+    expect(service.record().moves).toHaveLength(8); service.dispose();
   });
   test('actual bottom-cannon combination is caught even if the model skips all analysis tools', async () => {
     let live = false; const driver = new Driver();

@@ -29,7 +29,7 @@ export interface MoveReview {
   bestReply: MoveInput | null; line: string[]; variation: MoveInput[];
   terminal: { winner: Color | 'draw'; reason: string } | null;
   losingReply: { move: MoveInput; reason: string } | null;
-  coverage: { checkedReplies: number; totalReplies: number; complete: boolean; exchangeComplete: boolean; nodes: number };
+  coverage: { checkedReplies: number; totalReplies: number; complete: boolean; exchangeComplete: boolean; nodes: number; quietThreatsComplete?: boolean };
   warnings: string[];
   search?: SearchReport;
   searchError?: string;
@@ -111,6 +111,32 @@ function exchange(p: Position, square: Point, phase: Phase, depth: number, budge
   // abstraction may be impossible; callers explicitly label it a SEE estimate.
   return { gain, line, moves, complete };
 }
+// Specialized two-turn trap check: after a quiet cannon redeployment, try EVERY
+// legal defence of an attacked rook. A single escape/capture/check refutes the
+// trap. Same-square compensation remains a bounded estimate, not a mate proof.
+function cannonTrap(p: Position, cannon: Piece, rook: Piece, phase: Phase, budget: Budget, options: ExpertOptions):
+  { loss: number; moves: MoveInput[]; line: string[] } | null | 'unknown' {
+  const side = p.next, baseline = material(p, side, phase) - material(p, other(side), phase);
+  let best = { loss: Infinity, moves: [] as MoveInput[], line: [] as string[] };
+  for (const defence of legalMoves(p)) {
+    if (!budget.take()) return 'unknown';
+    const q = play(p, defence);
+    if (q.winner) return null; // terminal defences need a different proof
+    const target = q.board.find(x => x?.id === rook.id), attacker = q.board.find(x => x?.id === cannon.id);
+    if (!target || !attacker) return null;
+    const capture = legalCapturesTo(q, target).find(m => same(m.from, attacker));
+    if (!capture) return null;
+    const r = play(q, capture);
+    if (r.winner) return null;
+    const compensation = exchange(r, capture.to, phase, Math.max(0, Math.min(6, options.exchangeDepth ?? 6)), budget);
+    if (!compensation.complete) return 'unknown';
+    const loss = baseline - (material(r, side, phase) - material(r, other(side), phase)) - compensation.gain;
+    if (loss < 250) return null;
+    if (loss < best.loss) best = { loss, moves: [plainMove(defence), plainMove(capture), ...compensation.moves],
+      line: [q.moves.at(-1)!.notation, r.moves.at(-1)!.notation, ...compensation.line] };
+  }
+  return Number.isFinite(best.loss) ? best : null;
+}
 function roughPriority(p: Position, m: MoveInput): number {
   const target = at(p.board, m.to), piece = at(p.board, m.from)!;
   return (target ? VALUES[target.kind] : 0) * 10 + (piece.kind === 'horse' || piece.kind === 'rook' ? 20 : 0)
@@ -165,17 +191,39 @@ function review(p: Position, move: MoveInput, budget: Budget, options: ExpertOpt
     }
   }
   out.coverage.complete = out.coverage.checkedReplies === replies.length;
+  out.coverage.quietThreatsComplete = out.coverage.complete;
+  // Direct-capture review alone misses “redeploy cannon, then take trapped rook”.
+  // Check these quiet threats within the SAME budget; truncation stays unknown.
+  if (!out.losingReply) for (const { move: reply, capture } of replies) {
+    if (capture || at(after.board, reply.from)?.kind !== 'cannon') continue;
+    if (!budget.take()) { out.coverage.quietThreatsComplete = false; break; }
+    const q = play(after, reply);
+    if (q.winner) continue;
+    const cannon = at(q.board, reply.to)!;
+    const targets = q.board.filter((x): x is Piece => !!x && x.color === side && x.kind === 'rook'
+      && controlsSquare(q.board, cannon, x));
+    for (const rook of targets) {
+      const trap = cannonTrap(q, cannon, rook, phase, budget, options);
+      if (trap === 'unknown') { out.coverage.quietThreatsComplete = false; break; }
+      if (trap && trap.loss > worstLoss) {
+        worstLoss = trap.loss; out.bestReply = plainMove(reply);
+        out.line = [notation, q.moves.at(-1)!.notation, ...trap.line];
+        out.variation = [plainMove(move), plainMove(reply), ...trap.moves];
+        out.warnings.push(`炮线陷阱：${q.moves.at(-1)!.notation} 后，已枚举全部合法防守；同格交换补偿后仍估计至少亏 ${trap.loss} 分。异地弃子补偿未穷尽。`);
+      }
+    }
+  }
   out.coverage.nodes = budget.nodes - startedNodes;
   out.estimatedNet = gain - worstLoss;
   if (out.losingReply) {
     out.risk = 'loss'; out.score = -1000000;
     out.warnings.push(`已验证：对手可用 ${out.line[1]} 使我方${out.losingReply.reason === 'checkmate' ? '被将死' : out.losingReply.reason === 'stalemate' ? '困毙' : '规则判负'}。`);
   } else {
-    out.risk = out.estimatedNet <= -250 ? 'material-loss' : !out.coverage.complete || !out.coverage.exchangeComplete ? 'uncertain' : out.estimatedNet < 0 ? 'exchange-risk' : 'no-direct-loss-found';
-    out.score = out.estimatedNet * 10 + positionDelta - (!out.coverage.complete || !out.coverage.exchangeComplete ? 3000 : 0);
+    out.risk = out.estimatedNet <= -250 ? 'material-loss' : !out.coverage.complete || !out.coverage.exchangeComplete || !out.coverage.quietThreatsComplete ? 'uncertain' : out.estimatedNet < 0 ? 'exchange-risk' : 'no-direct-loss-found';
+    out.score = out.estimatedNet * 10 + positionDelta - (!out.coverage.complete || !out.coverage.exchangeComplete || !out.coverage.quietThreatsComplete ? 3000 : 0);
     if (out.estimatedNet < 0) out.warnings.push(`同格交换估计净亏 ${-out.estimatedNet} 分（兵约100）；对方反击：${out.line[1] ?? '尚未覆盖'}。不排除其他位置的弃子补偿，须试算。`);
   }
-  if (!out.coverage.complete || !out.coverage.exchangeComplete) out.warnings.push('预算或交换深度达到上限，未算完的部分是未知，不能视为安全。');
+  if (!out.coverage.complete || !out.coverage.exchangeComplete || !out.coverage.quietThreatsComplete) out.warnings.push('预算或交换深度达到上限，未算完的部分是未知，不能视为安全。');
   if (after.moves.at(-1)!.check && !after.winner) out.warnings.push('将军只是先手，不等于赚子或成杀；必须检查对方应将。');
   return out;
 }
@@ -261,7 +309,7 @@ export function analyzeExpert(p: Position, options: ExpertOptions = {}): Analysi
       ...(ownPosition.repeatedMoves.length ? [{ id: 'tempo-waste', title: '无收益往返需要重新制定计划', evidence: ownPosition.repeatedMoves,
         advice: '复核往返必要性并重新制定计划。' }] : [])], candidates,
     coverage: { reviewedMoves: candidates.length, totalMoves: all.length, nodes: budget.nodes, budgetExhausted: budget.exhausted },
-    limitations: ['反击检查覆盖候选后的对方一手；未覆盖候选和预算截断不代表安全。', '同格交换最多6次后续吃子，允许放弃交换；不完整搜索异地战术、强制应将及长期弃子补偿。', '动态子力、活动性与专家原则均为启发式，不是胜率；战术计算不含完整开残局库或外部引擎，来源定式与案例另行按需注入。'] };
+    limitations: ['反击检查覆盖候选后的对方一手，并有界检查调炮困车后的全部合法防守；未覆盖候选和预算截断不代表安全。', '同格交换最多6次后续吃子，允许放弃交换；不完整搜索异地战术、强制应将及长期弃子补偿。', '动态子力、活动性与专家原则均为启发式，不是胜率；战术计算不含完整开残局库或外部引擎，来源定式与案例另行按需注入。'] };
   return { ...base, redScore: red, blackScore: black, expert,
     candidates: candidates.slice(0, 8).map(r => ({ ...r.move, score: r.score, label: `${r.notation} · ${r.risk} · 交换估计 ${r.estimatedNet}` })),
     summary: `${base.summary} 专家阶段=${phase}；已审查 ${candidates.length}/${all.length} 个候选，当前方子力差 ${expert.material.balanceForSideToMove}。` };
