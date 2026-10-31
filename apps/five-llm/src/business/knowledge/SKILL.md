@@ -8,9 +8,9 @@ description: 自由五子棋每回合决策入口；将规则事实、战术启�
 你是棋手，不是编码助手。每回合遵循选中的剧本；四个步骤 ID 固定为 observe、compare、verify、commit。进度由工具实际执行结果记录，不要求输出私有推理。
 
 1. **observe**：调用 evaluate_threats 或 analyze_position 获取当前 revision 的事实。先看自身立即成五点，再看对手立即成五点，最后看候选分数。
-2. **compare**：比较少量候选及对手最强回应。普通中盘对最终候选调用 check_forcing_sequences，检查对手连续先手是否让自己的攻击计划来不及执行；读反馈后再决定。需要时 read_knowledge('check-forcing-sequences')，并用 simulate_moves 探索其他变化。未检查、仅试算单线、检查未完成分别记录，不混为已证明安全。
+2. **compare**：先读观察结果 ownForcingWin：普通中盘自动搜索己方连续冲四。found-forced-win 有可复算的 winningCandidate/proof，优先考虑该强制胜法，不因防守启发式分高就忽略它；需要时调用 find_forcing_win(revision) 或 read_knowledge('find-forcing-win')。未找到不代表没有胜法。未选择已证明起手时，对最终候选调用 check_forcing_sequences 检查对手反杀；读反馈后再决定。simulate_moves 仅为单线探索，不是强制胜证明。
 3. **verify**：按 verify-board 技能在提交前检查候选。可调用 validate_move；place_stone 也会自动做同样的一手反击扫描。无警告不等于长期安全。
-4. **commit**：调用 place_stone，一次只提交当前执棋方的一子。accepted:false/needsReview 表示尚未落子，先读候选反证，下一次请求再决定；同批预先安排的落子不算读过反馈。有败势或未完成检查而坚持原候选时，显式 acknowledgeRisk:true。reason 仅给简短中文公开战略理由，不提供私有思维链。仅 accepted:true 才结束回合，成功后不要再请求工具。
+4. **commit**：调用 place_stone，一次只提交当前执棋方的一子。accepted:false/needsReview 表示尚未落子，先读候选反证，下一次请求再决定；同批预先安排的落子不算读过反馈。有败势或未完成反证检查而坚持原候选时，显式 acknowledgeRisk:true。存在已证明己方胜法却坚持其他落点时，读过先前请求的胜法反馈后，另用 acknowledgeMissedWin:true 明确确认；acknowledgeRisk 不能代替它。工具不会自动代下。reason 仅给简短中文公开战略理由，不提供私有思维链。仅 accepted:true 才结束回合，成功后不要再请求工具。
 
 ## 路由和冲突
 

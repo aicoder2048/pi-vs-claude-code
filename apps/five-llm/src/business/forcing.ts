@@ -1,4 +1,4 @@
-// Bounded continuous-four refutation, NOT a move selector or a general solver.
+// Bounded continuous-four proofs for either side, NOT an automatic player or a general solver.
 // Five-cell windows cover every freestyle five (including broken fours/overlines).
 import { DIRECTIONS, SIZE, coordinate, index, other, play, type Color, type Point, type Position } from './rules';
 
@@ -13,14 +13,25 @@ export interface ForcingProof {
 export interface ForcingCheck {
   candidate: string;
   status: 'found-forced-loss' | 'not-found-within-budget' | 'incomplete';
-  reason: 'continuous-four' | 'candidate-wins' | 'candidate-draw' | 'depth-exhausted' | 'node-budget' | 'time-budget' | 'aborted' | 'clock-budget';
+  reason: 'continuous-four' | 'candidate-wins' | 'candidate-draw' | 'terminal-position' | 'depth-exhausted' | 'node-budget' | 'time-budget' | 'aborted' | 'clock-budget';
   scope: 'opponent-continuous-four-only';
   budget: ForcingBudget;
   nodes: number;
   elapsedMs: number;
   proof?: ForcingProof;
 }
+export interface OwnForcingWin {
+  status: 'found-forced-win' | 'not-found-within-budget' | 'incomplete';
+  reason: ForcingCheck['reason'];
+  scope: 'own-continuous-four-only';
+  budget: ForcingBudget;
+  nodes: number;
+  elapsedMs: number;
+  winningCandidate?: string;
+  proof?: ForcingProof;
+}
 export interface ForcingOptions extends Partial<ForcingBudget> { signal?: AbortSignal; now?: () => number }
+type SearchResult = Omit<OwnForcingWin, 'scope' | 'winningCandidate'>;
 const windows: number[][] = [], through = Array.from({ length: SIZE * SIZE }, () => [] as number[]);
 for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) for (const [dx, dy] of DIRECTIONS) {
   if (x + dx * 4 < 0 || x + dx * 4 >= SIZE || y + dy * 4 < 0 || y + dy * 4 >= SIZE) continue;
@@ -32,6 +43,21 @@ const point = (p: number): Point => ({ x: p % SIZE, y: Math.floor(p / SIZE) });
 
 export async function checkForcingSequences(position: Position, candidate: Point, options: ForcingOptions = {}): Promise<ForcingCheck> {
   const after = play(position, candidate); // authoritative legality; never mutate the caller
+  const search = await searchContinuousFours(after, options);
+  return { ...search, candidate: coordinate(candidate), scope: 'opponent-continuous-four-only',
+    status: search.status === 'found-forced-win' ? 'found-forced-loss' : search.status,
+    reason: after.winner && search.reason === 'terminal-position' ? after.winner === 'draw' ? 'candidate-draw' : 'candidate-wins' : search.reason };
+}
+
+export async function findOwnForcingWin(position: Position, options: ForcingOptions = {}): Promise<OwnForcingWin> {
+  const search = await searchContinuousFours(position, options);
+  return { ...search, scope: 'own-continuous-four-only',
+    ...(search.proof ? { winningCandidate: coordinate(search.proof.line[0]) } : {}) };
+}
+
+// Search all forcing starts, not only the heuristic top-N. The proof accounts for
+// every defender reply through immediate wins, unique blocks and double threats.
+async function searchContinuousFours(position: Position, options: ForcingOptions): Promise<SearchResult> {
   const budget: ForcingBudget = {
     maxAttackMoves: options.maxAttackMoves ?? DEFAULT_FORCING_BUDGET.maxAttackMoves,
     maxNodes: options.maxNodes ?? DEFAULT_FORCING_BUDGET.maxNodes,
@@ -42,14 +68,14 @@ export async function checkForcingSequences(position: Position, candidate: Point
   }
   const now = options.now ?? (() => performance.now()), started = now();
   let nodes = 0, nextYield = 32, stop: ForcingCheck['reason'] | undefined;
-  const finish = (status: ForcingCheck['status'], reason: ForcingCheck['reason'], proof?: ForcingProof): ForcingCheck => ({
-    candidate: coordinate(candidate), status, reason, scope: 'opponent-continuous-four-only', budget, nodes,
+  const finish = (status: SearchResult['status'], reason: ForcingCheck['reason'], proof?: ForcingProof): SearchResult => ({
+    status, reason, budget, nodes,
     elapsedMs: Math.max(0, now() - started), ...(proof ? { proof } : {}),
   });
   if (options.signal?.aborted) return finish('incomplete', 'aborted');
-  if (after.winner) return finish('not-found-within-budget', after.winner === 'draw' ? 'candidate-draw' : 'candidate-wins');
+  if (position.winner) return finish('not-found-within-budget', 'terminal-position');
 
-  const board = after.board.slice(), counts = [new Uint8Array(windows.length), new Uint8Array(windows.length), new Uint8Array(windows.length)];
+  const board = position.board.slice(), counts = [new Uint8Array(windows.length), new Uint8Array(windows.length), new Uint8Array(windows.length)];
   for (let w = 0; w < windows.length; w++) for (const p of windows[w]) counts[board[p]][w]++;
   const set = (p: number, color: 0 | Color) => {
     const previous = board[p]; board[p] = color;
@@ -69,7 +95,7 @@ export async function checkForcingSequences(position: Position, candidate: Point
     else if (now() - started >= budget.maxMs) stop = 'time-budget';
     return !stop;
   };
-  const attacker = after.next, defender = other(attacker);
+  const attacker = position.next, defender = other(attacker);
   const search = async (depth: number): Promise<ForcingProof | undefined> => {
     if (!withinBudget()) return;
     nodes++;
@@ -119,5 +145,5 @@ export async function checkForcingSequences(position: Position, candidate: Point
   if (stop) return finish('incomplete', stop);
   // A proof found after the deadline must not be advertised as a completed check.
   if (options.signal?.aborted || now() - started >= budget.maxMs) return finish('incomplete', options.signal?.aborted ? 'aborted' : 'time-budget');
-  return proof ? finish('found-forced-loss', 'continuous-four', proof) : finish('not-found-within-budget', 'depth-exhausted');
+  return proof ? finish('found-forced-win', 'continuous-four', proof) : finish('not-found-within-budget', 'depth-exhausted');
 }

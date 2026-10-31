@@ -9,8 +9,14 @@ import type { DecisionTrace } from '../src/business/decision';
 import { analyze, play, emptyPosition } from '../src/business/engine';
 import { GameService, type TurnPort } from '../src/business/game-service';
 import type { GameState } from '../src/shared/types';
-import { humanWinCase, humanWinPosition, point } from './fixtures/positions';
+import { humanWinCase, humanWinPosition, missedWhiteWinCase, missedWhiteWinPosition, point } from './fixtures/positions';
 import { DEFAULT_SETTINGS } from '../src/business/clock';
+
+function winningState(): GameState {
+  const state = initialState(), position = missedWhiteWinPosition();
+  return { ...state, position, revision: 13, analysis: analyze(position),
+    clock: { ...state.clock, running: 2, updatedAt: Date.now() } };
+}
 
 function midgameState(): GameState {
   const state = initialState(), position = humanWinPosition();
@@ -126,7 +132,7 @@ describe('real Pi harness + inline gomoku extension, local SSE transport', () =>
       expect(requests).toHaveLength(2);
       const record = service.record();
       expect(record.moves[1]).toMatchObject({ x: 0, y: 0, color: 2 }); // no strategy veto for low-score moves
-      expect(record.notes[0].decision).toMatchObject({ version: 'gomoku-knowledge/v2', revision: 1, playbook: 'opening',
+      expect(record.notes[0].decision).toMatchObject({ version: 'gomoku-knowledge/v3', revision: 1, playbook: 'opening',
         validation: { legal: true, coordinate: 'A15', scope: 'one-ply-only' } });
       expect(record.notes[0].decision?.steps).toHaveLength(4);
       expect(record.notes[0].decision?.steps[1].status).toBe('skipped');
@@ -301,6 +307,147 @@ describe('real Pi harness + inline gomoku extension, local SSE transport', () =>
         } else {
           expect(record.moves).toHaveLength(21); expect(record.outcome).toMatchObject({ winner: 1, reason: 'main-time' });
           expect(record.notes).toHaveLength(10); // rejected attempt cannot fabricate a committed decision
+        }
+      } finally { service.dispose(); }
+    }
+  }, 15000);
+  test('G10: either observe tool automatically discovers a win and rejects H6 BEFORE committing', async () => {
+    for (const observe of ['evaluate_threats', 'analyze_position']) {
+      const { driver, requests } = await fixture((_request, n) => {
+        if (n === 1) return tool(observe, {}, n);
+        if (n === 2) return tool('place_stone', { ...point('H6'), revision: 13, reason: '按防守分选择', acknowledgeRisk: true }, n);
+        return tool('place_stone', { ...point('G10'), revision: 13, reason: '先冲四迫G8，再J7形成活四。' }, n);
+      });
+      const state = winningState(), commits: string[] = [];
+      let decision: DecisionTrace | undefined;
+      await driver.run({ state, signal: new AbortController().signal, log() {}, commit(p, _r, trace) {
+        expect(requests).toHaveLength(3); commits.push(`${p.x},${p.y}`); decision = trace;
+      } });
+      expect(commits).toEqual(['6,5']); expect(state.position.moves).toHaveLength(13);
+      expect(JSON.stringify(requests[1].messages)).toContain('found-forced-win');
+      expect(JSON.stringify(requests[2].messages)).toContain('missed-forced-win');
+      const review = decision!.candidateReview!;
+      expect(review).toMatchObject({ candidate: 'G10', coverage: 'own-forcing-proof', ownWinReview: 'reviewed', declinedProvenWin: false, forcingChecks: [] });
+      expect(review.ownWinChecks).toHaveLength(1);
+      expect(review.ownWinChecks![0]).toMatchObject({ source: 'observe', revision: 13, reviewedBeforeCommit: true,
+        result: { status: 'found-forced-win', winningCandidate: 'G10', scope: 'own-continuous-four-only' } });
+      expect(decision!.steps[1].evidence).toContain('G10 → G8');
+    }
+  }, 15000);
+  test('explicit own-win discovery returns proof but does not replace the observe gate', async () => {
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('find_forcing_win', { revision: 13 }, n);
+      if (n === 3) return tool('evaluate_threats', {}, n);
+      return tool('place_stone', { ...point('G10'), revision: 13, reason: '按己方强杀证明提交' }, n);
+    });
+    let commits = 0, decision: DecisionTrace | undefined;
+    await driver.run({ state: winningState(), signal: new AbortController().signal, log() {}, commit(_p, _r, trace) {
+      expect(requests).toHaveLength(4); commits++; decision = trace;
+    } });
+    expect(commits).toBe(1); expect(JSON.stringify(requests[2].messages)).toContain('获取当前局面证据');
+    expect(decision!.candidateReview!.ownWinChecks).toHaveLength(1);
+    expect(decision!.candidateReview!.ownWinChecks![0]).toMatchObject({ source: 'explicit-tool', result: { status: 'found-forced-win' } });
+  }, 15000);
+  test('own proof and a preplanned commit in the SAME batch cannot pretend the proof was read', async () => {
+    for (const candidate of ['G10', 'H6']) {
+      const { driver, requests } = await fixture((_request, n) => n === 1 ? tool('evaluate_threats', {}, n, [
+        { name: 'place_stone', args: { ...point(candidate), revision: 13, reason: '同批预先安排', acknowledgeMissedWin: true, acknowledgeRisk: true } },
+      ]) : tool('place_stone', { ...point('G10'), revision: 13, reason: '读到强杀证据后选择G10' }, n));
+      let commits = 0;
+      await driver.run({ state: winningState(), signal: new AbortController().signal, log() {}, commit(p) {
+        expect(requests).toHaveLength(2); expect(p).toMatchObject(point('G10')); commits++;
+      } });
+      expect(commits).toBe(1); expect(JSON.stringify(requests[1].messages)).toContain('needsReview');
+    }
+  }, 15000);
+  test('declining a proven own win requires its separate acknowledgement and the chosen candidate risk review', async () => {
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('evaluate_threats', {}, n);
+      return tool('place_stone', { ...point('H6'), revision: 13, reason: '明确放弃已知胜法，保留合法选择。',
+        acknowledgeRisk: true, ...(n >= 3 ? { acknowledgeMissedWin: true } : {}) }, n);
+    });
+    let decision: DecisionTrace | undefined, commits = 0;
+    await driver.run({ state: winningState(), signal: new AbortController().signal, log() {}, commit(p, _r, trace) {
+      expect(requests).toHaveLength(4); expect(p).toMatchObject(point('H6')); commits++; decision = trace;
+    } });
+    expect(commits).toBe(1);
+    expect(JSON.stringify(requests[2].messages)).toContain('missed-forced-win');
+    expect(decision!.candidateReview).toMatchObject({ candidate: 'H6', declinedProvenWin: true, ownWinReview: 'reviewed', coverage: 'bounded-refutation' });
+    expect(decision!.candidateReview!.forcingChecks).toHaveLength(1);
+  }, 15000);
+  test('shallow/incomplete explicit own searches cannot erase a previously proven win', async () => {
+    for (const budget of [{ maxAttackMoves: 1 }, { maxNodes: 0 }]) {
+      const { driver, requests } = await fixture((_request, n) => {
+        if (n === 1) return tool('evaluate_threats', {}, n);
+        if (n === 2) return tool('find_forcing_win', { revision: 13, ...budget }, n);
+        return tool('place_stone', { ...point(n === 3 ? 'H6' : 'G10'), revision: 13, reason: '根据保留的强杀证据重新选择' }, n);
+      });
+      let decision: DecisionTrace | undefined;
+      await driver.run({ state: winningState(), signal: new AbortController().signal, log() {}, commit(_p, _r, trace) { decision = trace; } });
+      expect(requests).toHaveLength(4); expect(JSON.stringify(requests[3].messages)).toContain('missed-forced-win');
+      expect(decision!.candidateReview!.ownWinChecks!.map(c => c.result.status)).toEqual([
+        'found-forced-win', 'maxNodes' in budget ? 'incomplete' : 'not-found-within-budget',
+      ]);
+      expect(decision!.candidateReview!.coverage).toBe('own-forcing-proof');
+    }
+  }, 15000);
+  test('stale own searches create no evidence; a zero-budget call cannot suppress automatic discovery', async () => {
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('find_forcing_win', { revision: 99 }, n);
+      if (n === 2) return tool('find_forcing_win', { revision: 13, maxNodes: 0 }, n);
+      if (n === 3) return tool('evaluate_threats', {}, n);
+      return tool('place_stone', { ...point('G10'), revision: 13, reason: '读取自动强杀证明后提交' }, n);
+    });
+    let decision: DecisionTrace | undefined;
+    await driver.run({ state: winningState(), signal: new AbortController().signal, log() {}, commit(_p, _r, trace) { decision = trace; } });
+    expect(requests).toHaveLength(4);
+    expect(decision!.candidateReview!.ownWinChecks!.map(c => [c.source, c.result.status])).toEqual([
+      ['explicit-tool', 'incomplete'], ['observe', 'found-forced-win'],
+    ]);
+  }, 15000);
+  test('urgent clock skips own-win gates; explicit search honestly returns incomplete/clock-budget', async () => {
+    const state = winningState(); state.clock.players[2].mainMs = 0; state.clock.players[2].periodMs = 14_000;
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('evaluate_threats', {}, n);
+      if (n === 2) return tool('find_forcing_win', { revision: 13 }, n);
+      return tool('place_stone', { ...point('H6'), revision: 13, reason: '剩余时间紧迫，不等待额外审查。' }, n);
+    });
+    let decision: DecisionTrace | undefined;
+    await driver.run({ state, signal: new AbortController().signal, log() {}, commit(_p, _r, trace) { decision = trace; } });
+    expect(requests).toHaveLength(3);
+    const observeResult = requests[1].messages.find((m: any) => m.role === 'tool');
+    expect(JSON.parse(observeResult.content).ownForcingWin).toBeUndefined();
+    expect(decision!.candidateReview!.ownWinChecks![0].result).toMatchObject({ status: 'incomplete', reason: 'clock-budget', nodes: 0 });
+    expect(decision!.candidateReview!.coverage).not.toBe('own-forcing-proof');
+  }, 15000);
+  test('G10 proof persists through real GameService; late proof-backed commits still lose on time', async () => {
+    for (const spent of [3000, 60_001]) {
+      let now = Date.now();
+      const { driver, requests } = await fixture((_request, n) => {
+        if (n === 1) return tool('evaluate_threats', {}, n);
+        now += spent;
+        return tool('place_stone', { ...point('G10'), revision: 13, reason: '按连续冲四证明进攻，不再漏胜。' }, n);
+      });
+      const service = new GameService({ async run(port) {
+        const ply = port.state.position.moves.length;
+        if (ply < 13) port.commit(point(missedWhiteWinCase.moves[ply]), '准备回归局面');
+        else await driver.run(port);
+      } }, { provider: 'fixture', id: 'gomoku', name: 'SSE Fixture' }, {
+        now: () => now, settings: { ...DEFAULT_SETTINGS, timeControl: 'absolute', mainTimeMs: 60_000 },
+      });
+      try {
+        for (let i = 0; i < 13; i += 2) service.humanMove(point(missedWhiteWinCase.moves[i]), service.snapshot().revision);
+        for (let i = 0; i < 200 && service.snapshot().status === 'thinking'; i++) await Bun.sleep(5);
+        const record = service.record(); expect(requests).toHaveLength(2);
+        if (spent < 60_000) {
+          expect(record.moves).toHaveLength(14); expect(record.clock.players[2].mainMs).toBe(57_000);
+          expect(record.notes.at(-1)!.decision!.candidateReview).toMatchObject({ candidate: 'G10', coverage: 'own-forcing-proof', ownWinReview: 'reviewed' });
+          const proofLength = record.notes.at(-1)!.decision!.candidateReview!.ownWinChecks![0].result.proof!.line.length;
+          record.notes.at(-1)!.decision!.candidateReview!.ownWinChecks![0].result.proof!.line.length = 0;
+          expect(service.record().notes.at(-1)!.decision!.candidateReview!.ownWinChecks![0].result.proof!.line).toHaveLength(proofLength);
+        } else {
+          expect(record.moves).toHaveLength(13); expect(record.outcome).toMatchObject({ winner: 1, reason: 'main-time' });
+          expect(record.notes).toHaveLength(6);
         }
       } finally { service.dispose(); }
     }

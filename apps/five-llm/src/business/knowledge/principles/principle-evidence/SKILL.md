@@ -11,4 +11,6 @@ description: 候选分数、棋形和推演与规则事实冲突时，优先可�
 
 一条有利变化只证明该分支成立，不证明对手无法通过先手反击破坏计划。check_forcing_sequences 的 found-forced-loss 有明确强制线路；not-found-within-budget 只表示指定深度内未找到连续冲四；incomplete 表示节点、时间或取消导致检查未完成。后两者都不是安全证明，也不涵盖连续活三等其他杀法。
 
+find_forcing_win 的 found-forced-win 证明当前行棋方的一条连续冲四胜法，会检查对手能否抢先成五，并覆盖唯一强制应手和末端无法兼顾的成五点。它不同于 check_forcing_sequences 的对手反证；两者的 not-found-within-budget 都不能用于断言没有胜法。已证明胜法优先于启发式防守分，但不代表唯一胜着或全局最优。
+
 比较证据必须绑定 revision 和候选：探索过其他落点不能冒充验证最终候选；返回到上下文也不证明模型在内部理解了它。记录分支与前后请求边界，不索取私有思维链。

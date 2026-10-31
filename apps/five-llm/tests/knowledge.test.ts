@@ -53,5 +53,12 @@ describe('host-owned Gomoku knowledge pack', () => {
     }
     expect(readKnowledge('check-forcing-sequences')).toContain('acknowledgeRisk:true');
     expect(readKnowledge('check-forcing-sequences')).toContain('incomplete');
+    for (const id of ['midgame', 'gomoku-coach', 'find-forcing-win', 'evaluate-threats']) {
+      expect(readKnowledge(id)).toContain('find_forcing_win');
+      expect(readKnowledge(id)).toContain('ownForcingWin');
+    }
+    expect(readKnowledge('find-forcing-win')).toContain('acknowledgeMissedWin:true');
+    expect(readKnowledge('find-forcing-win')).toContain('未找到不代表没有胜法');
+    expect(readKnowledge('gomoku-coach')).toContain('acknowledgeRisk 不能代替它');
   });
 });

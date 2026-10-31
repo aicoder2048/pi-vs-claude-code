@@ -2,13 +2,13 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool, isToolCallEventType, type ExtensionFactory } from '@earendil-works/pi-coding-agent';
 import { analyze, boardText, coordinate, play, replay } from '../business/engine';
 import { KNOWLEDGE_ITEMS, KNOWLEDGE_VERSION, positionSignals, turnGuidance, validateCandidate,
-  type DecisionTrace, type KnowledgeId, type PlaybookId, type ForcingEvidence, type SimulationEvidence } from '../business/decision';
-import { checkForcingSequences, DEFAULT_FORCING_BUDGET, type ForcingBudget } from '../business/forcing';
+  type DecisionTrace, type KnowledgeId, type PlaybookId, type ForcingEvidence, type OwnWinEvidence, type SimulationEvidence } from '../business/decision';
+import { checkForcingSequences, findOwnForcingWin, DEFAULT_FORCING_BUDGET, type ForcingBudget } from '../business/forcing';
 import type { Point } from '../business/rules';
 import { readKnowledge } from '../agent/knowledge-loader';
 import type { TurnPort } from '../business/game-service';
 
-export const GAME_TOOLS = ['analyze_position', 'evaluate_threats', 'validate_move', 'read_knowledge', 'simulate_moves', 'check_forcing_sequences', 'place_stone'];
+export const GAME_TOOLS = ['analyze_position', 'evaluate_threats', 'validate_move', 'read_knowledge', 'simulate_moves', 'check_forcing_sequences', 'find_forcing_win', 'place_stone'];
 const pointSchema = { x: Type.Integer({ minimum: 0, maximum: 14, description: 'Column: A=0 through O=14' }),
   y: Type.Integer({ minimum: 0, maximum: 14, description: 'Row index: top row 15=0, bottom row 1=14' }) };
 const revisionSchema = Type.Integer({ minimum: 0 });
@@ -21,7 +21,7 @@ export function gomokuExtension(port: TurnPort, selectedPlaybook?: PlaybookId): 
     const playbook = selectedPlaybook ?? turnGuidance(port.state, Date.now()).playbook;
     if (!playbook) throw new Error('棋局已经结束');
     let calls = 0, observed = '', committed = false, modelTurn = 0;
-    const simulations: SimulationEvidence[] = [], forcingChecks: ForcingEvidence[] = [];
+    const simulations: SimulationEvidence[] = [], forcingChecks: ForcingEvidence[] = [], ownWinChecks: OwnWinEvidence[] = [];
     const knowledgeRead: KnowledgeId[] = ['gomoku-coach', playbook];
     pi.on('turn_start', () => { modelTurn++; });
     const ensureActive = () => {
@@ -31,6 +31,33 @@ export function gomokuExtension(port: TurnPort, selectedPlaybook?: PlaybookId): 
     const checkRevision = (revision: number) => {
       if (revision !== port.state.revision) throw new Error(`版本错误：当前 revision=${port.state.revision}`);
     };
+    const ownWinCheck = () => ownWinChecks.find(c => c.result.status === 'found-forced-win') ?? ownWinChecks.at(-1);
+    const searchOwnWin = async (source: OwnWinEvidence['source'], requested: Partial<ForcingBudget> = {}) => {
+      const guidance = turnGuidance(port.state, Date.now());
+      const outcome = await findOwnForcingWin(replay(port.state.position.moves), {
+        maxAttackMoves: requested.maxAttackMoves ?? DEFAULT_FORCING_BUDGET.maxAttackMoves,
+        maxNodes: Math.min(requested.maxNodes ?? DEFAULT_FORCING_BUDGET.maxNodes, DEFAULT_FORCING_BUDGET.maxNodes),
+        maxMs: guidance.time.urgent ? 0 : Math.max(0, Math.min(requested.maxMs ?? DEFAULT_FORCING_BUDGET.maxMs,
+          DEFAULT_FORCING_BUDGET.maxMs, Math.floor(guidance.time.untilPeriodLossMs - 2000))),
+        signal: port.signal,
+      });
+      ensureActive();
+      if (guidance.time.urgent && outcome.status === 'incomplete' && outcome.reason === 'time-budget') outcome.reason = 'clock-budget';
+      const evidence: OwnWinEvidence = { id: `own-win-${ownWinChecks.length + 1}`, revision: port.state.revision,
+        source, result: outcome, returnedOnTurn: modelTurn, reviewedBeforeCommit: false };
+      ownWinChecks.push(evidence);
+      return evidence;
+    };
+    const hasAutomaticOwnSearch = () => ownWinChecks.some(c => c.source !== 'explicit-tool' || c.result.status === 'found-forced-win');
+    const observeOwnWin = async () => {
+      const guidance = turnGuidance(port.state, Date.now());
+      if (!hasAutomaticOwnSearch() && port.state.position.moves.length >= 8
+        && guidance.signals.priority === 'develop' && !guidance.time.urgent) await searchOwnWin('observe');
+      return ownWinCheck();
+    };
+    const ownWinReply = (check: OwnWinEvidence, candidate: string) => result({ accepted: false, needsReview: true,
+      reason: candidate === check.result.winningCandidate ? 'unread-forced-win' : 'missed-forced-win', candidate, ownWinCheck: check,
+      instruction: '尚未落子。发现己方可验证的连续冲四胜法，先读 proof.line 和 winningPoints，下一次模型请求再决定。可选择证明起手；若坚持其他合法落点，显式 acknowledgeMissedWin:true。不是自动代下；未发现胜法不代表没有胜法。' });
     const reviewCandidate = async (point: Point, source: ForcingEvidence['source'], requested: Partial<ForcingBudget> = {}) => {
       const guidance = turnGuidance(port.state, Date.now());
       const budget: ForcingBudget = {
@@ -66,18 +93,20 @@ export function gomokuExtension(port: TurnPort, selectedPlaybook?: PlaybookId): 
         ensureActive();
         const position = replay(port.state.position.moves), analysis = analyze(position);
         observed = `analyze_position revision=${port.state.revision}`;
-        return result({ revision: port.state.revision, board: boardText(position), analysis, signals: positionSignals(position, analysis) });
+        const ownForcingWin = await observeOwnWin();
+        return result({ revision: port.state.revision, board: boardText(position), analysis, signals: positionSignals(position, analysis), ownForcingWin });
       },
     }));
     pi.registerTool(defineTool({
       name: 'evaluate_threats', label: '威胁信号',
-      description: 'Observe structured facts (all immediate wins and opponent wins), heuristic candidates and projected time guidance. Use at least this tool OR analyze_position before committing.',
+      description: 'Observe immediate wins, opponent wins, heuristics and time guidance. Automatically searches OWN continuous-four wins in non-urgent midgame, returning proof evidence in ownForcingWin. Read proven wins before choosing a defensive heuristic. Use this OR analyze_position before committing.',
       parameters: Type.Object({}), executionMode: 'sequential',
       async execute() {
         ensureActive();
         const guidance = turnGuidance(port.state, Date.now());
         observed = `evaluate_threats revision=${port.state.revision}`;
-        return result(guidance);
+        const ownForcingWin = await observeOwnWin();
+        return result({ ...guidance, ownForcingWin });
       },
     }));
     pi.registerTool(defineTool({
@@ -117,6 +146,21 @@ export function gomokuExtension(port: TurnPort, selectedPlaybook?: PlaybookId): 
       },
     }));
     pi.registerTool(defineTool({
+      name: 'find_forcing_win', label: '己方强杀发现',
+      description: 'Read-only search for the CURRENT player\'s own continuous-four forced win, across all forcing starts (not heuristic top-N). Returns found-forced-win with winningCandidate and proof, not-found-within-budget (NOT no win), or incomplete. Does not observe or commit. Review evidence on a later model turn. Clock/node/time caps apply.',
+      parameters: Type.Object({ revision: revisionSchema,
+        maxAttackMoves: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+        maxNodes: Type.Optional(Type.Integer({ minimum: 0, maximum: 6000 })),
+        maxMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 200 })),
+      }), executionMode: 'sequential',
+      async execute(_id, params) {
+        ensureActive(); checkRevision(params.revision);
+        const check = await searchOwnWin('explicit-tool', params);
+        return result({ revision: port.state.revision, ownForcingWin: check,
+          limitation: '只证明己方连续冲四胜法，不是全局最优落点；未找到或未完成都不代表没有胜法。' });
+      },
+    }));
+    pi.registerTool(defineTool({
       name: 'simulate_moves', label: '变化试算',
       description: 'Try 1–6 alternating hypothetical moves on a copied board. This single line is not exhaustive or a forced-win proof. It does not replace observing the CURRENT position before committing.',
       parameters: Type.Object({ moves: Type.Array(Type.Object(pointSchema), { minItems: 1, maxItems: 6 }) }),
@@ -135,9 +179,10 @@ export function gomokuExtension(port: TurnPort, selectedPlaybook?: PlaybookId): 
     }));
     pi.registerTool(defineTool({
       name: 'place_stone', label: '落子',
-      description: 'Commit ONE legal move after observing the position. Normal midgame candidates require a forcing-check result returned on an EARLIER model turn; if absent, returns accepted:false + needsReview without placing. Reconsider found losses/incomplete checks, or explicitly acknowledgeRisk:true on a later turn. Immediate wins/defenses and urgent clock bypass this extra review. Never auto-replaces your move. Successful accepted:true ends the run.',
+      description: 'Commit ONE legal move after observing. A proven OWN forcing win must be read on an EARLIER model turn; choosing another move requires acknowledgeMissedWin:true. Otherwise normal midgame requires prior opponent forcing-check feedback; found losses/incomplete checks require acknowledgeRisk:true. Missing review returns accepted:false/needsReview WITHOUT placing. Immediate tactics and urgent clock bypass extra review. Never auto-replaces a move; accepted:true ends the run.',
       parameters: Type.Object({ ...pointSchema, revision: revisionSchema, reason: Type.String({ minLength: 1, maxLength: 600 }),
         acknowledgeRisk: Type.Optional(Type.Boolean({ description: 'Explicitly keep this candidate despite a previously returned forced-loss or incomplete check. Does not waive clock or legality.' })),
+        acknowledgeMissedWin: Type.Optional(Type.Boolean({ description: 'After reading a proven own forcing win on an earlier model turn, explicitly choose a different candidate. Separate from acknowledgeRisk; never waives legality or clock.' })),
       }),
       executionMode: 'sequential',
       async execute(_id, params) {
@@ -147,30 +192,42 @@ export function gomokuExtension(port: TurnPort, selectedPlaybook?: PlaybookId): 
         const guidance = turnGuidance(port.state, Date.now()), candidate = coordinate(params);
         const immediate = guidance.signals.priority !== 'develop';
         const needsReview = position.moves.length >= 8 && !immediate && !guidance.time.urgent;
+        if (needsReview && !hasAutomaticOwnSearch()) await searchOwnWin('pre-commit');
+        const own = ownWinCheck();
+        const provenOwnWin = own?.result.status === 'found-forced-win';
+        if (!immediate && !guidance.time.urgent && provenOwnWin
+          && (own.returnedOnTurn >= modelTurn || (candidate !== own.result.winningCandidate && !params.acknowledgeMissedWin))) {
+          return ownWinReply(own, candidate);
+        }
+        const selectsProvenWin = provenOwnWin && own.returnedOnTurn < modelTurn && candidate === own.result.winningCandidate;
         // A shallower negative re-check cannot erase a previously proven refutation.
         let check = forcingChecks.findLast(c => c.candidate === candidate && c.result.status === 'found-forced-loss')
           ?? forcingChecks.findLast(c => c.candidate === candidate);
-        if (needsReview) {
+        if (needsReview && !selectsProvenWin) {
           if (!check) { check = await reviewCandidate(params, 'pre-commit'); return reviewReply(check); }
           if (check.returnedOnTurn >= modelTurn || (check.result.status !== 'not-found-within-budget' && !params.acknowledgeRisk)) return reviewReply(check);
         }
+        for (const evidence of ownWinChecks) evidence.reviewedBeforeCommit = evidence.returnedOnTurn < modelTurn;
         for (const evidence of forcingChecks) evidence.reviewedBeforeCommit = evidence.returnedOnTurn < modelTurn;
         if (check?.reviewedBeforeCommit) check.acknowledged = !!params.acknowledgeRisk && check.result.status !== 'not-found-within-budget';
         const finalSimulations = simulations.filter(s => s.candidate === candidate);
         const reviewed = check?.reviewedBeforeCommit === true;
         const completeReview = reviewed && check!.result.status !== 'incomplete';
-        const compared = finalSimulations.length > 0 || completeReview;
+        const compared = finalSimulations.length > 0 || completeReview || selectsProvenWin;
         const comparison = [
           ...finalSimulations.map(s => `simulate_moves ${s.moves.join(' → ')} (${s.id}; 单线探索)`),
           ...(reviewed ? [`${check!.id}: ${check!.result.status}; 仅连续冲四反证，不是全局安全证明`] : []),
+          ...(selectsProvenWin ? [`${own!.id}: 己方连续冲四强杀证明 ${own!.result.proof!.line.map(coordinate).join(' → ')}`] : []),
         ].join('; ');
         const trace: DecisionTrace = { version: KNOWLEDGE_VERSION, revision: port.state.revision, playbook, knowledgeRead: [...knowledgeRead], validation,
           candidateReview: { version: 'candidate-review/v1', candidate,
-            simulations: structuredClone(simulations), forcingChecks: structuredClone(forcingChecks),
+            simulations: structuredClone(simulations), forcingChecks: structuredClone(forcingChecks), ownWinChecks: structuredClone(ownWinChecks),
+            ownWinReview: own?.reviewedBeforeCommit ? 'reviewed' : guidance.time.urgent ? 'skipped-time-pressure' : immediate ? 'not-required-immediate' : 'not-checked',
+            declinedProvenWin: !!(provenOwnWin && own.reviewedBeforeCommit && candidate !== own.result.winningCandidate && params.acknowledgeMissedWin),
             finalCandidateSimulationIds: finalSimulations.map(s => s.id),
             finalCandidateCheckIds: forcingChecks.filter(c => c.candidate === candidate).map(c => c.id),
             forcingReview: reviewed ? 'reviewed' : immediate ? 'not-required-immediate' : guidance.time.urgent ? 'skipped-time-pressure' : 'not-checked',
-            coverage: reviewed ? completeReview ? 'bounded-refutation' : 'incomplete-refutation' : finalSimulations.length ? 'single-line-only' : 'not-compared' },
+            coverage: selectsProvenWin ? 'own-forcing-proof' : reviewed ? completeReview ? 'bounded-refutation' : 'incomplete-refutation' : finalSimulations.length ? 'single-line-only' : 'not-compared' },
           steps: [
             { id: 'observe', status: 'done', evidence: observed },
             { id: 'compare', status: compared ? 'done' : 'skipped', evidence: comparison || (guidance.time.urgent

@@ -1,0 +1,16 @@
+{
+  "description": "White to move after ply 13. G10 is not an immediate five, but forces G8, then J7 creates an open four. Actual H6 missed this available forcing line; this does not prove H6 loses.",
+  "ruleset": "free-gomoku/v1",
+  "source": {
+    "export": "弈境-df54a902.json",
+    "exportedPly": 16,
+    "exportedResult": null,
+    "laterOutcome": "User reported black eventually lost on time; not a tactical quality label."
+  },
+  "moves": ["H8", "H9", "H10", "G9", "I9", "G7", "J8", "G11", "K7", "L6", "I7", "I8", "K9"],
+  "actualCandidate": "H6",
+  "winningCandidate": "G10",
+  "forcingLine": ["G10", "G8", "J7"],
+  "winningPoints": ["F11", "K6"],
+  "observedContinuation": ["H6", "G10", "E9"]
+}

@@ -113,7 +113,7 @@ API Key 只由主进程中的 Pi 使用，不发送给渲染器。模型列表�
 2. 从完整棋谱重新重放全部落子，重新计算四个方向的成五结果。
 3. 扫描所有空点的即时获胜与对手威胁；计算包含断点的五格窗口、活三、冲四、双三/双四，给出候选点与启发式分数。**分数不是胜率；不是完备博弈求解器。**
 4. 逐手完整评估入本地棋谱；机器回合把完整棋谱、棋盘文本、逐手摘要及当前完整评估提交给 Pi。
-5. LLM 必须先调用 `analyze_position` 或 `evaluate_threats` 获取证据，可按需读知识、试算最多六手或显式验证候选。普通中盘需对最终候选调用 `check_forcing_sequences`，检查对手连续冲四，并在下一次模型请求读到反馈后决定。未先检查就 `place_stone` 会返回 `accepted:false/needsReview`，不落子。模型可换子，或显式 `acknowledgeRisk:true` 保留有败势/未完成检查的合法候选，不会自动替换落点。当前立即胜负、开局和时间紧迫不强迫额外审查。最终提交仍扫描一手成五点，业务层再次校验棋钟、回合与 revision 后原子提交；只有 `accepted:true` 才停止同批后续工具和模型请求。
+5. LLM 必须先调用 `analyze_position` 或 `evaluate_threats` 获取证据，可按需读知识、试算最多六手或显式验证候选。普通中盘观察时自动搜索**己方连续冲四强杀**，在 `ownForcingWin` 返回起手和强制线路，也可显式调用 `find_forcing_win`。已证明胜法须在下一次模型请求读到后再决定；若提交其他落点，`place_stone` 返回 `accepted:false/needsReview/missed-forced-win`，不会落子。模型可选择证明起手，或读反馈后用 `acknowledgeMissedWin:true` 明确放弃已知胜法。其他候选仍需 `check_forcing_sequences` 对手反证；败势/未完成检查须另用 `acknowledgeRisk:true`，不能代替漏胜确认。不会自动替换落点。当前立即胜负、开局和时间紧迫不强迫额外审查。最终提交仍扫描一手成五点，业务层再次校验棋钟、回合与 revision 后原子提交；只有 `accepted:true` 才停止同批后续工具和模型请求。
 6. 每个机器回合使用一个隔离的内存 Pi Session，完整上下文来自业务棋谱，不依赖可能被压缩或残留的对话状态。
 
 不会自行代下、不会解析模型自然语言坐标直接落子。无认证、无工具调用、网络失败、超时都会明确停止，提供继续/重试/换模型选项。取消、悔棋、新局都会使旧回合失效；迟到的请求不能改写新棋盘。应用不加载用户或项目的 Pi 扩展、技能、MCP 或编码工具，只开放七个五子棋领域工具；这不是操作系统沙箱。
@@ -127,12 +127,12 @@ API Key 只由主进程中的 Pi 使用，不发送给渲染器。模型列表�
 - **启发式**：`tactics.ts` 输出最多 12 个局部候选、窗口棋形和分数，明确不是胜率或深层必胜证明。
 - **流程知识**：内置 5 条原则、4 个剧本和 4 项技能。每回合只注入入口、简短索引及选中剧本，其他全文通过 `read_knowledge(id)` 按需读取。
 - **路由**：距丢失当前读秒/包干耗尽 ≤15 秒时使用时间剧本；否则有即时战术时使用收束剧本，再按前八手/其后选择开局或中盘。时间剧本仍须先处理即时胜负。
-- **连续先手反证**：`forcing.ts` 只检查候选后对手的连续冲四，不负责选子。默认三次造威胁延伸、6000 节点、200ms，受棋钟与取消限制。结果为发现强制败势、预算内未发现或未完成；后两者都不是安全证明。
-- **执行证据**：`notes[].decision` 使用 `gomoku-knowledge/v2`，保留剧本与四步进度；可选 `candidateReview` 保存每条候选绑定的试算/反证、revision、ID、预算、耗时和反馈请求边界。compare=done 只代表最终候选有单线试算或已返回到先前请求的反证，不代表穷举或模型理解。旧版 v1 记录仍兼容，不保存私有思维链。
+- **双向连续冲四证据**：`forcing.ts` 共享同一有界证明内核。`findOwnForcingWin` 搜索己方胜法，`checkForcingSequences` 检查候选后的对手反杀；两者均从五格窗口生成全部造四点，不以启发式前十二名剪枝，不自动代下。每次默认三次造威胁延伸、6000 节点、200ms，受棋钟与取消限制。未找到或未完成都不是安全/没有胜法的证明；不保证找到最短胜法，也不涵盖连续活三或全局最优。
+- **执行证据**：`notes[].decision` 使用 `gomoku-knowledge/v3`，保留剧本与四步进度；可选 `candidateReview` 保存试算、对手反证，以及 `ownWinChecks` 己方证明、revision、ID、预算、耗时和反馈请求边界。`ownWinReview` 记录已返回先前请求/跳过，`declinedProvenWin` 记录是否明确放弃证明起手；`coverage=own-forcing-proof` 仅用于选中且已读的证明起手。compare=done 不代表全局穷举或模型理解。旧版 v1/v2 记录仍兼容，不保存私有思维链。
 
-工具：`analyze_position`（兼容完整分析）、`evaluate_threats`（结构化信号/时间快照）、`simulate_moves`（副本试算）、`validate_move`（只读候选验证）、`read_knowledge`（内置 ID 白名单）、`check_forcing_sequences`（有界连续冲四反证）、`place_stone`（审查反馈后验证提交）。不提供 Renju 禁手工具，因为本应用无禁手。
+工具：`analyze_position`（兼容完整分析）、`evaluate_threats`（结构化信号/时间快照）、`simulate_moves`（副本试算）、`validate_move`（只读候选验证）、`read_knowledge`（内置 ID 白名单）、`check_forcing_sequences`（有界对手连续冲四反证）、`find_forcing_win`（有界己方强杀发现）、`place_stone`（审查反馈后验证提交）。不提供 Renju 禁手工具，因为本应用无禁手。
 
-知识包随构建复制到 `dist/business/knowledge/`，不从会话工作目录发现技能。修改内置 Markdown 后重新构建并启动即可；不需改变 Pi 全局配置。原 `engine.ts` 导入保持可用，棋谱仍为 `five-llm/v1`，旧手记没有可选的 `decision` 字段也有效。详细设计、迁移与暂缓项见 [L3 重构说明](docs/l3-knowledge-refactor.md)；本轮候选反证与证据契约见 [连续先手检查](docs/forcing-review.md)。
+知识包随构建复制到 `dist/business/knowledge/`，不从会话工作目录发现技能。修改内置 Markdown 后重新构建并启动即可；不需改变 Pi 全局配置。原 `engine.ts` 导入保持可用，棋谱仍为 `five-llm/v1`，旧手记没有可选的 `decision` 字段也有效。详细设计、迁移与暂缓项见 [L3 重构说明](docs/l3-knowledge-refactor.md)；候选反证契约见 [连续先手检查](docs/forcing-review.md)，当前己方强杀与漏胜反馈契约见 [己方强杀发现](docs/own-forcing-win.md)。
 
 ## 桌面功能
 
@@ -165,6 +165,8 @@ just smoke                 # 启动真正 Electron，Playwright 验证桌面并�
 ```
 
 测试覆盖规则、棋钟边界、读秒耗尽、延迟通知、迟到落子拒绝、重试不返还时间、三局/五局比分与和棋重赛，以及知识包完整性、按需注入、剧本路由、结构化信号、候选验证与证据记录隔离。Electron smoke 额外验证三种窗口高度无整页溢出、赛制设置、认输、真实主进程超时结算，以及两首本地 MP3 的实际解码、播放进度、切换和署名弹窗。模型选择测试确保默认 `gpt-6.1-sol` 且缺失时不自动回退到 Claude。
+
+真实棋局回归 [`missed-win-case.test.ts`](tests/missed-win-case.test.ts) 使用脱敏的 [G10 漏胜局面](tests/fixtures/missed-white-win-g10.json)：固定第 13 手后白方行棋，验证 `白 G10 → 黑 G8 → 白 J7` 的强制胜法，穷举关键节点的所有黑方合法应手，并覆盖旋转/镜像和后续超时不改变历史局面。原导出截至第 16 手、尚未结束；玩家之后报告黑棋超时，不能将最终白胜当作第 14 手 H6 正确的标签。新增 `own-forcing.test.ts` 验证自动发现 G10 起手及可复算强杀证明；真实 Pi + 本地 SSE 集成验证自动观察、H6 漏胜反馈、改选 G10、同批反馈门禁、显式放弃、浅负结果不能抹去证明和超时照常判负。测试不访问真实模型、不保证真实 LLM 总会选择正确；但正常预算下不能再无确认地提交其他落点、悄悄忽略已知胜法。
 
 Pi 集成测试用本地 OpenAI-compatible SSE 测试服务验证**真正 Pi Agent Loop** 的工具调度、非法落子纠错、知识白名单、证据门禁、同批工具提交后终止与取消，不访问外部模型，不消耗 API 额度。Electron smoke 使用显式 `FIVE_LLM_SMOKE=1` 的测试替身，输出在 `artifacts/`；正常启动绝不会走此分支。真实提供商的连通性仍需用你自己的认证实测。
 

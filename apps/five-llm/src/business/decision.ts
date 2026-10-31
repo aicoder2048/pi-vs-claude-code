@@ -2,24 +2,25 @@ import { chargeClock } from './clock';
 import { RULESET, coordinate, play, type Point, type Position } from './rules';
 import { analyze, type Analysis } from './tactics';
 import type { GameState } from '../shared/types';
-import type { ForcingCheck } from './forcing';
+import type { ForcingCheck, OwnForcingWin } from './forcing';
 
-export const KNOWLEDGE_VERSION = 'gomoku-knowledge/v2' as const;
+export const KNOWLEDGE_VERSION = 'gomoku-knowledge/v3' as const;
 export const KNOWLEDGE_ITEMS = {
   'gomoku-coach': { file: 'SKILL.md', description: '每回合入口：获取事实、按剧本决策、提交前验证。' },
   'principle-rules': { file: 'principles/principle-rules/SKILL.md', description: '只按自由五子棋裁决：无禁手，长连也胜。' },
   'principle-evidence': { file: 'principles/principle-evidence/SKILL.md', description: '一步安全不等于战术安全；单线、标签、有界未发现都不是全局安全证明。' },
-  'principle-tactics': { file: 'principles/principle-tactics/SKILL.md', description: '先取立即胜、再防立即输；自己的攻击计划必须接受对手连续先手反证。' },
+  'principle-tactics': { file: 'principles/principle-tactics/SKILL.md', description: '先处理即时胜负，再寻找己方强杀；自己的攻击计划必须接受对手连续先手反证。' },
   'principle-time': { file: 'principles/principle-time/SKILL.md', description: '网络与工具都计时；时间紧时缩短探索，不跳过合法性和即时威胁验证。' },
   'principle-commit': { file: 'principles/principle-commit/SKILL.md', description: '只提交当前 revision 的一子；验证在提交前完成，成功后回合结束。' },
   'opening': { file: 'playbooks/opening.md', description: '无即时胜负威胁且前八手：中央、联络、空间。' },
-  'midgame': { file: 'playbooks/midgame.md', description: '常规中盘：提交前检查最终候选的对手连续冲四，先读反馈再决定。' },
+  'midgame': { file: 'playbooks/midgame.md', description: '常规中盘：观察时自动寻找己方连续冲四胜法，提交前读取漏胜与对手反证反馈。' },
   'endgame': { file: 'playbooks/endgame.md', description: '出现任一方即时成五点：战术收束，而非按手数判断终盘。' },
   'time-pressure': { file: 'playbooks/time-pressure.md', description: '临近丢失当前读秒或包干耗尽：压缩探索并及时提交。' },
   'evaluate-threats': { file: 'skills/evaluate-threats/SKILL.md', description: '解读即时获胜/必须应对点、启发式候选及其局限。' },
   'check-legality': { file: 'skills/check-legality/SKILL.md', description: '检查坐标、占用、终局与自由五子棋规则；不执行 Renju 禁手。' },
   'verify-board': { file: 'skills/verify-board/SKILL.md', description: '提交前只读检查候选与对手下一手成五点。' },
   'check-forcing-sequences': { file: 'skills/check-forcing-sequences/SKILL.md', description: '中盘依赖下一步进攻时，检查候选是否被对手连续冲四反证；有界未发现不保证安全。' },
+  'find-forcing-win': { file: 'skills/find-forcing-win/SKILL.md', description: '寻找当前行棋方的连续冲四胜法，读取可验证强制线路；未找到不代表没有胜法。' },
 } as const;
 export type KnowledgeId = keyof typeof KNOWLEDGE_ITEMS;
 export type PlaybookId = 'opening' | 'midgame' | 'endgame' | 'time-pressure';
@@ -44,6 +45,14 @@ export interface ForcingEvidence {
   reviewedBeforeCommit: boolean;
   acknowledged: boolean;
 }
+export interface OwnWinEvidence {
+  id: string;
+  revision: number;
+  source: 'observe' | 'explicit-tool' | 'pre-commit';
+  result: OwnForcingWin;
+  returnedOnTurn: number;
+  reviewedBeforeCommit: boolean;
+}
 export interface CandidateReview {
   version: 'candidate-review/v1';
   candidate: string;
@@ -52,10 +61,14 @@ export interface CandidateReview {
   finalCandidateSimulationIds: string[];
   finalCandidateCheckIds: string[];
   forcingReview: 'reviewed' | 'not-checked' | 'skipped-time-pressure' | 'not-required-immediate';
-  coverage: 'single-line-only' | 'bounded-refutation' | 'incomplete-refutation' | 'not-compared';
+  coverage: 'single-line-only' | 'bounded-refutation' | 'incomplete-refutation' | 'own-forcing-proof' | 'not-compared';
+  // Optional so historical records and non-Pi drivers remain compatible.
+  ownWinChecks?: OwnWinEvidence[];
+  ownWinReview?: 'reviewed' | 'skipped-time-pressure' | 'not-required-immediate' | 'not-checked';
+  declinedProvenWin?: boolean;
 }
 export interface DecisionTrace {
-  version: typeof KNOWLEDGE_VERSION | 'gomoku-knowledge/v1';
+  version: typeof KNOWLEDGE_VERSION | 'gomoku-knowledge/v2' | 'gomoku-knowledge/v1';
   revision: number;
   playbook: PlaybookId;
   knowledgeRead: KnowledgeId[];
