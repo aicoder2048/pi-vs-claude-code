@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { GameService, type AgentDriver, type TurnPort } from '../src/business/game-service';
 import { DEFAULT_SETTINGS } from '../src/business/clock';
 import { KNOWLEDGE_VERSION, validateCandidate, type DecisionTrace } from '../src/business/decision';
+import { checkForcingSequences } from '../src/business/forcing';
 const model = { provider: 'test', id: 'fake', name: 'Test' };
 const tick = () => new Promise(resolve => setTimeout(resolve, 10));
 class ControlledDriver implements AgentDriver {
@@ -19,18 +20,26 @@ describe('authoritative game service', () => {
     expect(state.position.moves.map(m => m.color)).toEqual([1, 2]); expect(state.notes[0].reason).toBe('控制中腹。');
     expect(service.record().format).toBe('five-llm/v1'); service.dispose();
   });
-  test('decision evidence is optional, cloned at commit/export and removed by undo/new game', () => {
+  test('decision evidence is optional, cloned at commit/export and removed by undo/new game', async () => {
     const driver = new ControlledDriver(), service = new GameService(driver, model, { settings: { ...DEFAULT_SETTINGS, allowUndo: true } });
     service.humanMove({ x: 7, y: 7 }, 0);
     const port = driver.turns[0], point = { x: 8, y: 8 };
     const decision: DecisionTrace = { version: KNOWLEDGE_VERSION, revision: port.state.revision, playbook: 'opening',
       knowledgeRead: ['gomoku-coach', 'opening'], validation: validateCandidate(port.state.position, point),
-      steps: [{ id: 'compare', status: 'skipped', evidence: '未调用可选变化试算' }] };
+      steps: [{ id: 'compare', status: 'skipped', evidence: '未调用可选变化试算' }],
+      candidateReview: { version: 'candidate-review/v1', candidate: 'I7', simulations: [],
+        forcingChecks: [{ id: 'forcing-1', revision: port.state.revision, candidate: 'I7', source: 'explicit-tool',
+          result: await checkForcingSequences(port.state.position, point), returnedOnTurn: 1, reviewedBeforeCommit: true, acknowledged: false }],
+        finalCandidateSimulationIds: [], finalCandidateCheckIds: ['forcing-1'], forcingReview: 'reviewed', coverage: 'bounded-refutation' } };
     port.commit(point, '联络', decision);
     decision.knowledgeRead.push('midgame'); decision.validation.warnings.push('外部修改');
+    decision.candidateReview!.forcingChecks[0].result.budget.maxNodes = 0;
     const record = service.record();
     expect(record.notes[0].decision?.knowledgeRead).toEqual(['gomoku-coach', 'opening']);
     expect(record.notes[0].decision?.validation.warnings).toEqual([]);
+    expect(record.notes[0].decision?.candidateReview?.forcingChecks[0].result.budget.maxNodes).toBe(6000);
+    record.notes[0].decision!.candidateReview!.finalCandidateCheckIds.push('forged');
+    expect(service.record().notes[0].decision?.candidateReview?.finalCandidateCheckIds).toEqual(['forcing-1']);
     record.notes[0].decision!.steps[0].evidence = '修改导出对象';
     expect(service.record().notes[0].decision?.steps[0].evidence).toBe('未调用可选变化试算');
     expect(service.undo().notes).toEqual([]);

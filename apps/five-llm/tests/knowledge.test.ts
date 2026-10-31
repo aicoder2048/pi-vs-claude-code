@@ -45,5 +45,13 @@ describe('host-owned Gomoku knowledge pack', () => {
     expect(readKnowledge('verify-board')).toContain('成功落子后不可再调用');
     expect(readKnowledge('evaluate-threats')).toContain('不是严格活三识别');
     expect(readKnowledge('endgame')).toContain('不可宣称随便堵一点就安全');
+    expect(readKnowledge('principle-tactics')).toContain('先手反击');
+    expect(readKnowledge('principle-evidence')).toContain('not-found-within-budget');
+    for (const id of ['midgame', 'check-forcing-sequences', 'gomoku-coach', 'verify-board']) {
+      expect(readKnowledge(id)).toContain('check_forcing_sequences');
+      expect(readKnowledge(id)).toContain('accepted:true');
+    }
+    expect(readKnowledge('check-forcing-sequences')).toContain('acknowledgeRisk:true');
+    expect(readKnowledge('check-forcing-sequences')).toContain('incomplete');
   });
 });

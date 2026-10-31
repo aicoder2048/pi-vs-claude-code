@@ -1,0 +1,10 @@
+{
+  "description": "Round-one human win: position after ply 21, white to move. Coordinates only; no credentials or personal session data.",
+  "ruleset": "free-gomoku/v1",
+  "moves": ["H8", "H9", "H10", "G9", "I9", "G7", "J8", "G11", "J10", "G8", "G10", "G6", "G5", "I10", "K11", "L12", "J11", "J9", "F7", "K7", "K9"],
+  "candidate": "H7",
+  "refutation": ["I7", "H6", "M11", "L10", "L11"],
+  "winningPoints": ["I11", "N11"],
+  "alternative": "I11",
+  "cooperativeLine": ["H7", "I11", "I8"]
+}

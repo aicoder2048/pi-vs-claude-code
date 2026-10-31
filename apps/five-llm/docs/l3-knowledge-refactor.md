@@ -1,5 +1,7 @@
 # L3 知识与决策信号重构
 
+> 本文记录 v1 重构及其当时的验证结果。后续 v2 已增加第七个工具、连续先手反证技能、提交前反馈与候选级证据；当前契约见 [连续先手检查](forcing-review.md)。
+
 ## 目标与边界
 
 参考仓库 `discussions/2026-10-30-pstack-analysis-grok.md` 与 `2026-10-30-refactor-five-llm-pstack-grok.md` 的分析，借鉴「原则索引 → 编排 → 剧本 → 技能 → 工具证据 → 验证」模式；不依赖或复制未经核验的 pstack 实现。

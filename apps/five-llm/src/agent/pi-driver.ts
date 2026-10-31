@@ -75,7 +75,8 @@ export class PiDriver implements AgentDriver {
           port.log('extension', `${event.toolName} ${event.isError ? '被拒绝，等待模型修正' : '执行完成'}`);
           // terminate:true alone only stops when every tool in a batch agrees.
           // A successful commit must also stop sibling calls and any follow-up.
-          if (event.toolName === 'place_stone' && !event.isError) { committed = true; abort(); }
+          const details = event.result.details as { accepted?: boolean } | undefined;
+          if (event.toolName === 'place_stone' && !event.isError && details?.accepted === true) { committed = true; abort(); }
         }
       });
       const position = port.state.position;

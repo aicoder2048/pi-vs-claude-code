@@ -9,6 +9,15 @@ import type { DecisionTrace } from '../src/business/decision';
 import { analyze, play, emptyPosition } from '../src/business/engine';
 import { GameService, type TurnPort } from '../src/business/game-service';
 import type { GameState } from '../src/shared/types';
+import { humanWinCase, humanWinPosition, point } from './fixtures/positions';
+import { DEFAULT_SETTINGS } from '../src/business/clock';
+
+function midgameState(): GameState {
+  const state = initialState(), position = humanWinPosition();
+  state.position = position; state.revision = position.moves.length; state.analysis = analyze(position);
+  state.clock.running = 2; state.clock.updatedAt = Date.now();
+  return state;
+}
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -117,7 +126,7 @@ describe('real Pi harness + inline gomoku extension, local SSE transport', () =>
       expect(requests).toHaveLength(2);
       const record = service.record();
       expect(record.moves[1]).toMatchObject({ x: 0, y: 0, color: 2 }); // no strategy veto for low-score moves
-      expect(record.notes[0].decision).toMatchObject({ version: 'gomoku-knowledge/v1', revision: 1, playbook: 'opening',
+      expect(record.notes[0].decision).toMatchObject({ version: 'gomoku-knowledge/v2', revision: 1, playbook: 'opening',
         validation: { legal: true, coordinate: 'A15', scope: 'one-ply-only' } });
       expect(record.notes[0].decision?.steps).toHaveLength(4);
       expect(record.notes[0].decision?.steps[1].status).toBe('skipped');
@@ -149,6 +158,152 @@ describe('real Pi harness + inline gomoku extension, local SSE transport', () =>
     let commits = 0;
     await driver.run({ state: initialState(), signal: new AbortController().signal, log() {}, commit() { commits++; } });
     expect(commits).toBe(1); expect(requests).toHaveLength(1);
+  }, 15000);
+  test('midgame H7 returns a refutation BEFORE commit; model can check and choose I11 instead', async () => {
+    const state = midgameState(), commits: string[] = [];
+    let decision: DecisionTrace | undefined;
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('evaluate_threats', {}, n);
+      if (n === 2) return tool('place_stone', { ...point('H7'), revision: 21, reason: '下一手进攻' }, n);
+      if (n === 3) return tool('check_forcing_sequences', { ...point('I11'), revision: 21 }, n);
+      return tool('place_stone', { ...point('I11'), revision: 21, reason: '先拆掉对手连续先手线路。' }, n);
+    });
+    await driver.run({ state, signal: new AbortController().signal, log() {}, commit(p, _reason, trace) { commits.push(`${p.x},${p.y}`); decision = trace; } });
+    expect(requests).toHaveLength(4); expect(commits).toEqual(['8,4']);
+    const feedback = JSON.stringify(requests[2].messages);
+    expect(feedback).toContain('needsReview'); expect(feedback).toContain('found-forced-loss');
+    expect(feedback).toContain('two-winning-points');
+    expect(decision?.candidateReview?.forcingChecks.map(c => c.result.status)).toEqual(['found-forced-loss', 'not-found-within-budget']);
+    expect(decision?.candidateReview?.finalCandidateCheckIds).toEqual(['forcing-2']);
+    expect(decision?.candidateReview?.forcingReview).toBe('reviewed');
+    expect(state.position.moves).toHaveLength(21); // checking never mutates the board
+  }, 15000);
+  test('explicit risk acknowledgement on a later turn permits the original legal move, no silent replacement', async () => {
+    const { driver, requests } = await fixture((_request, n) => n === 1 ? tool('evaluate_threats', {}, n)
+      : tool('place_stone', { ...point('H7'), revision: 21, reason: '明确保留这一合法选择。', ...(n >= 4 ? { acknowledgeRisk: true } : {}) }, n));
+    let commits = 0, decision: DecisionTrace | undefined;
+    await driver.run({ state: midgameState(), signal: new AbortController().signal, log() {}, commit(p, _reason, trace) {
+      expect(p).toMatchObject(point('H7')); commits++; decision = trace;
+    } });
+    expect(requests).toHaveLength(4); expect(commits).toBe(1);
+    expect(decision?.candidateReview?.forcingChecks).toHaveLength(1);
+    expect(decision?.candidateReview?.forcingChecks[0]).toMatchObject({ acknowledged: true, reviewedBeforeCommit: true });
+    expect(decision?.validation.warnings).toEqual([]); // one-ply check remains truthful
+  }, 15000);
+  test('a check and preplanned commit in the SAME batch do not count as reading the feedback', async () => {
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('evaluate_threats', {}, n);
+      if (n === 2) return tool('check_forcing_sequences', { ...point('I11'), revision: 21 }, n, [
+        { name: 'place_stone', args: { ...point('I11'), revision: 21, reason: '同批预先安排' } },
+      ]);
+      return tool('place_stone', { ...point('I11'), revision: 21, reason: '读到结果后确认' }, n);
+    });
+    let commits = 0;
+    await driver.run({ state: midgameState(), signal: new AbortController().signal, log() {}, commit() { commits++; } });
+    expect(requests).toHaveLength(3); expect(commits).toBe(1);
+    expect(JSON.stringify(requests[2].messages)).toContain('needsReview');
+  }, 15000);
+  test('retains every simulation branch and never attributes another candidate to the final move', async () => {
+    for (const includeFinal of [false, true]) {
+      const { driver, requests } = await fixture((_request, n) => {
+        if (n === 1) return tool('analyze_position', {}, n);
+        if (n === 2) return tool('simulate_moves', { moves: [point('A15'), point('C15')] }, n);
+        if (n === 3 && includeFinal) return tool('simulate_moves', { moves: [point('I7')] }, n);
+        return tool('place_stone', { ...point('I7'), revision: 1, reason: '选定当前候选' }, n);
+      });
+      let decision: DecisionTrace | undefined;
+      await driver.run({ state: initialState(), signal: new AbortController().signal, log() {}, commit(_p, _r, trace) { decision = trace; } });
+      const review = decision!.candidateReview!;
+      expect(requests).toHaveLength(includeFinal ? 4 : 3);
+      expect(review.simulations).toHaveLength(includeFinal ? 2 : 1);
+      expect(review.simulations[0]).toMatchObject({ id: 'simulation-1', revision: 1, candidate: 'A15', moves: ['A15', 'C15'] });
+      expect(review.finalCandidateSimulationIds).toEqual(includeFinal ? ['simulation-2'] : []);
+      expect(review.coverage).toBe(includeFinal ? 'single-line-only' : 'not-compared');
+      expect(decision!.steps[1].status).toBe(includeFinal ? 'done' : 'skipped');
+    }
+  }, 15000);
+  test('a shallow negative re-check cannot erase a known positive refutation for the same revision/candidate', async () => {
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('evaluate_threats', {}, n);
+      if (n === 2 || n === 3) return tool('check_forcing_sequences', { ...point('H7'), revision: 21, ...(n === 3 ? { maxAttackMoves: 1 } : {}) }, n);
+      return tool('place_stone', { ...point('H7'), revision: 21, reason: '明确确认已有反证', ...(n >= 5 ? { acknowledgeRisk: true } : {}) }, n);
+    });
+    let decision: DecisionTrace | undefined, commits = 0;
+    await driver.run({ state: midgameState(), signal: new AbortController().signal, log() {}, commit(_p, _r, trace) { commits++; decision = trace; } });
+    expect(requests).toHaveLength(5); expect(commits).toBe(1);
+    expect(JSON.stringify(requests[4].messages)).toContain('needsReview');
+    expect(decision?.candidateReview?.forcingChecks.map(c => c.result.status)).toEqual(['found-forced-loss', 'not-found-within-budget']);
+    expect(decision?.candidateReview?.forcingChecks[0].acknowledged).toBe(true);
+    expect(decision?.candidateReview?.coverage).toBe('bounded-refutation');
+  }, 15000);
+  test('invalid/stale checks create no evidence; incomplete checks require explicit confirmation and stay incomplete', async () => {
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('check_forcing_sequences', { ...point('I11'), revision: 99 }, n);
+      if (n === 2) return tool('check_forcing_sequences', { ...point('H8'), revision: 21 }, n);
+      if (n === 3) return tool('evaluate_threats', {}, n);
+      if (n === 4) return tool('check_forcing_sequences', { ...point('I11'), revision: 21, maxNodes: 0 }, n);
+      return tool('place_stone', { ...point('I11'), revision: 21, reason: '确认预算不足，不声称安全。', ...(n >= 6 ? { acknowledgeRisk: true } : {}) }, n);
+    });
+    let decision: DecisionTrace | undefined;
+    await driver.run({ state: midgameState(), signal: new AbortController().signal, log() {}, commit(_p, _r, trace) { decision = trace; } });
+    expect(requests).toHaveLength(6);
+    expect(JSON.stringify(requests[5].messages)).toContain('needsReview');
+    expect(decision?.candidateReview?.forcingChecks).toHaveLength(1);
+    expect(decision?.candidateReview?.forcingChecks[0]).toMatchObject({ acknowledged: true, result: { status: 'incomplete', reason: 'node-budget' } });
+    expect(decision?.candidateReview?.coverage).toBe('incomplete-refutation');
+    expect(decision?.steps[1].status).toBe('skipped');
+  }, 15000);
+  test('urgent midgame skips extra review instead of spending another model round on a known dangerous candidate', async () => {
+    const state = midgameState(); state.clock.players[2].mainMs = 0; state.clock.players[2].periodMs = 14_000;
+    const { driver, requests } = await fixture((_request, n) => n === 1 ? tool('evaluate_threats', {}, n)
+      : tool('place_stone', { ...point('H7'), revision: 21, reason: '时间紧迫，未作连续先手审查。' }, n));
+    let decision: DecisionTrace | undefined;
+    await driver.run({ state, signal: new AbortController().signal, log() {}, commit(_p, _r, trace) { decision = trace; } });
+    expect(requests).toHaveLength(2);
+    expect(decision?.candidateReview).toMatchObject({ forcingChecks: [], forcingReview: 'skipped-time-pressure', coverage: 'not-compared' });
+  }, 15000);
+  test('explicit checks under clock pressure report incomplete/clock-budget rather than claiming safety', async () => {
+    const state = midgameState(); state.clock.players[2].mainMs = 0; state.clock.players[2].periodMs = 14_000;
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('evaluate_threats', {}, n);
+      if (n === 2) return tool('check_forcing_sequences', { ...point('H7'), revision: 21 }, n);
+      return tool('place_stone', { ...point('H7'), revision: 21, reason: '时间不足，不把未完成当安全。' }, n);
+    });
+    let decision: DecisionTrace | undefined;
+    await driver.run({ state, signal: new AbortController().signal, log() {}, commit(_p, _r, trace) { decision = trace; } });
+    expect(requests).toHaveLength(3);
+    expect(decision?.candidateReview?.forcingChecks[0].result).toMatchObject({ status: 'incomplete', reason: 'clock-budget', nodes: 0 });
+  }, 15000);
+  test('review feedback does not pause/refund the authoritative clock; a late post-review commit still loses', async () => {
+    for (const spent of [3000, 60_001]) {
+      let now = Date.now();
+      const { driver, requests } = await fixture((_request, n) => {
+        if (n === 1) return tool('evaluate_threats', {}, n);
+        if (n === 2) return tool('check_forcing_sequences', { ...point('I11'), revision: 21 }, n);
+        now += spent;
+        return tool('place_stone', { ...point('I11'), revision: 21, reason: '审查后的最终候选' }, n);
+      });
+      const service = new GameService({ async run(port) {
+        const ply = port.state.position.moves.length;
+        if (ply < 21) port.commit(point(humanWinCase.moves[ply]), '仅准备回归局面');
+        else await driver.run(port);
+      } }, { provider: 'fixture', id: 'gomoku', name: 'SSE Fixture' }, {
+        now: () => now, settings: { ...DEFAULT_SETTINGS, timeControl: 'absolute', mainTimeMs: 60_000 },
+      });
+      try {
+        for (let i = 0; i < 21; i += 2) service.humanMove(point(humanWinCase.moves[i]), service.snapshot().revision);
+        for (let i = 0; i < 200 && service.snapshot().status === 'thinking'; i++) await Bun.sleep(5);
+        expect(requests).toHaveLength(3);
+        const record = service.record();
+        if (spent < 60_000) {
+          expect(record.moves).toHaveLength(22); expect(record.clock.players[2].mainMs).toBe(57_000);
+          expect(record.notes.at(-1)?.decision?.candidateReview).toMatchObject({ candidate: 'I11', forcingReview: 'reviewed', coverage: 'bounded-refutation' });
+        } else {
+          expect(record.moves).toHaveLength(21); expect(record.outcome).toMatchObject({ winner: 1, reason: 'main-time' });
+          expect(record.notes).toHaveLength(10); // rejected attempt cannot fabricate a committed decision
+        }
+      } finally { service.dispose(); }
+    }
   }, 15000);
   test('request budget stops a model that endlessly requests analysis', async () => {
     const { driver, requests } = await fixture((_request, n) => tool('analyze_position', {}, n));

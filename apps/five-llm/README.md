@@ -98,8 +98,8 @@ API Key 只由主进程中的 Pi 使用，不发送给渲染器。模型列表�
 | 层 | 路径 | 职责 |
 |---|---|---|
 | Agent Loop | `src/agent/pi-driver.ts` | 原生 Pi SDK 会话、模型认证、请求预算、取消与超时 |
-| Pi 扩展 | `src/extensions/gomoku.ts` | 注入回合端口，注册六个受限工具、获取证据门禁与提交前验证 |
-| 业务 | `src/business/rules.ts`、`tactics.ts`、`decision.ts`、`clock.ts`、`game-service.ts` | 权威规则、启发式评估、决策信号/剧本路由、棋钟与比赛流程；`engine.ts` 保留兼容出口 |
+| Pi 扩展 | `src/extensions/gomoku.ts` | 注入回合端口，注册七个受限工具、候选反证反馈与提交前验证 |
+| 业务 | `src/business/rules.ts`、`tactics.ts`、`forcing.ts`、`decision.ts`、`clock.ts`、`game-service.ts` | 权威规则、启发式评估、决策信号/剧本路由、棋钟与比赛流程；`engine.ts` 保留兼容出口 |
 | 领域知识 | `src/business/knowledge/`、`src/agent/knowledge-loader.ts` | 编排入口、原则索引、剧本与技能；宿主白名单加载，不开放通用文件读取 |
 | 桌面 | `src/electron/`、`src/renderer/` | 安全 IPC、持久化、Canvas、交互、Web Audio |
 | 跨层 DTO | `src/shared/types.ts` | IPC、状态快照和棋谱格式 |
@@ -112,10 +112,10 @@ API Key 只由主进程中的 Pi 使用，不发送给渲染器。模型列表�
 2. 从完整棋谱重新重放全部落子，重新计算四个方向的成五结果。
 3. 扫描所有空点的即时获胜与对手威胁；计算包含断点的五格窗口、活三、冲四、双三/双四，给出候选点与启发式分数。**分数不是胜率；不是完备博弈求解器。**
 4. 逐手完整评估入本地棋谱；机器回合把完整棋谱、棋盘文本、逐手摘要及当前完整评估提交给 Pi。
-5. LLM 必须先调用 `analyze_position` 或 `evaluate_threats` 获取当前局面的证据，可按需读知识、试算最多六手或显式验证候选，最终调用 `place_stone`。该工具自动验证候选并扫描对手一手成五点；战略警告不否决合法棋步。业务层再次校验并原子提交；过期版本、重复提交、非法坐标均拒绝。成功即停止同批剩余工具与模型后续请求。
+5. LLM 必须先调用 `analyze_position` 或 `evaluate_threats` 获取证据，可按需读知识、试算最多六手或显式验证候选。普通中盘需对最终候选调用 `check_forcing_sequences`，检查对手连续冲四，并在下一次模型请求读到反馈后决定。未先检查就 `place_stone` 会返回 `accepted:false/needsReview`，不落子。模型可换子，或显式 `acknowledgeRisk:true` 保留有败势/未完成检查的合法候选，不会自动替换落点。当前立即胜负、开局和时间紧迫不强迫额外审查。最终提交仍扫描一手成五点，业务层再次校验棋钟、回合与 revision 后原子提交；只有 `accepted:true` 才停止同批后续工具和模型请求。
 6. 每个机器回合使用一个隔离的内存 Pi Session，完整上下文来自业务棋谱，不依赖可能被压缩或残留的对话状态。
 
-不会自行代下、不会解析模型自然语言坐标直接落子。无认证、无工具调用、网络失败、超时都会明确停止，提供继续/重试/换模型选项。取消、悔棋、新局都会使旧回合失效；迟到的请求不能改写新棋盘。应用不加载用户或项目的 Pi 扩展、技能、MCP 或编码工具，只开放六个五子棋领域工具；这不是操作系统沙箱。
+不会自行代下、不会解析模型自然语言坐标直接落子。无认证、无工具调用、网络失败、超时都会明确停止，提供继续/重试/换模型选项。取消、悔棋、新局都会使旧回合失效；迟到的请求不能改写新棋盘。应用不加载用户或项目的 Pi 扩展、技能、MCP 或编码工具，只开放七个五子棋领域工具；这不是操作系统沙箱。
 
 ## L3：知识如何成为推理信号
 
@@ -124,13 +124,14 @@ API Key 只由主进程中的 Pi 使用，不发送给渲染器。模型列表�
 - **硬规则**：`rules.ts` 执行合法性、重放和胜负；`clock.ts` / `GameService` 执行计时与提交，技能不能覆盖。
 - **确定性事实**：`decision.ts` 输出全盘即时成五点、对手即时成五点和一步不可防信号；自身立即获胜优先于防守。
 - **启发式**：`tactics.ts` 输出最多 12 个局部候选、窗口棋形和分数，明确不是胜率或深层必胜证明。
-- **流程知识**：内置 5 条原则、4 个剧本和 3 项技能。每回合只注入入口、简短索引及选中剧本，其他全文通过 `read_knowledge(id)` 按需读取。
+- **流程知识**：内置 5 条原则、4 个剧本和 4 项技能。每回合只注入入口、简短索引及选中剧本，其他全文通过 `read_knowledge(id)` 按需读取。
 - **路由**：距丢失当前读秒/包干耗尽 ≤15 秒时使用时间剧本；否则有即时战术时使用收束剧本，再按前八手/其后选择开局或中盘。时间剧本仍须先处理即时胜负。
-- **执行证据**：成功落子的 `notes[].decision` 保存知识包版本、剧本、知识读取 ID、四步进度、未试算原因和候选警告。记录的是公开工具证据，不是私有思维链。
+- **连续先手反证**：`forcing.ts` 只检查候选后对手的连续冲四，不负责选子。默认三次造威胁延伸、6000 节点、200ms，受棋钟与取消限制。结果为发现强制败势、预算内未发现或未完成；后两者都不是安全证明。
+- **执行证据**：`notes[].decision` 使用 `gomoku-knowledge/v2`，保留剧本与四步进度；可选 `candidateReview` 保存每条候选绑定的试算/反证、revision、ID、预算、耗时和反馈请求边界。compare=done 只代表最终候选有单线试算或已返回到先前请求的反证，不代表穷举或模型理解。旧版 v1 记录仍兼容，不保存私有思维链。
 
-工具：`analyze_position`（兼容完整分析）、`evaluate_threats`（结构化信号/时间快照）、`simulate_moves`（副本试算）、`validate_move`（只读候选验证）、`read_knowledge`（内置 ID 白名单）、`place_stone`（自动验证后提交）。不提供 Renju 禁手工具，因为本应用无禁手。
+工具：`analyze_position`（兼容完整分析）、`evaluate_threats`（结构化信号/时间快照）、`simulate_moves`（副本试算）、`validate_move`（只读候选验证）、`read_knowledge`（内置 ID 白名单）、`check_forcing_sequences`（有界连续冲四反证）、`place_stone`（审查反馈后验证提交）。不提供 Renju 禁手工具，因为本应用无禁手。
 
-知识包随构建复制到 `dist/business/knowledge/`，不从会话工作目录发现技能。修改内置 Markdown 后重新构建并启动即可；不需改变 Pi 全局配置。原 `engine.ts` 导入保持可用，棋谱仍为 `five-llm/v1`，旧手记没有可选的 `decision` 字段也有效。详细设计、迁移与暂缓项见 [L3 重构说明](docs/l3-knowledge-refactor.md)。
+知识包随构建复制到 `dist/business/knowledge/`，不从会话工作目录发现技能。修改内置 Markdown 后重新构建并启动即可；不需改变 Pi 全局配置。原 `engine.ts` 导入保持可用，棋谱仍为 `five-llm/v1`，旧手记没有可选的 `decision` 字段也有效。详细设计、迁移与暂缓项见 [L3 重构说明](docs/l3-knowledge-refactor.md)；本轮候选反证与证据契约见 [连续先手检查](docs/forcing-review.md)。
 
 ## 桌面功能
 
