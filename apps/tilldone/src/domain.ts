@@ -15,8 +15,15 @@ export interface Message {
 	readonly id: string;
 	readonly kind: "assistant" | "user" | "nudge" | "notice";
 	readonly blocks: Readonly<Record<number, string>>;
+	readonly images: number;
 	readonly error: string;
 }
+/** A pasted image as the renderer sends it; Pi resizes oversized ones before they reach the model. */
+export interface Image { readonly mimeType: string; readonly data: string }
+export const IMAGE_TYPES: readonly string[] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+export const MAX_IMAGES = 10;
+/** Base64 length of a 20 MB file: a sanity bound, not the model limit. */
+const MAX_IMAGE_BASE64 = Math.ceil((20 * 1024 * 1024) / 3) * 4;
 export interface Tool {
 	readonly id: string;
 	readonly name: string;
@@ -44,6 +51,7 @@ export interface State {
 	readonly streaming: boolean;
 	readonly compacting: boolean;
 	readonly model: string;
+	readonly imageInput: boolean;
 	readonly thinking: string;
 	readonly cwd: string;
 	readonly connection: "starting" | "ready" | "exited";
@@ -57,17 +65,18 @@ export interface State {
 export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false): State {
 	return { list: EMPTY_LIST, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
 		confirms: [], statuses: {}, now: 0, runActive: false, streaming: false, compacting: false,
-		model, thinking: "unknown", cwd, connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
+		model, imageInput: false, thinking: "unknown", cwd, connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
 }
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 function contentBlocks(content: any): Record<number, string> {
 	if (typeof content === "string") return { 0: content };
 	return Object.fromEntries((Array.isArray(content) ? content : []).flatMap((block, index) => block?.type === "text" ? [[index, text(block.text)]] : []));
 }
-function addMessage(state: State, kind: Message["kind"], blocks: Record<number, string>, error = ""): State {
+const imageCount = (content: any): number => Array.isArray(content) ? content.filter((block) => block?.type === "image").length : 0;
+function addMessage(state: State, kind: Message["kind"], blocks: Record<number, string>, error = "", images = 0): State {
 	const id = `message-${state.sequence + 1}`;
 	return { ...state, sequence: state.sequence + 1,
-		messages: [...state.messages, { id, kind, blocks, error }],
+		messages: [...state.messages, { id, kind, blocks, images, error }],
 		timeline: [...state.timeline, { kind: "message", id }],
 		...(kind === "assistant" ? { assistantId: id } : {}) };
 }
@@ -113,9 +122,10 @@ export function reduce(state: State, record: RecordValue): State {
 			const data = record.data;
 			const model = data.model ? `${data.model.provider}/${data.model.id}` : state.model;
 			const thinking = text(data.thinkingLevel) || "unknown", streaming = data.isStreaming === true, compacting = data.isCompacting === true;
+			const imageInput = data.model ? Array.isArray(data.model.input) && data.model.input.includes("image") : state.imageInput;
 			// The 2 s state poll usually reports nothing new; keep identity so L2 can skip publishing.
-			if (state.connection === "ready" && state.model === model && state.thinking === thinking && state.streaming === streaming && state.compacting === compacting) return state;
-			return { ...state, connection: "ready", model, thinking, streaming, compacting };
+			if (state.connection === "ready" && state.model === model && state.imageInput === imageInput && state.thinking === thinking && state.streaming === streaming && state.compacting === compacting) return state;
+			return { ...state, connection: "ready", model, imageInput, thinking, streaming, compacting };
 		}
 		case "agent_start": return { ...state, runActive: true, error: "" };
 		// agent_end is intentionally not an idle transition: a nudge may start another run.
@@ -124,7 +134,7 @@ export function reduce(state: State, record: RecordValue): State {
 		case "message_start": {
 			const m = record.message;
 			if (m?.role === "assistant") return addMessage(state, "assistant", contentBlocks(m.content));
-			if (m?.role === "user") return addMessage(state, "user", contentBlocks(m.content));
+			if (m?.role === "user") return addMessage(state, "user", contentBlocks(m.content), "", imageCount(m.content));
 			if (m?.role === "custom" && m.customType === "tilldone-nudge") return addMessage(state, "nudge", contentBlocks(m.content));
 			return state;
 		}
@@ -171,7 +181,7 @@ export function reduce(state: State, record: RecordValue): State {
 	}
 }
 
-export type Intent = { type: "submit"; message: string; mode: "steer" | "followUp" }
+export type Intent = { type: "submit"; message: string; mode: "steer" | "followUp"; images?: readonly Image[] }
 	| { type: "abort" | "restart" | "newSession" | "focusTasks" }
 	| { type: "confirm"; id: string; confirmed: boolean }
 	| { type: "splitTask"; id: number }
@@ -179,6 +189,16 @@ export type Intent = { type: "submit"; message: string; mode: "steer" | "followU
 	| { type: "apiOpen" | "apiClose" }
 	| { type: "apiLink"; provider: ApiProvider }
 	| { type: "apiSave"; result: ReturnType<typeof parseCredentialChanges> };
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+function parseImages(raw: unknown): Image[] | undefined {
+	if (!Array.isArray(raw) || raw.length > MAX_IMAGES) return;
+	const images: Image[] = [];
+	for (const image of raw) {
+		if (!IMAGE_TYPES.includes(image?.mimeType) || typeof image.data !== "string" || !image.data || image.data.length > MAX_IMAGE_BASE64 || !BASE64.test(image.data)) return;
+		images.push({ mimeType: image.mimeType, data: image.data });
+	}
+	return images;
+}
 export function parseIntent(raw: unknown): Intent | undefined {
 	if (!raw || typeof raw !== "object") return;
 	const r = raw as RecordValue;
@@ -187,7 +207,8 @@ export function parseIntent(raw: unknown): Intent | undefined {
 	if (r.type === "apiSave") return { type: "apiSave", result: parseCredentialChanges(r.providers) };
 	if (["abort", "restart", "newSession", "focusTasks"].includes(r.type)) return { type: r.type } as Intent;
 	if (r.type === "submit" && typeof r.message === "string" && r.message.length <= 100000 && ["steer", "followUp"].includes(r.mode)) {
-		return { type: "submit", message: r.message, mode: r.mode };
+		const images = parseImages(r.images ?? []);
+		return images && { type: "submit", message: r.message, mode: r.mode, images };
 	}
 	if (r.type === "preferences") {
 		const preferences = parsePreferences(r.preferences);
@@ -228,9 +249,14 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 		return { commands: [{ type: isRunning(state) ? "steer" : "prompt", message }], events: [] };
 	}
 	if (intent.type === "abort") return { commands: [{ type: "clear_queue" }, { type: "abort" }], events: [] };
-	if (intent.type === "submit" && intent.message.trim()) return {
-		commands: [{ type: isRunning(state) ? intent.mode === "steer" ? "steer" : "follow_up" : "prompt", message: intent.message.trim() }], events: [],
-	};
+	if (intent.type === "submit") {
+		const images = intent.images ?? [];
+		if (!intent.message.trim() && !images.length) return empty;
+		if (images.length && !state.imageInput) return empty;
+		const command: RecordValue = { type: isRunning(state) ? intent.mode === "steer" ? "steer" : "follow_up" : "prompt", message: intent.message.trim() };
+		if (images.length) command.images = images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }));
+		return { commands: [command], events: [] };
+	}
 	return empty;
 }
 export function immediateUIResponse(record: RecordValue): RecordValue | undefined {
@@ -239,7 +265,7 @@ export function immediateUIResponse(record: RecordValue): RecordValue | undefine
 	}
 }
 const pretty = (value: unknown) => JSON.stringify(value, null, 2) ?? "";
-type Entry = { id: string; kind: string; label: string; text: string; error: string; args: string; result: string };
+type Entry = { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string };
 // Messages and tools are immutable, so an entry stays valid while its source object and copy are unchanged.
 // Without this, every streamed token re-serializes the whole history, including every tool result.
 const entries = new WeakMap<Message | Tool, { ui: ReturnType<typeof copyFor>; entry: Entry }>();
@@ -263,7 +289,7 @@ export function toViewModel(state: State) {
 		appearance: appearanceView(state.preferences, state.systemDark),
 		connection: state.connection, error: state.error, diagnostics: state.diagnostics,
 		status: { model: state.model, thinking: state.thinking, running: isRunning(state), cwd: state.cwd, tilldone: state.statuses.tilldone ?? "" },
-		input: { enabled: state.connection === "ready", running: isRunning(state), newSession: state.connection === "ready" && !isRunning(state) },
+		input: { enabled: state.connection === "ready", running: isRunning(state), newSession: state.connection === "ready" && !isRunning(state), images: state.connection === "ready" && state.imageInput },
 		tasks: { title: state.list.title ?? "TillDone", description: state.list.description ?? "", done: counts.done,
 			total: state.list.tasks.length, progress: `${counts.done} / ${state.list.tasks.length} ${ui.done}`,
 			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus,
@@ -273,11 +299,11 @@ export function toViewModel(state: State) {
 		conversation: state.timeline.filter((entry) => entry.kind === "tool" || !isSilentAssistant(messages.get(entry.id)!)).map((entry) => {
 			if (entry.kind === "tool") {
 				const t = tools.get(entry.id)!;
-				return entryFor(t, ui, () => ({ id: t.id, kind: "tool", label: `${t.name} · ${{ running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]}`, text: "", args: pretty(t.args), result: pretty(t.result), error: "" }));
+				return entryFor(t, ui, () => ({ id: t.id, kind: "tool", label: `${t.name} · ${{ running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]}`, text: "", images: 0, args: pretty(t.args), result: pretty(t.result), error: "" }));
 			}
 			const m = messages.get(entry.id)!;
 			return entryFor(m, ui, () => ({ id: m.id, kind: m.kind, label: { assistant: ui.assistant, user: ui.user, nudge: ui.nudge, notice: ui.notice }[m.kind],
-				text: Object.entries(m.blocks).sort(([a], [b]) => Number(a) - Number(b)).map(([, value]) => value).join("\n"), error: m.error, args: "", result: "" }));
+				text: Object.entries(m.blocks).sort(([a], [b]) => Number(a) - Number(b)).map(([, value]) => value).join("\n"), images: m.images, error: m.error, args: "", result: "" }));
 		}),
 		confirm: state.confirms.length ? { ...state.confirms[0], remainingSeconds: state.confirms[0].deadline === null ? null : Math.max(0, Math.ceil((state.confirms[0].deadline - state.now) / 1000)) } : null,
 	};

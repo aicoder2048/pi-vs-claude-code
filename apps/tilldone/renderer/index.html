@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src blob:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'">
   <title>边牧任务桌面</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="themes.css">
@@ -53,7 +53,8 @@
       <div id="conversation" aria-live="polite"><p class="empty">让 Pi 制定计划，并逐项完成任务。</p></div>
       <form id="composer">
         <label for="prompt"><span id="message-label">发送消息给 Pi</span> <span id="keyboard-hint">Enter 发送 · Shift+Enter 换行</span></label>
-        <textarea id="prompt" rows="3" placeholder="你想完成什么任务？" required></textarea>
+        <div id="attachments" hidden></div>
+        <textarea id="prompt" rows="3" placeholder="你想完成什么任务？"></textarea>
         <div class="actions"><span id="input-hint">正在连接 Pi…</span><select id="mode" aria-label="运行中的消息发送方式" hidden><option id="mode-steer" value="steer">立即引导</option><option id="mode-followUp" value="followUp">后续跟进</option></select><button id="stop" type="button" disabled>停止</button><button id="send" type="submit" disabled>发送</button></div>
         <p id="send-error" role="alert" hidden></p>
       </form>

@@ -33,6 +33,8 @@ async function handle(r: any) {
 		emit({ type: "message_start", message: { role: "user", content: '<img src=x onerror="alert(1)">' } });
 		return;
 	}
+	// Echo an image prompt back as the user message Pi would record, so the desk can show it.
+	if (r.images) { emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text: r.message }, ...r.images] } }); return; }
 	if (r.message === "tasks") {
 		const details = { action: "add", tasks: [{ id: 1, text: "write the guide", status: "inprogress" }, { id: 2, text: "old", status: "done" }], nextId: 3, listTitle: "Split", listDescription: undefined };
 		emit({ type: "tool_execution_end", toolCallId: "tasks", toolName: "tilldone", result: { content: [], details }, isError: false });

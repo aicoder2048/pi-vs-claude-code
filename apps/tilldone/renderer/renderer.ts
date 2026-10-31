@@ -11,10 +11,10 @@ interface View {
 		shortcuts: { id: string; label: string; icon: string; selected: boolean }[] };
 	connection: string; error: string; diagnostics: string;
 	status: { model: string; thinking: string; running: boolean; cwd: string; tilldone: string };
-	input: { enabled: boolean; running: boolean; newSession: boolean };
+	input: { enabled: boolean; running: boolean; newSession: boolean; images: boolean };
 	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number;
 		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean }[] };
-	conversation: { id: string; kind: string; label: string; text: string; error: string; args: string; result: string }[];
+	conversation: { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string }[];
 	confirm: { id: string; title: string; message: string; remainingSeconds: number | null } | null;
 }
 declare global {
@@ -81,8 +81,50 @@ function renderAppearance(view: View) {
 window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", (event) => {
 	if (event.matches) for (const animation of document.body.getAnimations()) if (animation.id === "theme-switch") animation.cancel();
 });
+// Pasted images are a draft like the textarea's text: presentation state until sent.
+interface Attachment { mimeType: string; data: string; url: string }
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"], MAX_IMAGES = 10, MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+let attachments: Attachment[] = [];
+let latest: View | undefined;
+function notice(text: string) { $("send-error").hidden = !text; setText("send-error", text); }
+function renderAttachments() {
+	const strip = $("attachments");
+	strip.hidden = attachments.length === 0;
+	strip.replaceChildren(...attachments.map((attachment) => {
+		const figure = node("figure"), img = node("img"), remove = node("button", "×");
+		img.src = attachment.url; img.alt = latest?.ui.image ?? "";
+		remove.type = "button"; remove.setAttribute("aria-label", latest?.ui.removeImage ?? "");
+		remove.onclick = () => { URL.revokeObjectURL(attachment.url); attachments = attachments.filter((a) => a !== attachment); renderAttachments(); };
+		figure.append(img, remove);
+		return figure;
+	}));
+}
+const base64Of = (file: File) => new Promise<string>((resolve, reject) => {
+	const reader = new FileReader();
+	reader.onload = () => resolve(String(reader.result).slice(String(reader.result).indexOf(",") + 1));
+	reader.onerror = () => reject(reader.error);
+	reader.readAsDataURL(file);
+});
+$("prompt").addEventListener("paste", (event) => {
+	const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+	if (!files.length || !latest) return;
+	// Keep a plain text paste working; an image-only clipboard (a screenshot) has no text to lose.
+	if (!event.clipboardData!.types.includes("text/plain")) event.preventDefault();
+	if (!latest.input.images) { notice(latest.ui.imagesUnsupported); return; }
+	const ui = latest.ui;
+	void (async () => {
+		for (const file of files) {
+			if (!IMAGE_TYPES.includes(file.type) || file.size > MAX_IMAGE_BYTES || attachments.length >= MAX_IMAGES) { notice(ui.imageRejected); continue; }
+			// Read first, then append: spreading `attachments` before the await would let concurrent pastes overwrite each other.
+			const data = await base64Of(file);
+			attachments = [...attachments, { mimeType: file.type, data, url: URL.createObjectURL(file) }];
+			renderAttachments();
+		}
+	})();
+});
 function render(view: View) {
 	const ui = view.ui;
+	latest = view;
 	renderAppearance(view);
 	renderApi(view.api);
 	if (document.title !== ui.productName) document.title = ui.productName;
@@ -131,11 +173,13 @@ function render(view: View) {
 				} else {
 					element = node("article"); element.className = `message ${item.kind}`;
 					const error = node("p"); error.className = "message-error";
-					element.append(node("h3"), node("p"), error);
+					const images = node("p"); images.className = "message-images";
+					element.append(node("h3"), node("p"), error, images);
 				}
 				element.dataset.key = item.id; conversation.append(element);
 			}
-			const values = item.kind === "tool" ? [item.label, `${ui.args}\n${item.args}`, `${ui.result}\n${item.result}`] : [item.label, item.text, item.error];
+			const values = item.kind === "tool" ? [item.label, `${ui.args}\n${item.args}`, `${ui.result}\n${item.result}`]
+				: [item.label, item.text, item.error, item.images ? `🖼 ${ui.image} ×${item.images}` : ""];
 			values.forEach((value, index) => { if (element!.children[index].textContent !== value) element!.children[index].textContent = value; });
 			existing.delete(item.id);
 		}
@@ -186,8 +230,16 @@ $("composer").addEventListener("submit", (event) => {
 	event.preventDefault();
 	const input = $<HTMLTextAreaElement>("prompt");
 	const message = input.value;
-	void send({ type: "submit", message, mode: $<HTMLSelectElement>("mode").value }).then((ok) => {
-		if (ok && input.value === message) input.value = "";
+	const sent = attachments;
+	if (!message.trim() && !sent.length) return;
+	// The model may have changed since the images were pasted.
+	if (sent.length && !latest?.input.images) { notice(latest?.ui.imagesUnsupported ?? ""); return; }
+	void send({ type: "submit", message, mode: $<HTMLSelectElement>("mode").value, images: sent.map(({ mimeType, data }) => ({ mimeType, data })) }).then((ok) => {
+		if (!ok) return;
+		if (input.value === message) input.value = "";
+		for (const attachment of sent) URL.revokeObjectURL(attachment.url);
+		attachments = attachments.filter((attachment) => !sent.includes(attachment));
+		renderAttachments();
 	});
 });
 $("prompt").addEventListener("keydown", (event) => {

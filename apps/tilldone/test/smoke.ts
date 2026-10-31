@@ -169,6 +169,25 @@ try {
 	await page.locator("#prompt").fill("markup"); await page.locator("#send").click();
 	await page.waitForFunction(() => document.getElementById("conversation")!.textContent!.includes("<img"));
 	assert.equal(await page.locator("#conversation img").count(), 0);
+	const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+	const paste = () => page.evaluate((png) => {
+		const file = new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], "shot.png", { type: "image/png" });
+		const data = new DataTransfer(); data.items.add(file);
+		document.getElementById("prompt")!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+	}, PNG);
+	await paste(); await paste();
+	await page.waitForFunction(() => document.querySelectorAll("#attachments img").length === 2);
+	console.log("Smoke: images pasted");
+	await page.waitForFunction(() => Array.from(document.querySelectorAll<HTMLImageElement>("#attachments img")).every((img) => img.complete && img.naturalWidth > 0));
+	console.log("Smoke: thumbnails loaded");
+	await page.locator("#composer").screenshot({ path: join(tmpdir(), "tilldone-desk-paste.png") });
+	await page.locator("#attachments button").first().click();
+	assert.equal(await page.locator("#attachments img").count(), 1, "The remove button drops one pasted image");
+	await page.locator("#prompt").fill("what is this");
+	await page.locator("#send").click();
+	await page.waitForFunction(() => document.getElementById("conversation")!.textContent!.includes("×1"));
+	assert.equal(await page.locator("#attachments").isHidden(), true, "Sending clears the pasted images");
+	assert.equal(await page.locator("#conversation img").count(), 0, "The conversation shows an image chip, not image markup");
 	await page.locator("#prompt").fill("tasks"); await page.locator("#send").click();
 	await page.waitForFunction(() => document.querySelectorAll("#task-list li").length === 2);
 	assert.equal(await page.locator("#task-list li button.split").count(), 1, "Only the unfinished task offers a split button");
@@ -183,6 +202,7 @@ try {
 	await page.waitForFunction(() => document.querySelectorAll(".message").length === 0 && !(document.querySelector("#send") as HTMLButtonElement).disabled);
 	const records = (await readFile(log, "utf8")).trim().split("\n").map((l) => JSON.parse(l));
 	assert.equal(records.some((r) => r.message === "/tilldone"), false);
+	assert.ok(records.some((r) => r.type === "prompt" && r.message === "what is this" && r.images?.length === 1 && r.images[0].mimeType === "image/png" && r.images[0].data === PNG), "The pasted image reaches Pi");
 	assert.ok(records.some((r) => r.type === "prompt" && r.message === 'Split task #1 "write the guide" into smaller subtasks with tilldone split (id=1), then continue.'), "The split button prompts Pi");
 	const launches = records.filter((r) => r.type === "launch");
 	assert.equal(launches.length, 2, "New session launches a fresh Pi");

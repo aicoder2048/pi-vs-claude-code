@@ -175,3 +175,37 @@ describe("split button", () => {
 		expect(toViewModel(ready()).ui.split).toBe("细分");
 	});
 });
+describe("pasted images", () => {
+	const png = { mimeType: "image/png", data: "iVBORw0KGgo=" };
+	const withModel = (input: string[]) => reduce(initial(), { type: "response", command: "get_state", success: true, data: { model: { provider: "p", id: "m", input } } });
+	test("parseIntent accepts up to 10 well-formed images and rejects the rest", () => {
+		expect(parseIntent({ type: "submit", message: "hi", mode: "steer", images: [png] })).toEqual({ type: "submit", message: "hi", mode: "steer", images: [png] });
+		expect(parseIntent({ type: "submit", message: "hi", mode: "steer" })).toEqual({ type: "submit", message: "hi", mode: "steer", images: [] });
+		for (const images of [[{ ...png, mimeType: "image/svg+xml" }], [{ ...png, data: "not base64!" }], [{ ...png, data: 5 }], Array(11).fill(png), "x"]) {
+			expect(parseIntent({ type: "submit", message: "hi", mode: "steer", images })).toBeUndefined();
+		}
+	});
+	test("images ride along on prompt, steer and follow_up; an image alone is enough", () => {
+		const ready = withModel(["text", "image"]);
+		const wire = [{ type: "image", data: png.data, mimeType: png.mimeType }];
+		expect(planIntent(ready, { type: "submit", message: "  ", mode: "steer", images: [png] }).commands).toEqual([{ type: "prompt", message: "", images: wire }]);
+		const running = reduce(ready, { type: "agent_start" });
+		expect(planIntent(running, { type: "submit", message: "look", mode: "steer", images: [png] }).commands).toEqual([{ type: "steer", message: "look", images: wire }]);
+		expect(planIntent(running, { type: "submit", message: "look", mode: "followUp", images: [png] }).commands).toEqual([{ type: "follow_up", message: "look", images: wire }]);
+		expect(planIntent(ready, { type: "submit", message: "text", mode: "steer", images: [] }).commands).toEqual([{ type: "prompt", message: "text" }]);
+	});
+	test("a text-only model gets no images, and the view says so", () => {
+		const textOnly = withModel(["text"]);
+		expect(planIntent(textOnly, { type: "submit", message: "look", mode: "steer", images: [png] }).commands).toHaveLength(0);
+		expect(toViewModel(textOnly).input.images).toBe(false);
+		expect(toViewModel(withModel(["text", "image"])).input.images).toBe(true);
+	});
+	test("a model switch reported by the state poll updates image support", () => {
+		const ready = withModel(["text", "image"]);
+		expect(toViewModel(reduce(ready, { type: "response", command: "get_state", success: true, data: { model: { provider: "p", id: "m", input: ["text"] } } })).input.images).toBe(false);
+	});
+	test("conversation entries count the images a message carries", () => {
+		const s = reduce(initial(), { type: "message_start", message: { role: "user", content: [{ type: "text", text: "see" }, { type: "image", data: "x", mimeType: "image/png" }, { type: "image", data: "y", mimeType: "image/png" }] } });
+		expect(toViewModel(s).conversation.map((e) => [e.text, e.images])).toEqual([["see", 2]]);
+	});
+});

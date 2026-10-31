@@ -53,11 +53,12 @@ function createWindow(): void {
 	window.webContents.on("will-navigate", (event) => event.preventDefault());
 	window.webContents.on("will-attach-webview", (event) => event.preventDefault());
 	// Ctrl+Q also quits on macOS, where the default app menu only binds Cmd+Q.
+	// Ctrl+V also pastes there, as in terminal agents, so a copied screenshot can be pasted either way.
 	window.webContents.on("before-input-event", (event, input) => {
-		if (process.platform === "darwin" && input.type === "keyDown" && input.control && !input.meta && input.key.toLowerCase() === "q") {
-			event.preventDefault();
-			app.quit();
-		}
+		if (process.platform !== "darwin" || input.type !== "keyDown" || !input.control || input.meta) return;
+		const key = input.key.toLowerCase();
+		if (key === "q") { event.preventDefault(); app.quit(); }
+		if (key === "v") { event.preventDefault(); window?.webContents.paste(); }
 	});
 	void window.loadFile(indexPath);
 	window.on("closed", () => { window = null; });
