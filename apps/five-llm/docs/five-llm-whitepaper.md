@@ -93,7 +93,7 @@ L4 方面，五子棋这条线经历了从 Pi 原生 TUI 到 Electron 桌面的�
 
 ### 2.0 四层的来历与原则
 
-四层划分来自 2026-10-28 的讨论（`discussions/2026-10-28-four-layer-harness.md`），当时是把 PyAgent Harness 的四层分析和 IndyDevDan 视频里的 Pi 扩展示例逐层对照后得出的：
+四层划分来自 2026-10-28 的讨论（`discussions/2026-10-28-four-layer-harness.md`），当时是把 Pi Agent Harness 的四层分析和 IndyDevDan 视频里的 Pi 扩展示例逐层对照后得出的：
 
 | 层 | 原始定义 | 不做什么 |
 |---|---|---|

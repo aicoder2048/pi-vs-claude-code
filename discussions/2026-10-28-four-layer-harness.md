@@ -1,7 +1,7 @@
 # 讨论记录：用扩展搭自定义 Pi Agent Harness 的四层架构
 
 - **日期**：2026-10-28
-- **参与**：Sean、Zoe（PyAgent Harness 四层分析的作者）、Grok（tilldone 四层拆解）
+- **参与**：Sean、Zoe（Pi Agent Harness 四层分析的作者）、Grok（tilldone 四层拆解）
 - **用途**：作为后续开发规格（dev spec）的参考依据。第 2–6 节整理讨论结论；第 7 节对照 Pi 1.4.0 源码和本仓库的走读做了核对，写 spec 时以第 7 节为准。
 - **外部参考**：IndyDevDan，*The Pi Coding Agent: The ONLY REAL Claude Code COMPETITOR*（YouTube，2026-02-23）<https://www.youtube.com/watch?v=f8cfH5XX-XU>
 - **仓库内参考**：
@@ -14,7 +14,7 @@
 
 | 部分 | 内容 | 产出 |
 |---|---|---|
-| 一 | 把 Zoe 的 PyAgent Harness 四层架构，和 IndyDevDan 视频里的 Pi 扩展示例逐层对照 | 两边互相印证；发现 context 钩子应该承担“保护”职责 |
+| 一 | 把 Zoe 的 Pi Agent Harness 四层架构，和 IndyDevDan 视频里的 Pi 扩展示例逐层对照 | 两边互相印证；发现 context 钩子应该承担“保护”职责 |
 | 二 | Sean 补充：第三层的本质是业务语义，不是上下文管理 | 第三层的设计原则（第 3 节） |
 | 三 | Sean 和 Grok 讨论 tilldone 扩展的四层拆分和物理结构 | tilldone 重构设计（第 6 节） |
 
@@ -26,7 +26,7 @@
 |---|---|---|---|
 | L1 | Pi 运行时 | 搬运和累积：拼装上下文，把工具结果追加进历史 | 不判断内容好坏。历史会一直增长，除非 compaction 或扩展介入 |
 | L2 | ExtensionAPI（回调注册） | 在 L1 的固定插入点上挂回调，是 L1 和 L3 之间的胶水 | 不放业务规则 |
-| L3 | 业务逻辑（PyAgent 里是 Python） | 决定什么信息进上下文、进多少、以什么形式进 | 不碰渲染，也不直接依赖 Pi 的事件形状 |
+| L3 | 业务逻辑 | 决定什么信息进上下文、进多少、以什么形式进 | 不碰渲染，也不直接依赖 Pi 的事件形状 |
 | L4 | 界面 | HTML 图表、终端摘要、页脚 / widget：一条独立的数据通道 | 不占上下文，也不经过模型转述 |
 
 讨论中最初列出的 L2 “五个插入点”：
@@ -229,4 +229,3 @@ extensions/
 2. 每次请求重新注入受保护内容，会不会破坏 prompt cache？注入的位置和顺序要固定。
 3. tilldone 是否值得拆成目录？还是把它当成“四层拆分”的样板，以后的扩展都照这个结构写？
 4. 叠加扩展时多个扩展抢页脚（D7）：要不要做一个共享的页脚组合器？
-5. PyAgent 的 L3 是 Python，而 Pi 扩展是 TS：L2 和 L3 之间的进程边界、序列化格式还没定。
