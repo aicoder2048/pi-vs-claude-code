@@ -241,6 +241,7 @@ function entryFor(source: Message | Tool, ui: ReturnType<typeof copyFor>, build:
 	entries.set(source, { ui, entry });
 	return entry;
 }
+const isSilentAssistant = (m: Message) => m.kind === "assistant" && !m.error && Object.values(m.blocks).every((value) => !value.trim());
 export function toViewModel(state: State) {
 	const ui = copyFor(state.preferences.language);
 	const counts = countByStatus(state.list);
@@ -258,7 +259,8 @@ export function toViewModel(state: State) {
 			total: state.list.tasks.length, progress: `${counts.done} / ${state.list.tasks.length} ${ui.done}`,
 			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus,
 			items: state.list.tasks.map((t) => ({ ...t, icon: STATUS_ICON[t.status], statusLabel: { idle: ui.taskIdle, inprogress: ui.taskInprogress, done: ui.taskDone }[t.status], current: t.id === active?.id })) },
-		conversation: state.timeline.map((entry) => {
+		// A tool-only assistant turn carries no text, only the call the next tool card already shows.
+		conversation: state.timeline.filter((entry) => entry.kind === "tool" || !isSilentAssistant(messages.get(entry.id)!)).map((entry) => {
 			if (entry.kind === "tool") {
 				const t = tools.get(entry.id)!;
 				return entryFor(t, ui, () => ({ id: t.id, kind: "tool", label: `${t.name} · ${{ running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]}`, text: "", args: pretty(t.args), result: pretty(t.result), error: "" }));

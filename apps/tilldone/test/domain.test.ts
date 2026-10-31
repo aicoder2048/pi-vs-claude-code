@@ -130,3 +130,18 @@ test("streaming a token reuses view entries for the unchanged history", () => {
 	expect(after[1]).not.toBe(before[1]);
 	expect(after[1].text).toBe("hi");
 });
+test("assistant messages without text stay out of the conversation until text arrives", () => {
+	const toolOnly = { role: "assistant", content: [{ type: "thinking", thinking: "plan" }, { type: "toolCall", id: "t1", name: "bash", arguments: {} }] };
+	let s = reduce(initial(), { type: "message_start", message: toolOnly });
+	s = reduce(s, { type: "message_end", message: toolOnly });
+	s = reduce(s, { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} });
+	expect(toViewModel(s).conversation.map((e) => e.kind)).toEqual(["tool"]);
+	s = reduce(s, { type: "message_start", message: { role: "assistant", content: [] } });
+	expect(toViewModel(s).conversation.map((e) => e.kind)).toEqual(["tool"]);
+	s = reduce(s, { type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "done" } });
+	expect(toViewModel(s).conversation.map((e) => [e.kind, e.text])).toEqual([["tool", ""], ["assistant", "done"]]);
+});
+test("an assistant message with an error but no text still shows", () => {
+	const s = reduce(initial(), { type: "message_end", message: { role: "assistant", content: [], errorMessage: "rate limited" } });
+	expect(toViewModel(s).conversation.map((e) => [e.kind, e.error])).toEqual([["assistant", "rate limited"]]);
+});
