@@ -10,7 +10,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { applyExtensionDefaults } from "../themeMap.ts";
-import { agentEnd, gate, INITIAL_MODEL, type Model, restore, runTool, TOOL, userInput } from "./state.ts";
+import { agentEnd, gate, INITIAL_MODEL, type Model, restore, runTool, TOOL, toolCalled, userInput } from "./state.ts";
 import { paint, renderCall, renderResult, showList } from "./ui.ts";
 
 const Params = Type.Object({
@@ -27,6 +27,8 @@ const THEME_KEY_URL = new URL(".", import.meta.url).href;
 
 export default function (pi: ExtensionAPI) {
 	let model: Model = INITIAL_MODEL;
+	// Split hints decided at tool_call, keyed by call id, appended when that call's result comes back.
+	const hints = new Map<string, string>();
 
 	const set = (next: Model, ctx?: ExtensionContext): void => {
 		model = next;
@@ -49,7 +51,21 @@ export default function (pi: ExtensionAPI) {
 	});
 	pi.on("session_tree", async (_event, ctx) => restoreFrom(ctx));
 
-	pi.on("tool_call", async (event) => gate(model, event.toolName));
+	pi.on("tool_call", async (event) => {
+		const verdict = gate(model, event.toolName);
+		if (verdict.block) return verdict;
+		const counted = toolCalled(model, event.toolName);
+		set(counted.model);
+		if (counted.hint) hints.set(event.toolCallId, counted.hint);
+		return verdict;
+	});
+
+	pi.on("tool_result", async (event) => {
+		const hint = hints.get(event.toolCallId);
+		if (!hint) return;
+		hints.delete(event.toolCallId);
+		return { content: [...event.content, { type: "text" as const, text: hint }], structuredContent: event.structuredContent };
+	});
 
 	pi.on("agent_end", async () => {
 		const { model: next, nudge } = agentEnd(model);

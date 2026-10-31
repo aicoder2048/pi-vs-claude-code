@@ -14,6 +14,7 @@ import {
 	type Reply,
 	restore,
 	runTool,
+	toolCalled,
 	userInput,
 } from "./state.ts";
 
@@ -36,6 +37,7 @@ function step(m: Model, params: Params): Model {
 
 const run = (m: Model, ...steps: Params[]) => steps.reduce(step, m);
 const withTasks = (...texts: string[]) => step(INITIAL_MODEL, { action: "add", texts });
+const SPLIT_CUE = "\nBefore you start: if this task holds two or more steps you can verify separately, split it now with `tilldone split`.";
 const statuses = (m: Model) => m.list.tasks.map((t) => `${t.id}:${t.status}`);
 
 describe("new-list (T:405-442)", () => {
@@ -141,13 +143,13 @@ describe("toggle (T:485-527)", () => {
 			texts.push(r.text);
 			m = r.next!;
 		}
-		expect(texts).toEqual(["Task #1: idle → inprogress", "Task #1: inprogress → done", "Task #1: done → idle"]);
+		expect(texts).toEqual([`Task #1: idle → inprogress${SPLIT_CUE}`, "Task #1: inprogress → done", "Task #1: done → idle"]);
 	});
 
 	test("entering inprogress demotes the other active task", () => {
 		const m = run(withTasks("a", "b"), { action: "toggle", id: 1 });
 		const r = reply(runTool(m, { action: "toggle", id: 2 }));
-		expect(r.text).toBe("Task #2: idle → inprogress\n(Auto-paused #1 → idle. Only one task can be in progress at a time.)");
+		expect(r.text).toBe(`Task #2: idle → inprogress\n(Auto-paused #1 → idle. Only one task can be in progress at a time.)${SPLIT_CUE}`);
 		expect(statuses(r.next!)).toEqual(["1:idle", "2:inprogress"]);
 	});
 
@@ -155,7 +157,7 @@ describe("toggle (T:485-527)", () => {
 		const m = restore(INITIAL_MODEL, [
 			{ action: "add", nextId: 4, tasks: [{ id: 1, text: "a", status: "inprogress" }, { id: 2, text: "b", status: "inprogress" }, { id: 3, text: "c", status: "idle" }] },
 		]);
-		expect(reply(runTool(m, { action: "toggle", id: 3 })).text).toBe("Task #3: idle → inprogress\n(Auto-paused #1, #2 → idle. Only one task can be in progress at a time.)");
+		expect(reply(runTool(m, { action: "toggle", id: 3 })).text).toBe(`Task #3: idle → inprogress\n(Auto-paused #1, #2 → idle. Only one task can be in progress at a time.)${SPLIT_CUE}`);
 	});
 });
 
@@ -394,6 +396,52 @@ describe("gate (T:335-361)", () => {
 			for (const tool of ["read", "grep", "find", "ls"]) expect(gate(m, tool)).toEqual({ block: false });
 			for (const tool of ["bash", "edit", "write"]) expect(gate(m, tool).block).toBe(true);
 		}
+	});
+});
+
+describe("split hint by tool calls", () => {
+	const active = () => run(withTasks("a", "b"), { action: "toggle", id: 1 });
+	const calls = (m: Model, n: number, tool = "bash") => {
+		const hints: (string | undefined)[] = [];
+		for (let i = 0; i < n; i++) {
+			const r = toolCalled(m, tool);
+			m = r.model;
+			hints.push(r.hint);
+		}
+		return { model: m, hints };
+	};
+	const hint = (id: number, n: number) =>
+		`💡 TillDone: task #${id} has taken ${n} tool calls so far. If it is bigger than one step, split it with \`tilldone split\` (id=${id}) and keep going.`;
+
+	test("every 15th call on the active task carries a hint", () => {
+		const { hints } = calls(active(), 30);
+		expect(hints.filter(Boolean)).toEqual([hint(1, 15), hint(1, 30)]);
+		expect(hints[14]).toBe(hint(1, 15));
+	});
+
+	test("tilldone calls and calls with no active task are not counted", () => {
+		const idle = withTasks("a");
+		expect(toolCalled(idle, "read").model).toBe(idle);
+		const m = active();
+		expect(toolCalled(m, "tilldone").model).toBe(m);
+	});
+
+	test("the count restarts when the active task changes, not on other edits", () => {
+		const m = calls(active(), 14).model;
+		expect(calls(step(m, { action: "add", text: "c" }), 1).hints[0]).toBe(hint(1, 15));
+		expect(calls(step(m, { action: "toggle", id: 2 }), 14).hints.some(Boolean)).toBe(false);
+		expect(calls(step(m, { action: "split", id: 1, texts: ["x", "y"] }), 15).hints[14]).toBe(hint(3, 15));
+		expect(calls(step(m, { action: "toggle", id: 1 }), 1).model.spent).toBe(0);
+	});
+
+	test("a nudge or a user message keeps the count", () => {
+		const m = calls(active(), 14).model;
+		expect(calls(agentEnd(m).model, 1).hints[0]).toBe(hint(1, 15));
+		expect(calls(userInput(agentEnd(m).model), 1).hints[0]).toBe(hint(1, 15));
+	});
+
+	test("restore restarts the count", () => {
+		expect(restore(calls(active(), 5).model, []).spent).toBe(0);
 	});
 });
 

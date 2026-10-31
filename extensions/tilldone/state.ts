@@ -33,10 +33,13 @@ export interface ListState {
 /**
  * The whole extension state. `nudged` is per user input and never persisted,
  * so restore() replaces `list` and keeps `nudged`, like the original.
+ * `spent` counts tool calls made while the current task is active; it is not
+ * persisted either and restarts whenever the active task changes.
  */
 export interface Model {
 	readonly list: ListState;
 	readonly nudged: boolean;
+	readonly spent: number;
 }
 
 /** index.ts builds the StringEnum from this order; split is appended so the original actions keep their positions. */
@@ -84,6 +87,8 @@ export const TOOL = {
 		"split (id + texts[] of at least 2) — replaces a task in place with smaller subtasks; an in-progress task hands over to its first subtask. " +
 		"Always toggle a task to inprogress before starting work on it, and to done when finished. " +
 		"Use new-list to start a themed list with a title and description. " +
+		"Keep each task small enough to finish and verify in one focused change. If a task turns out bigger, split it instead of letting it grow; " +
+		"if you find work outside the current task, add it as a new task. " +
 		"IMPORTANT: If the user's new request does not fit the current list's theme, use clear to wipe the slate and new-list to start fresh.",
 	actions: ACTIONS,
 	params: {
@@ -106,6 +111,12 @@ export const GATE_REASON = {
 
 export const CONFIRM_TIMEOUT_MS = 30000;
 
+/** Shown when a task becomes active: the moment the model knows most about its size and has spent nothing on it. */
+export const SPLIT_CUE = "\nBefore you start: if this task holds two or more steps you can verify separately, split it now with `tilldone split`.";
+
+/** A task still active after this many tool calls is probably too coarse; the hint repeats at every multiple. */
+export const SPLIT_HINT_EVERY = 15;
+
 // Construction. Every ListState is born here, frozen with fresh Task objects,
 // so an in-place edit anywhere throws instead of rewriting history (the B1 class).
 
@@ -119,12 +130,12 @@ function copyTask(t: Task): Task {
 	return t.from === undefined ? { id: t.id, text: t.text, status: t.status } : { id: t.id, text: t.text, status: t.status, from: t.from };
 }
 
-function makeModel(list: ListState, nudged: boolean): Model {
-	return Object.freeze({ list, nudged });
+function makeModel(list: ListState, nudged: boolean, spent: number): Model {
+	return Object.freeze({ list, nudged, spent });
 }
 
 export const EMPTY_LIST: ListState = makeList([], 1, undefined, undefined);
-export const INITIAL_MODEL: Model = makeModel(EMPTY_LIST, false);
+export const INITIAL_MODEL: Model = makeModel(EMPTY_LIST, false, 0);
 
 // Snapshot and restore boundary (copy in both directions)
 
@@ -171,7 +182,7 @@ export function parseDetails(raw: unknown): ListState | undefined {
 export function restore(model: Model, detailsInBranchOrder: readonly unknown[]): Model {
 	let list = EMPTY_LIST;
 	for (const raw of detailsInBranchOrder) list = parseDetails(raw) ?? list;
-	return makeModel(list, model.nudged);
+	return makeModel(list, model.nudged, 0);
 }
 
 // Tool transition
@@ -247,7 +258,7 @@ const ok = (model: Model, action: Action, list: ListState, text: string): Reply 
 	kind: "reply",
 	text,
 	details: toDetails(list, action),
-	next: list === model.list ? model : makeModel(list, model.nudged),
+	next: list === model.list ? model : makeModel(list, model.nudged, current(list)?.id === current(model.list)?.id ? model.spent : 0),
 });
 
 const notFound = (list: ListState, action: Action, id: number): Reply => fail(list, action, `Task #${id} not found`, `#${id} not found`);
@@ -313,6 +324,7 @@ export function runTool(model: Model, params: Params, consent?: boolean): Ask | 
 			if (demoted.length > 0) {
 				text += `\n(Auto-paused ${demoted.map((id) => `#${id}`).join(", ")} → idle. Only one task can be in progress at a time.)`;
 			}
+			if (next === "inprogress") text += SPLIT_CUE;
 			return ok(model, "toggle", makeList(tasks, list.nextId, list.title, list.description), text);
 		}
 		case "remove": {
@@ -368,6 +380,21 @@ export function gate(model: Model, toolName: string): Verdict {
 	return { block: false };
 }
 
+// Split hint: a task that keeps eating tool calls is a candidate for split
+
+/** Counts one non-tilldone tool call against the active task. Without an active task nothing is counted. */
+export function toolCalled(model: Model, toolName: string): { readonly model: Model; readonly hint?: string } {
+	const task = current(model.list);
+	if (toolName === TOOL.name || !task) return { model };
+	const spent = model.spent + 1;
+	const next = makeModel(model.list, model.nudged, spent);
+	if (spent % SPLIT_HINT_EVERY !== 0) return { model: next };
+	return {
+		model: next,
+		hint: `💡 TillDone: task #${task.id} has taken ${spent} tool calls so far. If it is bigger than one step, split it with \`tilldone split\` (id=${task.id}) and keep going.`,
+	};
+}
+
 // Nudge latch: at most one nudge per user input
 
 export interface Nudge {
@@ -381,7 +408,7 @@ export function agentEnd(model: Model): { readonly model: Model; readonly nudge?
 	if (incomplete.length === 0 || model.nudged) return { model };
 	const lines = incomplete.map((t) => `  ${STATUS_ICON[t.status]} #${t.id} [${STATUS_LABEL[t.status]}]: ${t.text}`).join("\n");
 	return {
-		model: makeModel(model.list, true),
+		model: makeModel(model.list, true, model.spent),
 		nudge: {
 			customType: "tilldone-nudge",
 			content: `⚠️ You still have ${incomplete.length} incomplete task(s):\n\n${lines}\n\nEither continue working on them or mark them done with \`tilldone toggle\`. Don't stop until it's done!`,
@@ -391,7 +418,7 @@ export function agentEnd(model: Model): { readonly model: Model; readonly nudge?
 }
 
 export function userInput(model: Model): Model {
-	return model.nudged ? makeModel(model.list, false) : model;
+	return model.nudged ? makeModel(model.list, false, model.spent) : model;
 }
 
 // Read-only selectors for L4
