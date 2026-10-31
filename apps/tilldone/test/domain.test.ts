@@ -145,3 +145,9 @@ test("an assistant message with an error but no text still shows", () => {
 	const s = reduce(initial(), { type: "message_end", message: { role: "assistant", content: [], errorMessage: "rate limited" } });
 	expect(toViewModel(s).conversation.map((e) => [e.kind, e.error])).toEqual([["assistant", "rate limited"]]);
 });
+test("split subtasks carry their origin into the task panel", () => {
+	const details = { action: "split", nextId: 4, listTitle: "T", listDescription: undefined,
+		tasks: [{ id: 2, text: "x", status: "inprogress", from: 1 }, { id: 3, text: "y", status: "idle", from: 1 }] };
+	const s = reduce(initial(), { type: "tool_execution_end", toolCallId: "t", toolName: "tilldone", result: { details }, isError: false });
+	expect(toViewModel(s).tasks.items.map((t) => t.label)).toEqual(["#2 ← #1", "#3 ← #1"]);
+});

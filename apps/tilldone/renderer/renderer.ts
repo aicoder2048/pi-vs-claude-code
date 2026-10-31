@@ -13,7 +13,7 @@ interface View {
 	status: { model: string; thinking: string; running: boolean; cwd: string; tilldone: string };
 	input: { enabled: boolean; running: boolean; newSession: boolean };
 	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number;
-		items: { id: number; text: string; status: string; statusLabel: string; icon: string; current: boolean }[] };
+		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean }[] };
 	conversation: { id: string; kind: string; label: string; text: string; error: string; args: string; result: string }[];
 	confirm: { id: string; title: string; message: string; remainingSeconds: number | null } | null;
 }
@@ -152,7 +152,7 @@ function render(view: View) {
 	if (taskList.dataset.signature !== taskSignature) {
 		taskList.dataset.signature = taskSignature;
 		taskList.replaceChildren(...view.tasks.items.map((task) => {
-			const li = node("li", `${task.icon}  #${task.id}  ${task.text}`);
+			const li = node("li", `${task.icon}  ${task.label}  ${task.text}`);
 			li.className = task.current ? "current" : task.status;
 			li.setAttribute("aria-label", `${task.statusLabel}: ${task.text}`);
 			return li;

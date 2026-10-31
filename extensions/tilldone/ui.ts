@@ -116,6 +116,7 @@ const TEXT_COLOR = { done: "dim", inprogress: "success", idle: "muted" } as cons
 
 const icon = (t: Task, theme: Theme) => theme.fg(ICON_COLOR[t.status], STATUS_ICON[t.status]);
 const itemText = (t: Task, theme: Theme) => theme.fg(TEXT_COLOR[t.status], t.text);
+const idLabel = (t: Task, theme: Theme) => theme.fg("accent", `#${t.id}`) + (t.from === undefined ? "" : theme.fg("dim", ` ← #${t.from}`));
 
 // Tool renderers
 
@@ -160,7 +161,7 @@ export function renderResult(
 			let text = details.listTitle ? theme.fg("accent", details.listTitle) + theme.fg("dim", "  ") : "";
 			text += theme.fg("muted", `${tasks.length} task(s):`);
 			for (const t of expanded ? tasks : tasks.slice(0, 5)) {
-				text += `\n${icon(t, theme)} ${theme.fg("accent", `#${t.id}`)} ${itemText(t, theme)}`;
+				text += `\n${icon(t, theme)} ${idLabel(t, theme)} ${itemText(t, theme)}`;
 			}
 			if (!expanded && tasks.length > 5) text += `\n${theme.fg("dim", `... ${tasks.length - 5} more`)}`;
 			return new Text(text, 0, 0);
@@ -225,7 +226,7 @@ class TillDoneListComponent {
 				),
 			);
 			lines.push("");
-			for (const t of tasks) lines.push(truncateToWidth(`  ${icon(t, th)} ${th.fg("accent", `#${t.id}`)} ${itemText(t, th)}`, width));
+			for (const t of tasks) lines.push(truncateToWidth(`  ${icon(t, th)} ${idLabel(t, th)} ${itemText(t, th)}`, width));
 		}
 
 		lines.push("");

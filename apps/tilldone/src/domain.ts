@@ -258,7 +258,7 @@ export function toViewModel(state: State) {
 		tasks: { title: state.list.title ?? "TillDone", description: state.list.description ?? "", done: counts.done,
 			total: state.list.tasks.length, progress: `${counts.done} / ${state.list.tasks.length} ${ui.done}`,
 			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus,
-			items: state.list.tasks.map((t) => ({ ...t, icon: STATUS_ICON[t.status], statusLabel: { idle: ui.taskIdle, inprogress: ui.taskInprogress, done: ui.taskDone }[t.status], current: t.id === active?.id })) },
+			items: state.list.tasks.map((t) => ({ ...t, label: t.from === undefined ? `#${t.id}` : `#${t.id} ← #${t.from}`, icon: STATUS_ICON[t.status], statusLabel: { idle: ui.taskIdle, inprogress: ui.taskInprogress, done: ui.taskDone }[t.status], current: t.id === active?.id })) },
 		// A tool-only assistant turn carries no text, only the call the next tool card already shows.
 		conversation: state.timeline.filter((entry) => entry.kind === "tool" || !isSilentAssistant(messages.get(entry.id)!)).map((entry) => {
 			if (entry.kind === "tool") {
