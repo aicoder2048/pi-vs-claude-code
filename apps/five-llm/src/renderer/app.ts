@@ -76,6 +76,23 @@ function stone(x: number, y: number, color: 1 | 2, number?: number, ghost = fals
   }
   ctx.restore();
 }
+function lastMoveHalo(point: Point): void {
+  const px = PAD + point.x * STEP, py = PAD + point.y * STEP;
+  const r = STEP * .448, outer = r + 12;
+  ctx.save();
+  // A persistent halo, not a timed flash: still visible after a long LLM turn.
+  // Leave the stone itself transparent so its color and move number stay legible.
+  const glow = ctx.createRadialGradient(px, py, r, px, py, outer);
+  glow.addColorStop(0, '#19cbdab0'); glow.addColorStop(.45, '#19cbda60'); glow.addColorStop(1, '#19cbda00');
+  ctx.fillStyle = glow; ctx.beginPath();
+  ctx.arc(px, py, outer, 0, Math.PI * 2); ctx.arc(px, py, r, 0, Math.PI * 2, true); ctx.fill();
+  // Light separation plus a saturated outline work on both black and white stones.
+  ctx.strokeStyle = '#f0ffff'; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.arc(px, py, r + 3, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = '#087f8c'; ctx.lineWidth = 3;
+  ctx.shadowColor = '#19cbda'; ctx.shadowBlur = 8;
+  ctx.stroke(); ctx.restore();
+}
 function draw(): void {
   const dpr = window.devicePixelRatio || 1;
   const width = Math.round(canvas.clientWidth * dpr);
@@ -107,11 +124,8 @@ function draw(): void {
   if (!state) return;
   const p = position();
   p.moves.forEach((move, i) => stone(move.x, move.y, move.color, showNumbers ? i + 1 : undefined));
-  if (p.moves.length) {
-    const last = p.moves.at(-1)!;
-    ctx.strokeStyle = '#b36c4e'; ctx.lineWidth = 1.6;
-    ctx.beginPath(); ctx.arc(PAD + last.x * STEP, PAD + last.y * STEP, STEP * .448 + 3, 0, Math.PI * 2); ctx.stroke();
-  }
+  const last = p.moves.at(-1);
+  if (last) lastMoveHalo(last);
   if (p.winningLine.length) {
     for (const point of p.winningLine) {
       ctx.strokeStyle = '#a75839'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(PAD + point.x * STEP, PAD + point.y * STEP, STEP * .36, 0, Math.PI * 2); ctx.stroke();
@@ -129,7 +143,10 @@ function draw(): void {
     ctx.strokeStyle = '#536850'; ctx.lineWidth = 2;
     ctx.strokeRect(PAD + keyboard.x * STEP - STEP / 2 + 2, PAD + keyboard.y * STEP - STEP / 2 + 2, STEP - 4, STEP - 4);
   }
-  canvas.setAttribute('aria-label', `15 路五子棋，${p.moves.length} 手。选中 ${coordinate(keyboard)}，${state.status === 'human' ? '回车落子' : '等待机器方'}`);
+  const latest = last ? `最近落子：${last.color === state.human ? '你' : 'LLM'} · ${last.color === 1 ? '黑' : '白'} ${coordinate(last)} · 第 ${p.moves.length} 手` : '';
+  const caption = latest ? `青色光晕 · ${latest}` : '15 × 15 ／ 自由五子棋 · 连五获胜 · 无禁手';
+  if ($('last-move').textContent !== caption) $('last-move').textContent = caption;
+  canvas.setAttribute('aria-label', `15 路五子棋，${p.moves.length} 手。${latest ? `${latest}。` : ''}选中 ${coordinate(keyboard)}，${state.status === 'human' ? '回车落子' : '等待机器方'}`);
 }
 function render(): void {
   if (!state) return;

@@ -14,6 +14,22 @@ try {
   await expect(page.locator('#model')).toContainText('fixture');
   await expect(page.locator('#status-title')).toHaveText('从天元开始，也很好');
   await expect(page.locator('#match-format')).toHaveText('三局两胜');
+  await expect(page.locator('#last-move')).not.toContainText('最近落子');
+  async function expectLatestMove(owner: '你' | 'LLM', ply: number): Promise<void> {
+    const label = await page.locator('#moves button').nth(ply - 1).getAttribute('aria-label');
+    const coord = label!.match(/([A-O]\d+)$/)![1];
+    await expect(page.locator('#last-move')).toHaveText(`青色光晕 · 最近落子：${owner} · ${ply % 2 ? '黑' : '白'} ${coord} · 第 ${ply} 手`);
+    await expect(page.locator('#board')).toHaveAttribute('aria-label', new RegExp(`最近落子：${owner}`));
+    // Verify the rendered cyan ring itself, not just its descriptive caption.
+    const pixel = await page.locator('#board').evaluate((element: HTMLCanvasElement, coord) => {
+      const step = (760 - 104) / 14, scale = element.width / 760;
+      const x = 52 + (coord.charCodeAt(0) - 65) * step + step * .448 + 3;
+      const y = 52 + (15 - Number(coord.slice(1))) * step;
+      return Array.from(element.getContext('2d')!.getImageData(Math.round(x * scale), Math.round(y * scale), 1, 1).data);
+    }, coord);
+    expect(pixel[1] - pixel[0]).toBeGreaterThan(35);
+    expect(pixel[2] - pixel[0]).toBeGreaterThan(35);
+  }
   // Enable the existing practice undo flow explicitly; competition defaults to no undo.
   await page.locator('#new-game').click(); await page.locator('#allow-undo').check();
   await page.locator('button[value=start]').click();
@@ -24,12 +40,22 @@ try {
   await expect(page.locator('#record-count')).toHaveText('2 MOVES');
   await expect(page.locator('#status-badge')).toHaveText('轮到你了');
   await expect(page.locator('#reason-text')).toContainText('自动化测试');
+  await expectLatestMove('LLM', 2);
+  await page.locator('#board').screenshot({ path: 'artifacts/last-move-llm.png' });
+  await page.locator('#numbers').click();
+  await expectLatestMove('LLM', 2); // Highlight must not depend on move numbers.
+  await page.locator('#numbers').click();
   // Replay cannot add a move; returning live restores the authoritative board.
   await page.locator('#moves button').first().click();
   await expect(page.locator('#status-badge')).toHaveText('棋谱回看');
+  await expectLatestMove('你', 1);
+  await page.locator('#board').screenshot({ path: 'artifacts/last-move-human.png' });
   await page.locator('#board').press('ArrowRight'); await page.locator('#board').press('Enter');
   await expect(page.locator('#record-count')).toHaveText('2 MOVES');
+  await page.locator('#replay').fill('0');
+  await expect(page.locator('#last-move')).not.toContainText('最近落子');
   await page.locator('#live').click();
+  await expectLatestMove('LLM', 2);
   await page.locator('#hints').click();
   const music = page.locator('#background-music');
   await page.locator('#music').click(); await expect(page.locator('#music')).toHaveAttribute('aria-pressed', 'true');
@@ -66,6 +92,7 @@ try {
   }
   await page.screenshot({ path: 'artifacts/desktop.png', fullPage: true });
   await page.locator('#undo').click(); await expect(page.locator('#record-count')).toHaveText('0 MOVES');
+  await expect(page.locator('#last-move')).not.toContainText('最近落子');
   // White human: LLM fixture makes the opening, human is next.
   await page.locator('#new-game').click();
   await page.locator('input[name=color][value="2"]').check();
@@ -73,6 +100,7 @@ try {
   await expect(page.locator('#record-count')).toHaveText('1 MOVES');
   await expect(page.locator('#human-color')).toHaveText('执白 · 后手');
   await expect(page.locator('#status-badge')).toHaveText('轮到你了');
+  await expectLatestMove('LLM', 1); // LLM opening as black receives the same halo.
   await page.screenshot({ path: 'artifacts/white-opening.png', fullPage: true });
   // A round result is distinct from a match result; first to two wins ends BO3.
   await page.locator('#resign').click(); await page.locator('button[value=resign]').click();

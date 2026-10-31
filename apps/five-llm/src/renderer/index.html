@@ -15,7 +15,7 @@
       <section class="match-strip" aria-label="比赛比分"><div><strong id="match-format">三局两胜</strong><span id="round-label">第 1 盘 · 先胜 2 局</span></div><div class="match-score"><span>你</span><b id="human-wins">0</b><i>:</i><b id="machine-wins">0</b><span>LLM</span></div><span id="match-result">局间换色 · 和棋重赛</span></section>
       <div class="board-toolbar"><div class="turn-indicator"><span class="mini-stone black" id="turn-stone"></span><strong id="turn-text">黑棋先行</strong><span class="muted" id="ply-text">第 01 手</span></div><div class="board-toggles"><button id="numbers" class="text-button active" aria-pressed="true">手数</button><span>·</span><button id="hints" class="text-button" aria-pressed="false">候选点</button></div></div>
       <div class="board-stage"><div class="board-surround"><canvas id="board" width="760" height="760" tabindex="0" role="grid" aria-label="15 路五子棋棋盘，方向键选择位置，回车落子"></canvas></div></div>
-      <div class="board-caption"><span>15 × 15 <i>／</i> 自由五子棋 · 连五获胜 · 无禁手</span><span id="board-mode">LIVE GAME</span></div>
+      <div class="board-caption"><span id="last-move" aria-live="polite" aria-atomic="true">15 × 15 ／ 自由五子棋 · 连五获胜 · 无禁手</span><span id="board-mode">LIVE GAME</span></div>
       <div class="game-actions"><button id="next-round" class="primary" hidden>下一局 →</button><button id="new-game">⚙ 新比赛 / 设置</button><button id="undo">↶ 悔棋</button><button id="resign">认输</button><button id="export">↗ 导出棋谱</button><div class="spacer"></div><span class="key-hint">方向键 · Enter</span></div>
       <div class="replay-strip"><label for="replay">棋谱回看</label><input id="replay" type="range" min="0" max="0" value="0" aria-label="棋谱回看手数"><span id="replay-ply">0 / 0</span><button id="live" class="text-button">返回实战</button></div>
     </section>
