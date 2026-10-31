@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { chargeClock, DEFAULT_SETTINGS, newClock, switchClock, validateSettings } from '../src/business/clock';
 import { GameService, type AgentDriver, type TurnPort } from '../src/business/game-service';
 import { MoveRiskError } from '../src/business/expert';
+import { createDecisionTrace, recordDecisionTool, turnGuidance } from '../src/business/decision';
+import { normalizeRecord } from '../src/business/learning';
 import { searchPosition } from '../src/business/search';
 const noSearch = { async search(p: import('../src/business/engine').Position) { return searchPosition(p, { maxMs: 0, maxNodes: 0 }); } };
 import { RECORDED_GAME } from './fixtures/recorded-game';
@@ -12,32 +14,32 @@ const black = { from: { x: 0, y: 3 }, to: { x: 0, y: 4 } };
 class Driver implements AgentDriver { turns: TurnPort[] = []; async run(port: TurnPort) { this.turns.push(port); await new Promise<void>(() => {}); } }
 function harness(overrides: Partial<MatchSettings> = {}) {
   let now = 0; const driver = new Driver();
-  const service = new GameService(driver, model, { now: () => now, search: noSearch, settings: { ...DEFAULT_SETTINGS, mainTimeMs: 1000, incrementMs: 100, ...overrides } });
+  const service = new GameService(driver, model, { now: () => now, search: noSearch, settings: { ...DEFAULT_SETTINGS, timeControl: 'fischer', mainTimeMs: 1000, incrementMs: 100, ...overrides } });
   return { driver, service, advance(ms: number) { now += ms; } };
 }
 describe('authoritative Fischer / absolute clocks', () => {
-  test('new matches default to 50 minutes per side plus 20 seconds per move', () => {
-    expect(DEFAULT_SETTINGS).toMatchObject({ timeControl: 'fischer', mainTimeMs: 3000000, incrementMs: 20000 });
+  test('new matches default to 30 minutes per side, absolute time with no increment', () => {
+    expect(DEFAULT_SETTINGS).toMatchObject({ timeControl: 'absolute', mainTimeMs: 1800000, incrementMs: 0 });
     const service = new GameService(new Driver(), model, { now: () => 0, search: noSearch });
-    expect(service.snapshot().clock.players).toEqual({ 1: { mainMs: 3000000 }, 2: { mainMs: 3000000 } });
+    expect(service.snapshot().clock.players).toEqual({ 1: { mainMs: 1800000 }, 2: { mainMs: 1800000 } });
     expect(service.record().match.settings).toEqual(DEFAULT_SETTINGS); service.dispose();
   });
   test('both sides may think for many minutes; only their remaining clock limits a move', async () => {
     const h = harness({ ...DEFAULT_SETTINGS });
     h.advance(12 * 60000); h.service.humanMove(red, 0);
-    expect(h.service.snapshot().clock.players[1].mainMs).toBe(38 * 60000 + 20000);
+    expect(h.service.snapshot().clock.players[1].mainMs).toBe(18 * 60000);
     const port = h.driver.turns[0];
     h.advance(20 * 60000); h.service.tick();
     expect(port.signal.aborted).toBe(false); expect(h.service.snapshot().status).toBe('thinking');
     await port.commit(black, '长考二十分钟后及时落子，仍只扣己方总棋钟。');
-    expect(h.service.snapshot().clock.players[2].mainMs).toBe(30 * 60000 + 20000);
+    expect(h.service.snapshot().clock.players[2].mainMs).toBe(10 * 60000);
     expect(h.service.snapshot().notes[0].elapsedMs).toBe(20 * 60000);
     expect(h.service.snapshot().outcome).toBeNull();
     h.service.resign(); h.service.nextRound();
-    expect(h.service.snapshot().clock.players).toEqual({ 1: { mainMs: 3000000 }, 2: { mainMs: 3000000 } }); h.service.dispose();
+    expect(h.service.snapshot().clock.players).toEqual({ 1: { mainMs: 1800000 }, 2: { mainMs: 1800000 } }); h.service.dispose();
   });
   test('only active side charged, increment awarded once after a timely move', () => {
-    const s = { ...DEFAULT_SETTINGS, mainTimeMs: 1000, incrementMs: 100 }, c = newClock(s, 0);
+    const s = { ...DEFAULT_SETTINGS, timeControl: 'fischer' as const, mainTimeMs: 1000, incrementMs: 100 }, c = newClock(s, 0);
     chargeClock(c, s, 300); expect(c.players[1].mainMs).toBe(700); expect(c.players[2].mainMs).toBe(1000);
     switchClock(c, s, 2); expect(c.players[1].mainMs).toBe(800);
     chargeClock(c, s, 500); expect(c.players[2].mainMs).toBe(800);
@@ -76,6 +78,27 @@ async function recordedTurn(plies: number) {
   }
   return h;
 }
+describe('decision persistence', () => {
+  test('accepted commit audit is complete at the first emitted/saveable revision, detached from driver state', async () => {
+    const h = harness(), saved: ReturnType<GameService['record']>[] = [];
+    h.service.subscribe(() => { saved.push(h.service.record()); });
+    h.service.humanMove(red, 0); const port = h.driver.turns[0];
+    const trace = createDecisionTrace(port.state.revision, turnGuidance(port.state)!);
+    recordDecisionTool(trace, 'move_piece', false); recordDecisionTool(trace, 'review_move', true);
+    trace.skillsRead.push('compare-candidates'); port.setDecision!(trace);
+    await port.commit(black, '先安全挺卒');
+    const record = saved.find(r => r.moves.length === 2)!;
+    const decision = record.notes[0].decision!;
+    expect(decision.tools).toEqual([{ name: 'move_piece', ok: false }, { name: 'review_move', ok: true }, { name: 'move_piece', ok: true }]);
+    expect(decision.steps.find(s => s.id === 'commit')?.status).toBe('done');
+    trace.skillsRead.push('coordinates');
+    expect(h.service.record().notes[0].decision).toEqual(decision);
+    expect(normalizeRecord(record).moves).toHaveLength(2);
+    delete record.notes[0].decision;
+    expect(normalizeRecord(record).moves).toHaveLength(2);
+    h.service.dispose();
+  });
+});
 describe('authoritative business expert guard', () => {
   test('actual free-rook and poisoned-pawn proposals are reviewed even without using a review tool', async () => {
     for (const ply of [41, 43]) {

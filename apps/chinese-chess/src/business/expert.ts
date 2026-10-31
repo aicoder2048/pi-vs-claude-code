@@ -202,17 +202,17 @@ function knowledge(p: Position, phase: Phase, safety: PieceSafety[]): Principle[
   const rules: Principle[] = [];
   const loose = safety.filter(x => x.color === p.next && x.loose);
   const pins = safety.filter(x => x.pinnedToKing);
-  if (loose.length) rules.push({ id: 'hanging-pieces', title: '先处理失守大子', evidence: loose.map(x => x.piece), advice: '先算对方能否白吃，再比较撤退、保护、反击；几何保护不等于能合法回吃。' });
-  if (pins.length) rules.push({ id: 'pins', title: '将帅安全牵制', evidence: pins.map(x => x.piece), advice: '这些子离开原位可能暴露将帅，不能把它们的几何保护当成可靠回吃；也可能涉及马腿或炮架。' });
-  if (phase === 'opening') rules.push({ id: 'development', title: '开局出子与车路', evidence: own.filter(x => ['rook', 'horse'].includes(x.kind) && x.y === (x.color === 1 ? 9 : 0)).map(name), advice: '尽早协调车马炮、疏通车路；避免无收益重复移动。不要为出子把车放到对方车口；安全与具体战术优先于口诀。' });
+  if (loose.length) rules.push({ id: 'hanging-pieces', title: '先处理失守大子', evidence: loose.map(x => x.piece), advice: '核查合法回吃并处理失守子。' });
+  if (pins.length) rules.push({ id: 'pins', title: '将帅安全牵制', evidence: pins.map(x => x.piece), advice: '离位前重验将帅安全与合法回吃。' });
+  if (phase === 'opening') rules.push({ id: 'development', title: '开局出子与车路', evidence: own.filter(x => ['rook', 'horse'].includes(x.kind) && x.y === (x.color === 1 ? 9 : 0)).map(name), advice: '在安全前提下协调出子与车路。' });
   const recent = p.moves.filter(x => x.color === p.next).slice(-3);
-  if (phase === 'opening' && recent.some(x => recent.filter(y => y.piece.id === x.piece.id).length >= 2)) rules.push({ id: 'repeated-development', title: '重复动子须有具体收益', evidence: recent.map(x => x.notation), advice: '最近多次移动同一枚子；若不是必要应将、得子或制造有效威胁，比较发展其他子力。不能只为避免重复而走不安全的棋。' });
-  if (own.some(x => x.kind === 'horse')) rules.push({ id: 'horse-legs', title: '马看实际活动空间', evidence: own.filter(x => x.kind === 'horse').map(name), advice: '检查马腿、可落脚点和被兵卒限制情况。挂角、卧槽等形状只是攻势线索，必须验证应将与反将。' });
-  if (own.some(x => x.kind === 'cannon')) rules.push({ id: 'cannon-screen', title: '炮架是动态资源', evidence: own.filter(x => x.kind === 'cannon').map(name), advice: '吃子必须恰有一个炮架；移动或吃掉炮架会改变双方炮线。沉底炮、重炮形状不保证成杀；切勿贪兵后被马车白吃。' });
-  rules.push({ id: 'king-safety', title: '九宫与对手先手', evidence: [...own.filter(x => x.kind === 'king').map(name), `己方剩 ${own.filter(x => x.kind === 'advisor').length} 士仕、${own.filter(x => x.kind === 'elephant').length} 相象`], advice: '先看对方将军、杀棋、吃大子，再看己方进攻。士象缺损、肋道及底线开放时优先验证直接杀；困毙也判负。' });
-  if (phase === 'endgame') rules.push({ id: 'endgame', title: '残局价值与胜和边界', evidence: ['当前大子数量不超过6'], advice: '残局马炮价值随空间与炮架变化；支持将帅与兵卒协同。优势可考虑简化，但不能兑成无法取胜的残局；理论胜和须具体计算，当前无残局库。' });
+  if (phase === 'opening' && recent.some(x => recent.filter(y => y.piece.id === x.piece.id).length >= 2)) rules.push({ id: 'repeated-development', title: '重复动子须有具体收益', evidence: recent.map(x => x.notation), advice: '复核重复动子是否有具体收益。' });
+  if (own.some(x => x.kind === 'horse')) rules.push({ id: 'horse-legs', title: '马看实际活动空间', evidence: own.filter(x => x.kind === 'horse').map(name), advice: '按实际马腿与合法落点判断活动。' });
+  if (own.some(x => x.kind === 'cannon')) rules.push({ id: 'cannon-screen', title: '炮架是动态资源', evidence: own.filter(x => x.kind === 'cannon').map(name), advice: '走子后重新核对双方炮架。' });
+  rules.push({ id: 'king-safety', title: '九宫与对手先手', evidence: [...own.filter(x => x.kind === 'king').map(name), `己方剩 ${own.filter(x => x.kind === 'advisor').length} 士仕、${own.filter(x => x.kind === 'elephant').length} 相象`], advice: '先核查直接杀与困毙风险。' });
+  if (phase === 'endgame') rules.push({ id: 'endgame', title: '残局价值与胜和边界', evidence: ['当前大子数量不超过6'], advice: '按空间和炮架比较残局兑换。' });
   const balance = material(p, p.next, phase) - material(p, other(p.next), phase);
-  if (Math.abs(balance) >= 400) rules.push({ id: 'material-plan', title: balance > 0 ? '优势时避免无补偿损失' : '劣势时寻找有依据的反击', evidence: [`当前行棋方子力差 ${balance}`], advice: balance > 0 ? '优先保住大子并处理反杀；是否兑子取决于兑后局面，不是见子就换。' : '可考虑主动子力与弃子攻杀，但须给出具体变化，不能把没有补偿的送子称为主动。' });
+  if (Math.abs(balance) >= 400) rules.push({ id: 'material-plan', title: balance > 0 ? '优势时避免无补偿损失' : '劣势时寻找有依据的反击', evidence: [`当前行棋方子力差 ${balance}`], advice: balance > 0 ? '保住优势并核对兑后局面。' : '用具体变化核验反击补偿。' });
   return rules.slice(0, 8);
 }
 export function analyzeExpert(p: Position, options: ExpertOptions = {}): Analysis {
@@ -257,9 +257,9 @@ export function analyzeExpert(p: Position, options: ExpertOptions = {}): Analysi
     priorities: [base.inCheck ? '当前被将军，必须先应将。' : '先审查对方将军与直接杀，再评估吃子、交换和布局。', ...ownThreats.slice(0, 4).map(x => `${x.piece} 可被 ${x.legalAttackers.join('、')} 合法攻击${x.loose ? '，无几何保护' : '；有保护仍须验算交换'}。`)],
     principles: [...knowledge(p, phase, safety),
       ...(ownPosition.inactiveMajors.length ? [{ id: 'activate-idle-pieces', title: '把闲置子力接入战斗', evidence: ownPosition.inactiveMajors,
-        advice: '比较疏通车路、调炮与解除牵制；不能只修补眼前受攻点。闲子指标是启发式，不可为出子忽略直接杀或送大子。' }] : []),
+        advice: '在安全前提下比较激活闲子。' }] : []),
       ...(ownPosition.repeatedMoves.length ? [{ id: 'tempo-waste', title: '无收益往返需要重新制定计划', evidence: ownPosition.repeatedMoves,
-        advice: '检查是否必须防守；若非必要，比较解围、兑换进攻子和发展其他子力，而非继续往返。' }] : [])], candidates,
+        advice: '复核往返必要性并重新制定计划。' }] : [])], candidates,
     coverage: { reviewedMoves: candidates.length, totalMoves: all.length, nodes: budget.nodes, budgetExhausted: budget.exhausted },
     limitations: ['反击检查覆盖候选后的对方一手；未覆盖候选和预算截断不代表安全。', '同格交换最多6次后续吃子，允许放弃交换；不完整搜索异地战术、强制应将及长期弃子补偿。', '动态子力、活动性与专家原则均为启发式，不是胜率；战术计算不含完整开残局库或外部引擎，来源定式与案例另行按需注入。'] };
   return { ...base, redScore: red, blackScore: black, expert,
@@ -269,7 +269,7 @@ export function analyzeExpert(p: Position, options: ExpertOptions = {}): Analysi
 export function needsRiskAcknowledgement(review: MoveReview): boolean { return review.risk === 'loss' || review.risk === 'material-loss'; }
 export class MoveRiskError extends Error {
   constructor(public readonly review: MoveReview) {
-    super(`专家审查发现风险，尚未落子。请比较替代走法；若坚持有依据的弃子，需用 riskAcknowledgement 明确解释补偿或不可避免的败势。${JSON.stringify(review)}`);
+    super(`专家审查发现风险，尚未落子。优先比较替代走法；坚持接受风险前 read_skill('playbook-risk-acknowledgement')。${JSON.stringify({ risk: review.risk, estimatedNet: review.estimatedNet, line: review.line, warnings: review.warnings })}`);
     this.name = 'MoveRiskError';
   }
 }

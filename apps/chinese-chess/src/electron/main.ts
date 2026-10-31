@@ -3,11 +3,14 @@ import { mkdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PiDriver } from '../agent/pi-driver';
+import { assertSkills, SkillCatalog } from '../agent/skill-loader';
+import { DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { selectStartupModel } from '../agent/model-selection';
 import { GameService, type AgentDriver } from '../business/game-service';
 import type { Command, GameRecord, ModelChoice, Reply } from '../shared/types';
 import { analyze, inside } from '../business/engine';
 import { validGameId } from '../business/learning';
+import { recordSaveKey } from '../business/turn-timing';
 import { LearningCoordinator } from '../learning/coordinator';
 import { validateSettings } from '../business/clock';
 import { WorkerSearchDriver } from '../learning/search-driver';
@@ -60,21 +63,35 @@ async function initialize(): Promise<void> {
   let driver: AgentDriver;
   try {
     if (isSmoke) {
+      // Exercise Pi discovery plus fs/readdir/realpath through Electron's asar
+      // layer, even though the UI move fixture deliberately never uses an LLM.
+      const catalog = new SkillCatalog(path.join(here, '../skills'));
+      const loader = new DefaultResourceLoader({ cwd: app.getPath('userData'), agentDir: app.getPath('userData'),
+        settingsManager: SettingsManager.inMemory(), noSkills: true, additionalSkillPaths: [catalog.dir],
+        noExtensions: true, noThemes: true, noPromptTemplates: true, noContextFiles: true });
+      await loader.reload(); const loaded = loader.getSkills(); assertSkills(loaded.skills, loaded.diagnostics);
+      catalog.read('read-expert-report', 'principles.md');
       // Explicit UI-test fixture, never used by a normal app launch.
       models = [{ provider: 'test', id: 'fixture', name: 'UI test fixture (not LLM)' }];
       driver = { async run(port) {
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Synthetic timings for UI assertions only, never a latency benchmark.
+        port.telemetry?.({ type: 'start', id: 'fixture-model', kind: 'model', name: 'request-1' });
+        await new Promise(resolve => setTimeout(resolve, 400));
         if (port.signal.aborted) return;
+        port.telemetry?.({ type: 'first-delta', id: 'fixture-model' });
+        port.telemetry?.({ type: 'end', id: 'fixture-model', ok: true });
         // Deliberately use the legacy capture-first move for reproducible
         // animation tests; this fixture is not a chess-strength benchmark.
         const move = analyze(port.state.position).candidates[0];
         port.log('extension', 'UI fixture · move_piece');
         port.updatePlan?.({ action: 'revise', reason: '仅用于桌面测试的计划展示，不是棋力评测。', objective: 'UI fixture · 协调车炮',
           problem: '展示结构化计划与保存链路', opponentThreat: '测试仍须按规则检查直接威胁', nextSteps: ['验证当前走法与风险'], abandonWhen: '下一次走子时重新复核' });
+        port.telemetry?.({ type: 'start', id: 'fixture-move', kind: 'tool', name: 'move_piece' });
         await port.commit(move, '仅用于桌面自动化测试的固定应答。');
+        port.telemetry?.({ type: 'end', id: 'fixture-move', ok: true });
       } };
     } else {
-      const pi = await PiDriver.create(app.getPath('userData'));
+      const pi = await PiDriver.create(app.getPath('userData'), path.join(here, '../skills'));
       models = await pi.models(); driver = pi;
     }
   } catch (error) {
@@ -97,7 +114,7 @@ async function initialize(): Promise<void> {
   let savedKey = '';
   service.subscribe(state => {
     if (window && !window.isDestroyed()) window.webContents.send('chess:state', state);
-    const key = `${state.id}/${state.revision}`;
+    const key = recordSaveKey(state);
     if (key !== savedKey) { savedKey = key; autosave(service.record()); }
   });
   ipcMain.handle('chess:bootstrap', (event) => reply(() => { trusted(event); return { state: service.view(), models, setupError, learning: learning.snapshot() }; }));

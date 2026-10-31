@@ -2,6 +2,8 @@ import { at, colorName, glyph, inCheck, legalMoves, other, replay, same, type An
 import { REASON_TEXT, type Command, type GameState, type ModelChoice } from '../shared/types';
 import type { Risk } from '../business/expert';
 import { setupLearningUI } from './learning-ui';
+import { conditionalText, motifText, principleText } from './skill-text';
+import { progressText, timingLines, timingSummary } from './turn-feedback';
 import { Ambience, type MusicStyle } from './audio';
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const text = (id: string, value: string) => { el(id).textContent = value; };
@@ -94,7 +96,7 @@ function renderStatus() {
   const reviewing = view !== null;
   let badge = reviewing ? '棋谱回看' : state.status === 'thinking' ? '大模型思考中' : state.status === 'human' ? '轮到你了' : state.status === 'over' ? state.match.winner ? '比赛结束' : '本局结束' : state.status === 'error' ? '模型请求未完成' : '等待继续';
   let title = state.position.moves.length ? state.analysis.inCheck ? '将军！先护好将帅' : '运筹帷幄，步步为营' : '楚河汉界，落子有声';
-  let description = state.error || (state.status === 'thinking' ? '大模型正通过 Pi 分析棋局、试算变化。思考与网络等待均计入它的棋钟。' : state.status === 'human' ? '点击己方棋子，再点击目标位置。绿点为合法走法，红圈为可吃棋子。' : '请求已停止，棋钟继续。点击「继续 / 重试」让大模型行棋。');
+  let description = state.error || (state.status === 'thinking' ? `${state.progress ? progressText(state.progress) : '大模型正在分析棋局'}。网络与计算均计入棋钟。` : state.status === 'human' ? '点击己方棋子，再点击目标位置。绿点为合法走法，红圈为可吃棋子。' : '请求已停止，棋钟继续。点击「继续 / 重试」让大模型行棋。');
   if (state.outcome) {
     title = state.outcome.winner === 'draw' ? '此局言和，再论高下' : state.outcome.winner === state.human ? '你赢下了这一局' : '大模型赢下了这一局';
     description = `${REASON_TEXT[state.outcome.reason]}。${state.match.winner ? `比赛结束，${state.match.winner === 'human' ? '你' : '大模型'}赢得本场比赛。` : '下一局重新配时；胜负局交换红黑，和棋同色重赛。'}`;
@@ -113,6 +115,9 @@ function renderStatus() {
   const note = [...state.notes].reverse().find(n => n.ply <= (view ?? state.position.moves.length));
   text('reason-text', note?.reason || '等大模型落子后，这里会记录它公开的落子理由。');
   text('reason-meta', note ? `第 ${note.ply} 手 · ${(note.elapsedMs / 1000).toFixed(1)} 秒 · ${note.model}` : '只记录公开落子理由，不展示私有思维链。');
+  const attempt = view === null && state.status !== 'thinking' ? state.attempts?.at(-1) : undefined;
+  text('reason-timing', attempt && (!note || attempt.ply > note.ply) ? `最近未落子尝试：${timingSummary(attempt.timing)}` :
+    note?.timing ? timingSummary(note.timing) : note ? '此棋谱未记录耗时分解。' : '落子后显示模型往返、工具与复查耗时。');
   const range = input('replay'); range.max = String(state.position.moves.length); range.value = String(view ?? state.position.moves.length);
   button('back').disabled = (view ?? state.position.moves.length) === 0; button('forward').disabled = view === null || view >= state.position.moves.length;
   select('model').value = state.model ? `${state.model.provider}/${state.model.id}` : '';
@@ -153,10 +158,10 @@ function renderExpert() {
   for (const value of report.priorities) priorities.append(node('p', value));
   const sourced = section('按需注入的定式与来源知识');
   if (!report.knowledge?.length) sourced.append(node('p', '没有匹配到本包覆盖的定式或条件资料，不强行套用。'));
-  for (const k of report.knowledge ?? []) { const article = document.createElement('article'); article.append(node('h4', k.title), node('p', k.applicability), node('p', k.advice), node('small', `例外：${k.caution}`), node('small', `来源：${k.source.title} ${k.source.url}`)); if (k.currentLine) article.append(node('p', `当前复核：${k.currentLine.join(' → ')}`)); sourced.append(article); }
+  for (const k of report.knowledge ?? []) { const article = document.createElement('article'); article.append(node('h4', k.title), node('p', k.applicability), node('p', conditionalText[k.id] ?? k.advice), node('small', `例外：${k.caution}`), node('small', `来源：${k.source.title} ${k.source.url}`)); if (k.currentLine) article.append(node('p', `当前复核：${k.currentLine.join(' → ')}`)); sourced.append(article); }
   const learned = section('赛后案例检索 · 当前已重验');
   if (!report.experiences?.length) learned.append(node('p', '暂无具有当前计算证据的匹配案例。不是把所有历史案例塞进上下文。'));
-  for (const e of report.experiences ?? []) { const article = document.createElement('article'); article.append(node('h4', e.title), node('p', `${e.match} · ${e.advice}`), node('p', `当前变化：${e.currentLine.join(' → ')} · 交换估计 ${e.currentNet}`), node('small', `来自 ${e.sourceCount} 个已验证样本；案例 ${e.caseId}。历史变例仅供参考，不自动落子。`)); learned.append(article); }
+  for (const e of report.experiences ?? []) { const article = document.createElement('article'); article.append(node('h4', motifText[e.title] ?? e.title), node('p', `${e.match} · ${motifText[e.match.endsWith('avoid') ? 'avoid' : 'punish'] ?? e.advice}`), node('p', `当前变化：${e.currentLine.join(' → ')} · 交换估计 ${e.currentNet}`), node('small', `来自 ${e.sourceCount} 个已验证样本；案例 ${e.caseId}。历史变例仅供参考，不自动落子。`)); learned.append(article); }
   const formation = section('子力协调与九宫');
   for (const [label, f] of [['红方', report.formation.red], ['黑方', report.formation.black]] as const) formation.append(node('p', `${label}：${f.advisors} 士仕 / ${f.elephants} 相象；将帅合法出口 ${f.legalKingExits}；未离底线车马 ${f.undevelopedMajors.join('、') || '无'}；${f.horseMobility.map(x => `${x.piece} ${x.destinations} 个合法落点`).join('，')}`));
   if (report.position) {
@@ -178,7 +183,7 @@ function renderExpert() {
       node('p', `近期步骤：${plan.nextSteps.join('；')}`), node('p', `放弃条件：${plan.abandonWhen}`), node('small', plan.reviewReason));
   }
   const principles = section('按当前局面触发的专家知识');
-  for (const rule of report.principles) { const article = document.createElement('article'); article.append(node('h4', rule.title), node('p', rule.advice), node('small', `依据：${rule.evidence.join('；') || '当前阶段'}`)); principles.append(article); }
+  for (const rule of report.principles) { const article = document.createElement('article'); article.append(node('h4', rule.title), node('p', principleText[rule.id] ?? rule.advice), node('small', `依据：${rule.evidence.join('；') || '当前阶段'}`)); principles.append(article); }
   const safety = section('受攻击棋子与将帅牵制');
   const issues = report.safety.filter(x => x.legalAttackers.length || x.pinnedToKing);
   if (!issues.length) safety.append(node('p', '未发现合法直接吃子目标或移子暴露将帅的牵制；这不等于没有战术威胁。'));
@@ -190,6 +195,15 @@ function renderExpert() {
     article.append(node('h4', `${r.notation} · ${RISK_TEXT[r.risk]}`), node('p', `交换估计净收益 ${r.estimatedNet}，位置变化 ${r.positionalDelta}。${r.line.slice(1).join(' → ') || '没有列出直接反击变化。'}`), node('small', `对方应手覆盖 ${r.coverage.checkedReplies}/${r.coverage.totalReplies}；${r.coverage.exchangeComplete ? '已完成设定的同格交换范围' : '交换深度或预算截断'}。${r.warnings.join(' ')}`)); candidates.append(article);
   }
   const note = [...state.notes].reverse().find(n => n.ply <= (view ?? state.position.moves.length));
+  const timing = section('回合耗时分解');
+  if (note?.timing) for (const line of timingLines(note.timing)) timing.append(node('p', line));
+  else timing.append(node('p', '当前还没有已记录耗时的机器落子；旧棋谱未记录时不推断为零。'));
+  if (view === null && state.attempts?.length) {
+    const attempt = state.attempts.at(-1)!;
+    const failed = section('最近未落子尝试');
+    failed.append(node('p', `${attempt.status} · revision ${attempt.revision} · 拟下第${attempt.ply}手`));
+    for (const line of timingLines(attempt.timing)) failed.append(node('p', line));
+  }
   if (note?.review) { const s = section('最近一次机器提交的独立复查'); s.append(node('p', `第 ${note.ply} 手：${note.review.notation} · ${RISK_TEXT[note.review.risk]} · 交换估计 ${note.review.estimatedNet}`)); if (note.riskAcknowledgement) s.append(node('p', `模型明确接受风险：${note.riskAcknowledgement}`)); }
   if (note?.review?.search) {
     const search = note.review.search, s = section('实际落子的多步复查');
@@ -202,7 +216,8 @@ function renderExpert() {
 function renderLogs() { text('logs', state.logs.map(l => `${new Date(l.time).toLocaleTimeString()} [${l.layer}] ${l.text}`).join('\n') || '等待第一步走子。'); if (!el('layers').hidden) el('logs').scrollTop = el('logs').scrollHeight; }
 function receive(next: GameState) {
   // Invocation replies can arrive after a newer push; never rewind authority.
-  if (state && (next.revision < state.revision || (next.revision === state.revision && next.clock.updatedAt < state.clock.updatedAt))) return;
+  if (state && (next.revision < state.revision || (next.revision === state.revision &&
+    (next.clock.updatedAt < state.clock.updatedAt || (next.updateSequence ?? 0) < (state.updateSequence ?? 0))))) return;
   const changedGame = !state || state.id !== next.id;
   const changedBoard = changedGame || state.position.moves.length !== next.position.moves.length || state.revision !== next.revision;
   const animate = !changedGame && view === null && next.position.moves.length === state.position.moves.length + 1;

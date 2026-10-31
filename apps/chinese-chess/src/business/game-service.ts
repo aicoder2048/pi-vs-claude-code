@@ -8,6 +8,8 @@ import { searchPosition, type SearchDriver, type SearchOptions, type SearchRepor
 import { FINAL_SEARCH_MS, liveSearchOptions, mergeSearchReview, TURN_SEARCH_MS, TURN_SEARCH_NODES } from './live-search';
 import { planForPosition, updatePlan, type PlanUpdate, type StrategicPlan } from './plan';
 import { REASON_TEXT } from '../shared/types';
+import { recordDecisionTool, SKILLS_VERSION, type DecisionTrace } from './decision';
+import { TurnTimer, type AttemptStatus, type TimingEvent } from './turn-timing';
 import type { GameRecord, GameState, LogEntry, MatchSettings, MatchState, ModelChoice, ResultReason } from '../shared/types';
 
 // Dependency inversion: the domain knows this port, not Pi's implementation.
@@ -18,6 +20,8 @@ export interface TurnPort {
   log(layer: LogEntry['layer'], text: string): void;
   search?(options?: SearchOptions, signal?: AbortSignal): Promise<SearchReport>;
   updatePlan?(input: PlanUpdate): StrategicPlan | null;
+  setDecision?(trace: DecisionTrace): void;
+  telemetry?(event: TimingEvent): void;
   commit(point: MoveInput, reason: string, riskAcknowledgement?: string, signal?: AbortSignal): Promise<void> | void;
 }
 export interface AgentDriver { run(port: TurnPort): Promise<void> }
@@ -25,6 +29,9 @@ export interface ServiceOptions { now?: () => number; settings?: MatchSettings; 
 export class GameService {
   private state: GameState;
   private active?: AbortController;
+  private turnTimer?: TurnTimer;
+  private stopAttempt?: (status: AttemptStatus) => void;
+  private updateSequence = 0;
   private listeners = new Set<(state: GameState) => void>();
   private readonly now: () => number;
   private readonly cases: () => readonly TacticalCase[];
@@ -63,19 +70,23 @@ export class GameService {
   // What subscribers and command replies get. Per-ply evaluations grow to MBs
   // over a long game and the 5 Hz heartbeat would clone them every tick, so
   // they are left out; read one with evaluation(ply) when reviewing history.
-  view(): GameState { return structuredClone({ ...this.state, evaluations: [] }); }
+  view(): GameState { return structuredClone({ ...this.state, evaluations: [], attempts: this.state.attempts?.slice(-1) }); }
   evaluation(gameId: string, ply: number): Analysis | null {
     if (gameId !== this.state.id || !Number.isSafeInteger(ply) || ply < 1) return null;
     return structuredClone(this.state.evaluations[ply - 1] ?? null);
   }
   subscribe(fn: (state: GameState) => void): () => void { this.listeners.add(fn); return () => this.listeners.delete(fn); }
-  private emit(): void { for (const fn of this.listeners) fn(this.view()); }
+  private emit(): void {
+    this.state.updateSequence = ++this.updateSequence;
+    for (const fn of this.listeners) fn(this.view());
+  }
   private log(layer: LogEntry['layer'], text: string): void {
     this.state.logs.push({ time: new Date(this.now()).toISOString(), layer, text: text.slice(0, 1200) });
     this.state.logs = this.state.logs.slice(-80);
     this.emit();
   }
-  private invalidate(): void {
+  private invalidate(status: AttemptStatus = 'superseded'): void {
+    this.stopAttempt?.(status);
     this.state.revision++;
     this.active?.abort(); this.active = undefined;
   }
@@ -89,11 +100,13 @@ export class GameService {
   // cancellation and resignation also checks deadlines BEFORE applying an action.
   tick(): void {
     if (this.state.clock.running === null) return;
-    this.charge(); this.emit();
+    this.charge();
+    if (this.turnTimer) this.state.progress = this.turnTimer.progress();
+    this.emit();
   }
   private finish(winner: Color | 'draw', reason: ResultReason): void {
     if (this.state.outcome) return; // idempotent timeout/response races
-    this.invalidate();
+    this.invalidate(reason === 'main-time' ? 'timeout' : 'cancelled');
     this.state.clock.running = null; this.state.status = 'over'; this.state.error = null;
     if (this.state.plan) this.state.plan = { ...this.state.plan, status: 'invalidated', reviewReason: '本局结束，计划失效' };
     const match = this.state.match;
@@ -160,7 +173,7 @@ export class GameService {
   cancel(): GameState {
     this.charge();
     if (this.state.status === 'thinking') {
-      this.invalidate(); this.state.status = 'paused'; this.state.error = null;
+      this.invalidate('cancelled'); this.state.status = 'paused'; this.state.error = null;
       this.log('agent', '模型请求已取消，但比赛棋钟继续；可重试或认输');
     }
     return this.view();
@@ -199,12 +212,27 @@ export class GameService {
       this.state.status = 'error'; this.state.error = '未配置可用模型：请先在 Pi 中 /login，或设置 API Key 后重启应用。比赛棋钟仍会继续。'; this.emit(); return;
     }
     const controller = new AbortController(); this.active = controller;
-    const id = this.state.id, revision = this.state.revision, started = this.now();
+    const id = this.state.id, revision = this.state.revision;
+    const timer = new TurnTimer(this.now, revision); this.turnTimer = timer;
+    this.state.progress = timer.progress();
     this.state.status = 'thinking'; this.state.error = null;
-    this.log('agent', 'Agent Loop 启动：发送完整棋谱与业务层计算结果');
+    const attemptId = randomUUID();
+    this.stopAttempt = status => {
+      if (this.turnTimer !== timer) return;
+      const timing = timer.finish();
+      this.state.attempts = [...(this.state.attempts ?? []), { id: attemptId, revision,
+        ply: this.state.position.moves.length + 1, model: `${this.state.model!.provider}/${this.state.model!.id}`, status, timing }].slice(-80);
+      this.turnTimer = undefined; this.stopAttempt = undefined; delete this.state.progress;
+      this.emit(); // also saves a failed attempt when revision has not changed
+    };
+    this.log('agent', 'Agent Loop 启动：发送完整棋谱与紧凑业务信号');
     const snapshot = this.snapshot();
     let committed = false, submitting = false, searching = false, searchMs = 0, searchNodes = 0;
     let stagedPlan = structuredClone(snapshot.plan), planUpdate: PlanUpdate | undefined;
+    let stagedDecision: DecisionTrace | undefined, reviewNumber = 0;
+    const publishProgress = () => {
+      if (this.turnTimer === timer) { this.state.progress = timer.progress(); this.emit(); }
+    };
     const valid = () => !controller.signal.aborted && !this.state.outcome && this.state.id === id && this.state.revision === revision && this.active === controller;
     const search = async (requested: SearchOptions = {}, final = false, signal?: AbortSignal): Promise<SearchReport> => {
       this.charge();
@@ -234,7 +262,13 @@ export class GameService {
         return recallExperience(position, position === snapshot.position ? snapshot.analysis.expert : analyzeExpert(position, { candidateLimit: 4 }).expert, this.cases(), reviews);
       },
       log: (layer, text) => { if (valid()) this.log(layer, text); },
+      telemetry: event => { if (valid() && !committed && timer.event(event)) publishProgress(); },
       search: (options, signal) => search(options, false, signal),
+      setDecision: trace => {
+        if (!valid() || committed) return;
+        if (trace.version !== SKILLS_VERSION || trace.revision !== revision) throw new Error('决策审计版本与回合不符');
+        stagedDecision = structuredClone(trace);
+      },
       updatePlan: input => {
         this.charge();
         if (!valid() || submitting || searching || committed) throw new Error('回合失效或正在提交，不能更新计划');
@@ -254,36 +288,51 @@ export class GameService {
         if (riskAcknowledgement !== undefined && (typeof riskAcknowledgement !== 'string' || riskAcknowledgement.trim().length < 12 || riskAcknowledgement.length > 400)) throw new Error('风险说明须为 12–400 字，说明具体补偿或不可避免的败势');
         // This is authoritative, not dependent on the LLM voluntarily calling a
         // review tool. A heuristic warning is overridable: don't outlaw sacrifices.
-        let review = reviewMove(this.state.position, point);
-        this.charge(); // expert computation also spends the machine's clock
-        if (!valid()) throw new Error('审查期间回合已过期或棋钟耗尽');
-        submitting = true;
+        const reviewId = `business-review-${++reviewNumber}`;
+        timer.event({ type: 'start', id: reviewId, kind: 'review', name: 'independent-review' }); publishProgress();
+        let reviewOk = false;
         try {
-          // Independently search the actual submitted move, even if the model
-          // never asked for analysis or searched a different shortlist.
-          const report = await search({ moves: [point], maxMs: FINAL_SEARCH_MS, maxNodes: 20000, maxDepth: 5 }, true, signal);
-          review = mergeSearchReview(snapshot.position, review, report);
-        } catch (error) {
-          if (!valid() || signal?.aborted) throw error;
-          review.searchError = error instanceof Error ? error.message : String(error);
-          review.warnings.push('多步复查失败：未知，不是安全结论；仍执行原有单步与交换审查。');
-          this.log('business', `多步复查未完成：${review.searchError}`);
-        } finally { submitting = false; }
-        this.charge();
-        if (signal?.aborted) throw new Error('落子请求已取消');
-        if (!valid() || committed) throw new Error('多步审查期间回合已过期或棋钟耗尽');
-        if (needsRiskAcknowledgement(review) && !riskAcknowledgement?.trim()) {
-          this.log('business', `专家审查要求重新考虑：${review.notation} · ${review.risk} · 交换估计 ${review.estimatedNet} · ${review.line.slice(1).join(' → ')}`);
-          throw new MoveRiskError(review);
+          let review = reviewMove(this.state.position, point);
+          this.charge(); // expert computation also spends the machine's clock
+          if (!valid()) throw new Error('审查期间回合已过期或棋钟耗尽');
+          submitting = true;
+          try {
+            // Independently search the actual submitted move, even if the model
+            // never asked for analysis or searched a different shortlist.
+            const report = await search({ moves: [point], maxMs: FINAL_SEARCH_MS, maxNodes: 20000, maxDepth: 5 }, true, signal);
+            review = mergeSearchReview(snapshot.position, review, report);
+          } catch (error) {
+            if (!valid() || signal?.aborted) throw error;
+            review.searchError = error instanceof Error ? error.message : String(error);
+            review.warnings.push('多步复查失败：未知，不是安全结论；仍执行原有单步与交换审查。');
+            this.log('business', `多步复查未完成：${review.searchError}`);
+          } finally { submitting = false; }
+          this.charge();
+          if (signal?.aborted) throw new Error('落子请求已取消');
+          if (!valid() || committed) throw new Error('多步审查期间回合已过期或棋钟耗尽');
+          if (needsRiskAcknowledgement(review) && !riskAcknowledgement?.trim()) {
+            this.log('business', `专家审查要求重新考虑：${review.notation} · ${review.risk} · 交换估计 ${review.estimatedNet} · ${review.line.slice(1).join(' → ')}`);
+            throw new MoveRiskError(review);
+          }
+          const position = play(this.state.position, point);
+          reviewOk = true; timer.event({ type: 'end', id: reviewId, ok: true });
+          committed = true;
+          const timing = timer.finish(true);
+          this.turnTimer = undefined; this.stopAttempt = undefined; delete this.state.progress;
+          // tool_execution_end occurs AFTER calculate emits/autosaves. Finalize the
+          // accepted commit inside this transaction, never patch an emitted note.
+          const decision = stagedDecision ? structuredClone(stagedDecision) : undefined;
+          if (decision) recordDecisionTool(decision, 'move_piece', true);
+          this.state.notes.push({ ply: position.moves.length, reason: reason.trim(), elapsedMs: timing.totalMs, timing,
+            model: `${snapshot.model!.provider}/${snapshot.model!.id}`, review,
+            ...(decision ? { decision } : {}),
+            plan: structuredClone(stagedPlan), ...(planUpdate ? { planUpdate: structuredClone(planUpdate) } : {}),
+            ...(riskAcknowledgement ? { riskAcknowledgement: riskAcknowledgement.trim() } : {}) });
+          this.state.plan = structuredClone(stagedPlan);
+          this.calculate(position);
+        } finally {
+          timer.event({ type: 'end', id: reviewId, ok: reviewOk }); publishProgress();
         }
-        const position = play(this.state.position, point);
-        committed = true;
-        this.state.notes.push({ ply: position.moves.length, reason: reason.trim(), elapsedMs: this.now() - started,
-          model: `${snapshot.model!.provider}/${snapshot.model!.id}`, review,
-          plan: structuredClone(stagedPlan), ...(planUpdate ? { planUpdate: structuredClone(planUpdate) } : {}),
-          ...(riskAcknowledgement ? { riskAcknowledgement: riskAcknowledgement.trim() } : {}) });
-        this.state.plan = structuredClone(stagedPlan);
-        this.calculate(position);
       },
     };
     // Request errors, retries and cancel never reset the competition clock.
@@ -292,6 +341,7 @@ export class GameService {
     }).catch(error => {
       this.charge();
       if (valid() && !committed) {
+        this.stopAttempt?.('error');
         this.state.status = 'error'; this.state.error = error instanceof Error ? error.message : String(error);
         this.log('agent', `本回合未落子，棋钟继续：${this.state.error}`);
       }
@@ -302,7 +352,8 @@ export class GameService {
       model: structuredClone(this.state.model), moves: structuredClone(this.state.position.moves),
       evaluations: structuredClone(this.state.evaluations), notes: structuredClone(this.state.notes), plan: structuredClone(this.state.plan),
       result: this.state.outcome?.winner ?? null, outcome: structuredClone(this.state.outcome),
-      clock: structuredClone(this.state.clock), match: structuredClone(this.state.match) };
+      clock: structuredClone(this.state.clock), match: structuredClone(this.state.match),
+      ...(this.state.attempts?.length ? { attempts: structuredClone(this.state.attempts) } : {}) };
   }
-  dispose(): void { this.invalidate(); this.state.clock.running = null; this.listeners.clear(); }
+  dispose(): void { this.invalidate('cancelled'); this.state.clock.running = null; this.listeners.clear(); }
 }

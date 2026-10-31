@@ -28,6 +28,20 @@
 
 本包所有建议都附适用条件与例外；残局资料只作计划提示，不据此宣告理论例胜 / 例和。
 
+### Chinese Chess Practical Dataset（CCPD）
+
+- 作者署名：**Yu-Han Tseng and Bo-Nian Chen (2026), Chinese Chess Practical Dataset (CCPD)**。
+- 仓库：https://github.com/Yvonne761/Chinese-Chess-Practical-Dataset
+- 固定版本：`368a47a947773dd8692c026e286dd19b6277b993`。
+- 许可：[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)，[完整法律文本](https://creativecommons.org/licenses/by/4.0/legalcode)；上游声明原样保存在 `src/data/ccpd/UPSTREAM-LICENSE.txt`，Copyright (c) 2026 Yu-Han Tseng。
+- 修改：选取 `Dataset/開局/00000001.pgn`–`00000064.pgn`，Big5 解码，每局只保留前 20 半回合，转换为本应用 A0–I9 坐标并逐手合法重放；不导入评分、胜率或原局其余着法。保留逐文件路径/SHA-256、许可 SHA-256 和修改说明于 `openings.json`。
+- 应用通过 `knowledge.ts` 的全盘局面匹配、对称与当前候选复查使用；不是让模型背棋谱，不声称最优或棋力提升。
+- 构建复制原样许可、转换后 JSON 和本文到 `dist/`，随 asar 分发，保留署名、版本链接、许可链接和修改说明。正常 build/start 不联网；显式维护命令为 `bun scripts/import-ccpd.ts`。
+
+64 个抽样文件中实际接受 **61 条**，`00000036/46/58.pgn` 因非标准初始阵型被拒绝（保留路径、哈希及理由，不放宽规则）。讨论稿的“64 局已导入”据实际数据修正。
+
+当前共 **73 条路线 / 1360 个索引节点 / 7 个来源**；节点包括每条路线的初始及终点，非去重局面数。
+
 ## 已评估，但未默认接入或打包
 
 ### 中国象棋云库

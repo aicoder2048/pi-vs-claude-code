@@ -14,4 +14,7 @@ for (const [entrypoint, outfile, target, format] of [
 }
 for (const file of ['index.html', 'styles.css', 'expert.css']) await cp(`src/renderer/${file}`, `dist/renderer/${file}`);
 await cp('src/renderer/assets', 'dist/renderer/assets', { recursive: true });
+await cp('skills', 'dist/skills', { recursive: true });
+await cp('src/data/ccpd', 'dist/data/ccpd', { recursive: true });
+await cp('KNOWLEDGE-SOURCES.md', 'dist/KNOWLEDGE-SOURCES.md');
 console.log('Built Electron main, isolated preload and renderer → dist/');

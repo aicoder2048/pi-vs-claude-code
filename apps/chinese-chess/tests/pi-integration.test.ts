@@ -14,6 +14,7 @@ import { updatePlan } from '../src/business/plan';
 import { DEFAULT_SETTINGS } from '../src/business/clock';
 import { RECORDED_GAME } from './fixtures/recorded-game';
 import type { GameState } from '../src/shared/types';
+import { EXPECTED_SKILLS, DEFAULT_SKILLS_DIR } from '../src/agent/skill-loader';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -39,10 +40,11 @@ async function fixture(responder: (request: Record<string, any>, n: number) => R
   const runtime = await ModelRuntime.create({ authPath: path.join(dir, 'auth.json'), modelsPath, modelsStorePath: path.join(dir, 'catalog.json') });
   return { driver: new PiDriver(runtime, dir), runtime, dir, requests };
 }
-function tool(name: string, args: unknown, n: number): Response {
+function tool(name: string, args: unknown, n: number): Response { return toolCalls([{ name, args }], n); }
+function toolCalls(calls: { name: string; args: unknown }[], n: number): Response {
   const base = { id: `fixture-${n}`, object: 'chat.completion.chunk', created: 1, model: 'xiangqi' };
   const frames = [
-    { ...base, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `tool-${n}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: null }] },
+    { ...base, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: calls.map(({ name, args }, index) => ({ index, id: `tool-${n}-${index}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })) }, finish_reason: null }] },
     { ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 } },
   ];
   return new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
@@ -64,6 +66,8 @@ describe('real Pi harness + inline Xiangqi extension, local SSE transport', () =
     await driver.run(port);
     expect(requests).toHaveLength(6); // successful move_piece must NOT request another response
     expect(commits).toEqual([{ from: { x: 0, y: 3 }, to: { x: 0, y: 4 }, reason: '挺卒争夺河界。' }]);
+    expect(requests[0].messages[0].content).toContain('<available_skills>');
+    expect(requests[0].messages[0].content).toContain('象棋决策编排');
     expect(requests[0].tools.map((t: any) => t.function.name).sort()).toEqual([...XIANGQI_TOOLS].sort());
     expect(JSON.stringify(requests[0].messages)).toContain('A6 → A5');
     expect(logs.some(log => log.includes('被拒绝'))).toBe(true);
@@ -85,6 +89,10 @@ describe('real Pi harness + inline Xiangqi extension, local SSE transport', () =
     } });
     expect(requests).toHaveLength(2); expect(commits).toEqual([{ move: { ...safer, revision: 41, reason: '先保住受攻击的炮。' }, reason: '先保住受攻击的炮。' }]);
     expect(requests[1].messages.some((m: any) => m.role === 'tool' && m.content.includes('900') && m.content.includes('红车 B0 → B2 吃车'))).toBe(true);
+    const error = requests[1].messages.find((m: any) => m.role === 'tool').content;
+    expect(error).toContain('playbook-risk-acknowledgement');
+    expect(error).not.toContain('checkedReplies'); expect(error).not.toContain('positionalDelta');
+    expect(error.length).toBeLessThan(1500);
   }, 15000);
   test('real loop sees automatic search, calls bounded search, stages a plan and awaits async commit', async () => {
     const next = { from: { x: 0, y: 3 }, to: { x: 0, y: 4 } };
@@ -111,6 +119,72 @@ describe('real Pi harness + inline Xiangqi extension, local SSE transport', () =
     expect(requests[2].messages.some((m: any) => m.role === 'tool' && m.content.includes('requested-subset'))).toBe(true);
     expect(requests[3].messages.some((m: any) => m.role === 'tool' && m.content.includes('staged'))).toBe(true);
   }, 15000);
+  test('reads enum skills and references; rejected reads and failed commits stay in ordered persisted audit', async () => {
+    let service!: GameService, run!: Promise<void>;
+    const { driver, requests } = await fixture((_request, n) => {
+      if (n === 1) return tool('read_skill', { name: 'playbook-endgame' }, n);
+      if (n === 2) return tool('read_skill', { name: 'read-expert-report', reference: '../SKILL.md' }, n);
+      if (n === 3) return tool('read_skill', { name: 'foreign' }, n);
+      if (n === 4) return tool('read_skill', { name: 'read-expert-report', reference: 'principles.md' }, n);
+      if (n === 5) return tool('move_piece', { from: { x: 0, y: 0 }, to: { x: 1, y: 0 }, revision: 1, reason: '非法示例' }, n);
+      return tool('move_piece', { from: { x: 0, y: 3 }, to: { x: 0, y: 4 }, revision: 1, reason: '修正后安全挺卒。' }, n);
+    });
+    service = new GameService({ run(port) { run = driver.run(port); return run; } }, { provider: 'fixture', id: 'xiangqi', name: 'fixture' },
+      { now: () => 0, search: { async search(p) { return searchPosition(p, { maxMs: 0, maxNodes: 0 }); } } });
+    cleanups.push(() => service.dispose());
+    const saved: any[] = [];
+    service.subscribe(() => { if (service.record().moves.length === 2) saved.push(service.record()); });
+    service.humanMove({ from: { x: 0, y: 6 }, to: { x: 0, y: 5 } }, 0); await run;
+    const timing = saved[0].notes[0].timing as import('../src/business/turn-timing').TurnTiming;
+    expect(timing.version).toBe('xiangqi-timing/v1');
+    expect(timing.spans.filter(s => s.kind === 'model')).toHaveLength(6);
+    expect(timing.spans.filter(s => s.kind === 'tool')).toHaveLength(6);
+    expect(timing.spans.some(s => s.kind === 'pre-search')).toBe(true);
+    expect(timing.spans.some(s => s.kind === 'review')).toBe(true);
+    expect(timing.spans.some(s => s.status === 'running')).toBe(false);
+    expect(timing.spans.filter(s => s.kind === 'model').every(s => s.firstDeltaMs !== undefined)).toBe(true);
+    expect(Object.values(timing.breakdown).reduce((a, b) => a + b, 0)).toBeCloseTo(timing.totalMs, 4);
+    expect(JSON.stringify(timing)).not.toContain('非法示例');
+    const trace = saved[0].notes[0].decision;
+    expect(trace.version).toBe('xiangqi-skills/v2'); expect(trace.revision).toBe(1);
+    expect(trace.skillsInjected).toEqual(['xiangqi-coach', trace.playbook]);
+    expect(trace.skillsRead).toEqual(['playbook-endgame', 'read-expert-report/principles.md']);
+    expect(trace.tools).toEqual([
+      { name: 'read_skill', ok: true }, { name: 'read_skill', ok: false }, { name: 'read_skill', ok: false },
+      { name: 'read_skill', ok: true }, { name: 'move_piece', ok: false }, { name: 'move_piece', ok: true },
+    ]);
+    expect(trace.steps.find((s: any) => s.id === 'plan').status).toBe('skipped');
+    expect(trace.steps.find((s: any) => s.id === 'commit').status).toBe('done');
+    const system = requests[0].messages[0].content as string;
+    expect(system.match(/## 当前剧本：/g)).toHaveLength(1);
+    expect(system).not.toContain('# 残局'); expect(system).not.toContain(DEFAULT_SKILLS_DIR);
+    expect(requests[1].messages.some((m: any) => m.role === 'tool' && m.content.includes('# 残局'))).toBe(true);
+    const schema = requests[0].tools.find((t: any) => t.function.name === 'read_skill').function.parameters;
+    expect(schema.properties.name.anyOf.map((s: any) => s.const).sort()).toEqual([...EXPECTED_SKILLS].sort());
+    expect(service.record().format).toBe('chinese-chess/v1');
+  }, 15000);
+  test('missing bundle fails explicitly before network; terminal position makes no request', async () => {
+    const { runtime, dir, requests } = await fixture((_request, n) => tool('analyze_position', {}, n));
+    const state = initialState(); let committed = false;
+    const port: TurnPort = { state, signal: new AbortController().signal, log() {}, commit() { committed = true; } };
+    await expect(new PiDriver(runtime, dir, path.join(dir, 'missing')).run(port)).rejects.toThrow();
+    expect(requests).toHaveLength(0); expect(committed).toBe(false);
+    state.position.winner = 'draw'; await new PiDriver(runtime, dir).run(port);
+    expect(requests).toHaveLength(0);
+  }, 10000);
+  test('skill reads consume the shared 16-call budget even within a single assistant batch', async () => {
+    const { driver, requests } = await fixture((_request, n) => n === 1 ?
+      toolCalls(Array.from({ length: 17 }, () => ({ name: 'read_skill', args: { name: 'coordinates' } })), n) :
+      new Response(`data: ${JSON.stringify({ id: 'finished', object: 'chat.completion.chunk', created: 1, model: 'xiangqi',
+        choices: [{ index: 0, delta: { role: 'assistant', content: '预算已耗尽，未落子。' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
+        { headers: { 'Content-Type': 'text/event-stream' } }));
+    let trace: import('../src/business/decision').DecisionTrace | undefined, commits = 0;
+    await driver.run({ state: initialState(), signal: new AbortController().signal, log() {},
+      setDecision(value) { trace = structuredClone(value); }, commit() { commits++; } });
+    expect(commits).toBe(0); expect(trace!.skillsRead).toHaveLength(16);
+    expect(trace!.tools).toHaveLength(17); expect(trace!.tools.at(-1)?.ok).toBe(false);
+    expect(requests[1].messages.some((m: any) => m.role === 'tool' && m.content.includes('预算已耗尽'))).toBe(true);
+  }, 10000);
   test('request budget stops a model that endlessly requests analysis', async () => {
     const { driver, requests } = await fixture((_request, n) => tool('analyze_position', {}, n));
     let commits = 0;
@@ -128,7 +202,8 @@ describe('real Pi harness + inline Xiangqi extension, local SSE transport', () =
     } finally { timers.mockRestore(); }
     expect(commits).toBe(1);
     expect(JSON.stringify(requests[0].messages)).toContain('不另设单步时间上限');
-    expect(JSON.stringify(requests[0].messages)).toContain('加 20 秒');
+    expect(JSON.stringify(requests[0].messages)).toContain('包干制，不加秒');
+    expect(JSON.stringify(requests[0].messages)).toContain('1800 秒');
   }, 10000);
   test('game cancellation signal reaches an already-running async move tool', async () => {
     const { driver } = await fixture((_request, n) => tool('move_piece', { from: { x: 0, y: 3 }, to: { x: 0, y: 4 }, revision: 1, reason: '等待独立搜索复查。' }, n));
@@ -154,7 +229,8 @@ describe('real Pi harness + inline Xiangqi extension, local SSE transport', () =
     service.humanMove({ from: { x: 0, y: 6 }, to: { x: 0, y: 5 } }, 0); await run;
     expect(service.snapshot().outcome).toBeNull(); expect(service.snapshot().position.moves).toHaveLength(2);
     expect(service.snapshot().notes[0].elapsedMs).toBe(120000);
-    expect(service.snapshot().clock.players[2].mainMs).toBe(DEFAULT_SETTINGS.mainTimeMs - 120000 + 20000);
+    expect(service.record().notes[0].timing!.breakdown.modelMs).toBe(120000);
+    expect(service.snapshot().clock.players[2].mainMs).toBe(DEFAULT_SETTINGS.mainTimeMs - 120000);
   }, 10000);
   test('remaining game clock aborts real Pi network work and prevents a late increment or move', async () => {
     let now = 0, service!: GameService, run!: Promise<void>, signal!: AbortSignal;
@@ -168,6 +244,8 @@ describe('real Pi harness + inline Xiangqi extension, local SSE transport', () =
     service.humanMove({ from: { x: 0, y: 6 }, to: { x: 0, y: 5 } }, 0); await expect(run).rejects.toThrow();
     expect(signal.aborted).toBe(true); expect(service.snapshot().outcome).toMatchObject({ winner: 1, reason: 'main-time' });
     expect(service.snapshot().notes).toHaveLength(0); expect(service.snapshot().position.moves).toHaveLength(1);
+    expect(service.record().attempts?.at(-1)?.status).toBe('timeout');
+    expect(service.record().attempts?.at(-1)?.timing.spans.some(s => s.kind === 'model' && s.status === 'interrupted')).toBe(true);
     expect(service.snapshot().clock.players[2].mainMs).toBe(0);
   }, 10000);
   test('abort interrupts pending network work without a commit', async () => {

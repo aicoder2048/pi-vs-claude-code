@@ -10,10 +10,6 @@ export const VALIDATOR_VERSION = 'local-tactics/2';
 export type Symmetry = 'identity' | 'mirror' | 'rotate-swap' | 'mirror-rotate-swap';
 export const SYMMETRIES: Symmetry[] = ['identity', 'mirror', 'rotate-swap', 'mirror-rotate-swap'];
 export type Motif = 'screen-removal-capture' | 'checking-blunder' | 'poisoned-capture' | 'unsafe-destination' | 'mate-in-one';
-export const MOTIF_TEXT: Record<Motif, string> = {
-  'screen-removal-capture': '移走炮架、吃子兼解将', 'checking-blunder': '将军也须防对手吃子解将',
-  'poisoned-capture': '贪吃后落子失守', 'unsafe-destination': '落点遭合法吃子', 'mate-in-one': '漏掉对手一手取胜',
-};
 export interface LearningRecord {
   id: string; human: Color; moves: MoveInput[];
   outcome: { winner: Color | 'draw'; reason: string } | null;
@@ -147,7 +143,7 @@ export function validateCase(seed: CaseSeed, options: ReviewOptions = {}): Tacti
     // Verification does not trust stored scores, prose, motif or model reasons.
     const variation = bad.variation ?? [mistake, reply];
     let proof = p; for (const move of variation) proof = play(proof, move);
-    return { id: digest(key).slice(0, 24), key, validator: VALIDATOR_VERSION, motif: motifOf(p, bad), title: MOTIF_TEXT[motifOf(p, bad)],
+    return { id: digest(key).slice(0, 24), key, validator: VALIDATOR_VERSION, motif: motifOf(p, bad), title: motifOf(p, bad),
       positionKeys: { before: SYMMETRIES.map(s => boardIdentity(p, s)), after: SYMMETRIES.map(s => boardIdentity(after, s)) },
       seed: { prefix, mistake, reply, alternative, source: { ...seed.source }, deliberateRisk: false }, sources: [{ ...seed.source }],
       evidence, victimKind: q.moves.at(-1)!.captured?.kind ?? null, attackerKind: at(after.board, reply.from)!.kind,
@@ -210,7 +206,7 @@ export function recallExperience(p: Position, report: ExpertReport | undefined, 
   const hints: ExperienceHint[] = [], reviews = overrides ?? report.candidates, currentKey = boardIdentity(p);
   const push = (c: TacticalCase, match: ExperienceHint['match'], r: MoveReview) => {
     if (hints.some(x => x.caseId === c.id && x.match.endsWith(match.split('-').at(-1)!))) return;
-    hints.push({ caseId: c.id, title: c.title, match, advice: match.endsWith('avoid') ? '当前候选出现同类风险，应比较替代；不要盲从历史坐标或将军/吃子奖励。' : '对方出现同类局部失误，可核查这步反击；当前收益仍非全局胜势证明。',
+    hints.push({ caseId: c.id, title: c.title, match, advice: match.endsWith('avoid') ? '比较当前候选的替代走法。' : '复核当前反击的具体收益。',
       sources: c.sources.slice(0, 3), sourceCount: c.sources.length, currentMove: r.move, currentLine: r.line, currentNet: r.estimatedNet,
       verification: 'rechecked-now', historicalLine: c.line, limitations: c.limitations });
   };

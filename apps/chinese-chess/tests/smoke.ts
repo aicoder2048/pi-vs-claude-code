@@ -16,10 +16,13 @@ try {
   await expect(page.locator('#pieces .piece')).toHaveCount(32);
   await expect(page.locator('#match-format')).toHaveText('三局两胜');
   await expect(page.locator('#status-title')).toHaveText('楚河汉界，落子有声');
-  await expect(page.locator('#machine-time')).toHaveText('50:00');
-  await expect(page.locator('#machine-clock-info')).toContainText('每步 +20 秒');
+  await expect(page.locator('#machine-time')).toHaveText('30:00');
+  await expect(page.locator('#machine-clock-info')).toContainText('包干制');
   await page.locator('#new-game').click();
-  await expect(page.locator('#main-minutes')).toHaveValue('50'); await expect(page.locator('#increment-seconds')).toHaveValue('20');
+  await expect(page.locator('#main-minutes')).toHaveValue('30');
+  await expect(page.locator('#time-control')).toHaveValue('absolute');
+  await expect(page.locator('#increment-seconds')).toHaveValue('0');
+  await expect(page.locator('#increment-seconds')).toBeDisabled();
   await expect(page.locator('#new-dialog')).toContainText('不另设单步时限');
   await page.locator('#allow-undo').check(); await page.locator('button[value=start]').click();
   await expect(page.locator('#new-dialog')).not.toBeVisible();
@@ -28,9 +31,12 @@ try {
   await expect(page.locator('.legal-dot')).toHaveCount(1);
   const box = await page.locator('#board').boundingBox(); if (!box) throw new Error('Board missing');
   await page.mouse.click(box.x + box.width * .5 / 9, box.y + box.height * 5.5 / 10);
+  await expect(page.locator('#status-description')).toContainText('等待模型响应');
   await expect(page.locator('#record-count')).toHaveText('2 手');
   await expect(page.locator('#status-badge')).toHaveText('轮到你了');
   await expect(page.locator('#reason-text')).toContainText('自动化测试');
+  await expect(page.locator('#reason-timing')).toContainText('模型往返');
+  await expect(page.locator('#reason-timing')).toContainText('提交复查');
   // Fixture chooses a cannon capture from heuristic candidates, exercising capture particles.
   await expect(page.locator('#pieces .piece')).toHaveCount(31);
   await page.screenshot({ path: 'artifacts/capture.png' });
@@ -51,6 +57,8 @@ try {
   await expect(page.locator('#expert-report')).toContainText('连续计划 · 每回合须重验');
   await expect(page.locator('#expert-report')).toContainText('实际落子的多步复查');
   await expect(page.locator('#expert-report')).toContainText('计算边界');
+  await expect(page.locator('#expert-report')).toContainText('回合耗时分解');
+  await expect(page.locator('#expert-report')).toContainText('首次响应增量');
   await page.screenshot({ path: 'artifacts/expert-report.png' }); await page.locator('#expert-close').click();
   // Backfill an independently stored finished game, not the current live board.
   await mkdir(path.join(dataDir, 'records'), { recursive: true });
@@ -83,6 +91,23 @@ try {
     await page.screenshot({ path: `artifacts/layout-${size.width}x${size.height}.png` });
   }
   await page.locator('#undo').click(); await expect(page.locator('#record-count')).toHaveText('0 手'); await expect(page.locator('#pieces .piece')).toHaveCount(32);
+  // Cancel a live model fixture: preserve interrupted timing and autosave it,
+  // then retry without accepting late events from the cancelled attempt.
+  await page.getByRole('button', { name: '红兵 A6', exact: true }).click();
+  const cancelledBoard = await page.locator('#board').boundingBox(); if (!cancelledBoard) throw new Error('Board missing');
+  await page.mouse.click(cancelledBoard.x + cancelledBoard.width * .5 / 9, cancelledBoard.y + cancelledBoard.height * 5.5 / 10);
+  await expect(page.locator('#status-description')).toContainText('等待模型响应');
+  await page.locator('#cancel').click();
+  await expect(page.locator('#reason-timing')).toContainText('最近未落子尝试');
+  const bootstrap = await page.evaluate(() => window.chess.bootstrap());
+  if (!bootstrap.ok) throw new Error(bootstrap.error);
+  const cancelledFile = path.join(dataDir, 'records', `${bootstrap.value.state.id}.json`);
+  await expect.poll(async () => {
+    try { return (await Bun.file(cancelledFile).json()).attempts?.some((a: any) => a.status === 'cancelled'); }
+    catch { return false; }
+  }).toBe(true);
+  await page.locator('#retry').click(); await expect(page.locator('#record-count')).toHaveText('2 手');
+  await page.locator('#undo').click(); await expect(page.locator('#record-count')).toHaveText('0 手');
   // Keyboard: red center soldier at E6 selected with Enter, moved with Up + Enter.
   await page.locator('#board').focus(); await page.locator('#board').press('Escape'); await page.locator('#board').press('Enter');
   await expect(page.locator('.piece.selected')).toHaveAttribute('aria-label', '红兵 E6');
@@ -119,10 +144,13 @@ try {
   const files = await Array.fromAsync(new Bun.Glob('records/*.json').scan(dataDir)); expect(files.length).toBeGreaterThanOrEqual(3);
   const records = await Promise.all(files.map(f => Bun.file(path.join(dataDir, f)).json()));
   expect(records.every(r => r.format === 'chinese-chess/v1')).toBe(true);
-  expect(records.some(r => r.match?.settings.mainTimeMs === 3000000 && r.match?.settings.incrementMs === 20000)).toBe(true);
+  expect(records.some(r => r.attempts?.some((a: any) => a.status === 'cancelled' && a.timing.version === 'xiangqi-timing/v1'))).toBe(true);
+  expect(records.some(r => r.match?.settings.timeControl === 'absolute' && r.match?.settings.mainTimeMs === 1800000 && r.match?.settings.incrementMs === 0)).toBe(true);
   const library = await Bun.file(path.join(dataDir, 'learning/library.json')).json();
   expect(library.cases).toHaveLength(2); expect(library.reviews.some((r: any) => r.gameId === 'smoke-learning-game')).toBe(true);
   expect(records.some(r => r.notes.some((n: any) => n.review?.coverage))).toBe(true);
+  expect(records.some(r => r.notes.some((n: any) =>
+    n.timing?.version === 'xiangqi-timing/v1' && n.timing.spans.some((s: any) => s.kind === 'model')))).toBe(true);
   expect(records.some(r => r.notes.some((n: any) => n.review?.search?.version === 'xiangqi-search/v1'))).toBe(true);
   expect(records.some(r => r.notes.some((n: any) => n.plan?.objective?.includes('UI fixture')))).toBe(true);
   expect(records.some(r => r.evaluations?.some((a: any) => a.expert?.version === 'xiangqi-expert/v1'))).toBe(true);

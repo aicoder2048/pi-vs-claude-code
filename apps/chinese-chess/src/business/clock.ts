@@ -1,7 +1,7 @@
 import type { Color } from './engine';
 import type { ClockState, MatchSettings, ResultReason } from '../shared/types';
 export const DEFAULT_SETTINGS: Readonly<MatchSettings> = Object.freeze({
-  bestOf: 3, timeControl: 'fischer', mainTimeMs: 50 * 60_000, incrementMs: 20_000, allowUndo: false,
+  bestOf: 3, timeControl: 'absolute', mainTimeMs: 30 * 60_000, incrementMs: 0, allowUndo: false,
 });
 export function validateSettings(value: unknown): MatchSettings {
   if (!value || typeof value !== 'object') throw new Error('无效的比赛设置');
