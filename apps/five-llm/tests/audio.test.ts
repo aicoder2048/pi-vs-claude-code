@@ -15,7 +15,7 @@ function fixture() {
   audio.subscribe(value => { state = value; });
   return { audio, media, state: () => state! };
 }
-describe('victory sound effect', () => {
+describe('round result sound effects', () => {
   test('plays a short offline arpeggio without starting music, disconnects nodes and closes on dispose', async () => {
     const original = Object.getOwnPropertyDescriptor(globalThis, 'AudioContext');
     const oscillators: any[] = [], gains: any[] = [];
@@ -42,8 +42,14 @@ describe('victory sound effect', () => {
         expect(osc.stop.mock.calls[0][0] - osc.start.mock.calls[0][0]).toBeCloseTo(.7);
         osc.onended(); expect(osc.disconnect).toHaveBeenCalledTimes(1); expect(gains[i].disconnect).toHaveBeenCalledTimes(1);
       }
+      // A machine win plays a quieter four-note descending phrase instead.
+      await f.audio.victory('machine');
+      const machine = oscillators.slice(6);
+      expect(machine.map(o => o.frequency.setValueAtTime.mock.calls[0][0])).toEqual([659.25, 587.33, 523.25, 392]);
+      expect(machine.every(o => o.type === 'sine')).toBe(true);
+      expect(gains.slice(6).every(g => g.gain.linearRampToValueAtTime.mock.calls[0][0] < .035)).toBe(true);
       f.audio.dispose(); expect(context.close).toHaveBeenCalledTimes(1);
-      await f.audio.victory(); expect(oscillators).toHaveLength(6);
+      await f.audio.victory(); expect(oscillators).toHaveLength(10);
     } finally {
       f.audio.dispose();
       if (original) Object.defineProperty(globalThis, 'AudioContext', original);

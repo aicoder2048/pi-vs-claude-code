@@ -1,7 +1,7 @@
 import { coordinate, index, replay, SIZE, type Point } from '../business/engine';
 import type { Command, GameState, Reply, ResultReason } from '../shared/types';
 import { Ambience } from './audio';
-import { isNewHumanWin, VictoryCelebration } from './celebration';
+import { newRoundWinner, VictoryCelebration } from './celebration';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('board'), ctx = canvas.getContext('2d')!;
@@ -31,10 +31,11 @@ function apply(next: GameState): void {
   if (viewing !== null && viewing > next.position.moves.length) viewing = next.position.moves.length;
   state = next;
   if (previous?.id !== next.id) celebration.stop();
-  if (isNewHumanWin(previous, next)) {
+  const winner = newRoundWinner(previous, next);
+  if (winner) {
     viewing = null;
-    celebration.play(next.match.winner === 'human');
-    void audio.victory().catch(() => {}); // Sound-device/autoplay failures must not interrupt the game.
+    celebration.play(winner, next.match.winner === winner);
+    void audio.victory(winner).catch(() => {}); // Sound-device/autoplay failures must not interrupt the game.
   }
   if (previous && previous.id === next.id && previous.revision === next.revision && previous.status === next.status
     && previous.error === next.error && previous.logs.at(-1)?.text === next.logs.at(-1)?.text

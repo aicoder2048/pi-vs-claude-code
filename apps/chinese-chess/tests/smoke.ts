@@ -2,6 +2,7 @@ import { _electron as electron, expect } from 'playwright/test';
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { HUMAN_MISTAKES } from './fixtures/human-mistakes';
+import type { GameState } from '../src/shared/types';
 await mkdir('artifacts', { recursive: true });
 // CHINESE_CHESS_APP points at a packaged executable to smoke-test the release build.
 const packaged = process.env.CHINESE_CHESS_APP;
@@ -126,9 +127,24 @@ try {
   const flipped = await page.locator('#board').boundingBox(); if (!flipped) throw new Error('Missing flipped board');
   await page.mouse.click(flipped.x + flipped.width * 8.5 / 9, flipped.y + flipped.height * 5.5 / 10);
   await expect(page.locator('#record-count')).toHaveText('3 手');
+  // Count synthesized notes from here on: resigning plays the machine-win phrase (4 notes).
+  await page.evaluate(() => {
+    (window as any).victoryNotes = 0;
+    const create = AudioContext.prototype.createOscillator;
+    AudioContext.prototype.createOscillator = function () { (window as any).victoryNotes++; return create.call(this); };
+  });
   for (let i = 0; i < 2; i++) {
     await page.locator('#resign').click(); await page.locator('#confirm-yes').click(); await expect(page.locator('#machine-wins')).toHaveText(String(i + 1));
-    if (!i) { await page.locator('#next-round').click(); await expect(page.locator('#human-color')).toHaveText('执红 · 先手'); }
+    await expect(page.locator('#victory')).toBeVisible(); await expect(page.locator('#victory')).toHaveClass(/machine/);
+    await expect(page.locator('#victory-message')).toHaveText(i ? '大模型赢下整场比赛，来日再战！' : '这局大模型胜出，重整旗鼓再战！');
+    await expect.poll(() => page.evaluate(() => (window as any).victoryNotes)).toBe(4 * (i + 1));
+    expect(await page.locator('#victory').evaluate(element => getComputedStyle(element).pointerEvents)).toBe('none');
+    if (!i) {
+      await page.screenshot({ path: 'artifacts/machine-win.png' });
+      // A new round clears an in-flight celebration immediately.
+      await page.locator('#next-round').click(); await expect(page.locator('#human-color')).toHaveText('执红 · 先手');
+      await expect(page.locator('#victory')).toBeHidden();
+    }
   }
   await expect(page.locator('#status-badge')).toHaveText('比赛结束'); await expect(page.locator('#next-round')).toBeHidden();
   // Real main-process timeout while settings stay open. Opening/canceling is not a pause.
@@ -138,6 +154,31 @@ try {
   await expect(page.locator('#status-badge')).toHaveText('本局结束', { timeout: 8000 }); await page.keyboard.press('Escape');
   await expect(page.locator('#human-time')).toHaveText('00:00'); await expect(page.locator('#status-description')).toContainText('棋钟耗尽');
   await page.screenshot({ path: 'artifacts/timeout.png' });
+  // Human win through the real state bridge: confetti, chord (6 notes), no machine styling.
+  const boot = await page.evaluate(() => window.chess.bootstrap()); if (!boot.ok) throw new Error(boot.error);
+  async function sendState(value: GameState): Promise<void> {
+    await application.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].webContents.send('chess:state', value), value);
+  }
+  const active: GameState = structuredClone(boot.value.state);
+  active.id = 'celebration-fixture'; active.revision += 10; active.outcome = null; active.status = 'human';
+  active.match.winner = null; active.match.humanWins = 0; active.match.machineWins = 0;
+  await sendState(active); await expect(page.locator('#victory')).toBeHidden();
+  const notesBefore = await page.evaluate(() => (window as any).victoryNotes as number);
+  const win: GameState = structuredClone(active);
+  win.revision++; win.status = 'over'; win.match.humanWins = 1;
+  win.outcome = { gameId: win.id, number: 1, humanColor: win.human, winner: win.human, reason: 'checkmate' };
+  await sendState(win);
+  await expect(page.locator('#victory')).toBeVisible(); await expect(page.locator('#victory')).not.toHaveClass(/machine/);
+  await expect(page.locator('#victory-message')).toHaveText('好棋，你赢了这一局！');
+  await expect.poll(() => page.evaluate(() => (window as any).victoryNotes)).toBe(notesBefore + 6);
+  await expect.poll(() => page.locator('#confetti').evaluate((canvas: HTMLCanvasElement) =>
+    canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data.some((value, i) => i % 4 === 3 && value > 0))).toBe(true);
+  await page.screenshot({ path: 'artifacts/victory-confetti.png' });
+  // A duplicate push never replays the effect or its sound.
+  await expect(page.locator('#victory')).toBeHidden({ timeout: 4500 });
+  await sendState(win); await page.waitForTimeout(100);
+  await expect(page.locator('#victory')).toBeHidden();
+  expect(await page.evaluate(() => (window as any).victoryNotes)).toBe(notesBefore + 6);
   expect(await page.evaluate(() => typeof (window as any).require)).toBe('undefined');
   expect(await page.evaluate(() => Object.keys(window.chess).sort())).toEqual(['bootstrap', 'command', 'evaluation', 'exportRecord', 'onLearning', 'onState', 'rescanLearning', 'reviewGame']);
   expect(errors).toEqual([]);
@@ -154,5 +195,5 @@ try {
   expect(records.some(r => r.notes.some((n: any) => n.review?.search?.version === 'xiangqi-search/v1'))).toBe(true);
   expect(records.some(r => r.notes.some((n: any) => n.plan?.objective?.includes('UI fixture')))).toBe(true);
   expect(records.some(r => r.evaluations?.some((a: any) => a.expert?.version === 'xiangqi-expert/v1'))).toBe(true);
-  console.log('PASS: real Electron + 32-piece board / capture / keyboard / replay / undo + no-scroll 900/760/700 + BO3/BO5 + clocks/timeout + offline music decoding + isolated IPC + autosave');
+  console.log('PASS: real Electron + 32-piece board / capture / keyboard / replay / undo + no-scroll 900/760/700 + BO3/BO5 + clocks/timeout + offline music decoding + round-result celebrations + isolated IPC + autosave');
 } finally { await application.close(); if (dataDir.includes('chinese-chess-smoke-')) await rm(dataDir, { recursive: true, force: true }); }

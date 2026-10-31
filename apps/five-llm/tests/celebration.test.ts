@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { GameService } from '../src/business/game-service';
-import { isNewHumanWin } from '../src/renderer/celebration';
+import { newRoundWinner } from '../src/renderer/celebration';
 import type { GameState, ResultReason } from '../src/shared/types';
 
 function fixture(human: 1 | 2 = 1): GameState {
@@ -11,31 +11,38 @@ function settled(state: GameState, winner: 1 | 2 | 'draw', reason: ResultReason 
   return { ...state, status: 'over', outcome: { gameId: state.id, number: 1, humanColor: state.human, winner, reason } };
 }
 
-describe('human victory celebration trigger', () => {
-  test('celebrates either human color and all authoritative winning reasons', () => {
+describe('round result celebration trigger', () => {
+  test('a human win of either color and every winning reason celebrates the human', () => {
     for (const human of [1, 2] as const) for (const reason of ['five', 'main-time', 'byoyomi', 'resign'] as const) {
       const before = fixture(human);
-      expect(isNewHumanWin(before, settled(before, human, reason))).toBe(true);
+      expect(newRoundWinner(before, settled(before, human, reason))).toBe('human');
     }
   });
-  test('does not celebrate a loss, draw, or unfinished round', () => {
+  test('a machine win of either color gets the machine effect', () => {
+    for (const human of [1, 2] as const) for (const reason of ['five', 'main-time', 'resign'] as const) {
+      const before = fixture(human);
+      expect(newRoundWinner(before, settled(before, human === 1 ? 2 : 1, reason))).toBe('machine');
+    }
+  });
+  test('a draw or unfinished round plays nothing', () => {
     const before = fixture();
-    expect(isNewHumanWin(before, settled(before, 2))).toBe(false);
-    expect(isNewHumanWin(before, settled(before, 'draw', 'draw'))).toBe(false);
-    expect(isNewHumanWin(before, before)).toBe(false);
+    expect(newRoundWinner(before, settled(before, 'draw', 'draw'))).toBeNull();
+    expect(newRoundWinner(before, before)).toBeNull();
   });
-  test('bootstrap, duplicate replies, heartbeats and model changes cannot replay a win', () => {
-    const before = fixture(), win = settled(before, 1);
-    expect(isNewHumanWin(undefined, win)).toBe(false);
-    expect(isNewHumanWin(win, structuredClone(win))).toBe(false);
-    expect(isNewHumanWin(win, { ...win, revision: win.revision + 1 })).toBe(false);
-    expect(isNewHumanWin(before, { ...win, id: 'another-round' })).toBe(false);
+  test('bootstrap, duplicate replies, heartbeats and model changes cannot replay a result', () => {
+    for (const winner of [1, 2] as const) {
+      const before = fixture(), result = settled(before, winner);
+      expect(newRoundWinner(undefined, result)).toBeNull();
+      expect(newRoundWinner(result, structuredClone(result))).toBeNull();
+      expect(newRoundWinner(result, { ...result, revision: result.revision + 1 })).toBeNull();
+      expect(newRoundWinner(before, { ...result, id: 'another-round' })).toBeNull();
+    }
   });
-  test('later rounds and the match-winning round celebrate normally', () => {
+  test('later rounds and match-deciding rounds celebrate normally', () => {
     const before = fixture(2), win = settled(before, 2);
     win.match.winner = 'human';
-    expect(isNewHumanWin(before, win)).toBe(true);
+    expect(newRoundWinner(before, win)).toBe('human');
     const nextRound = { ...before, id: 'next-round' };
-    expect(isNewHumanWin(nextRound, settled(nextRound, 2))).toBe(true);
+    expect(newRoundWinner(nextRound, settled(nextRound, 1))).toBe('machine');
   });
 });

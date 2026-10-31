@@ -5,6 +5,7 @@ import { setupLearningUI } from './learning-ui';
 import { conditionalText, motifText, principleText } from './skill-text';
 import { progressText, timingLines, timingSummary } from './turn-feedback';
 import { Ambience, type MusicStyle } from './audio';
+import { newRoundWinner, VictoryCelebration } from './celebration';
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const text = (id: string, value: string) => { el(id).textContent = value; };
 const button = (id: string) => el<HTMLButtonElement>(id);
@@ -12,6 +13,7 @@ const input = (id: string) => el<HTMLInputElement>(id);
 const select = (id: string) => el<HTMLSelectElement>(id);
 const dialog = (id: string) => el<HTMLDialogElement>(id);
 const audio = new Ambience(el<HTMLAudioElement>('background-music'));
+const celebration = new VictoryCelebration(el('victory'), el<HTMLCanvasElement>('confetti'), el('victory-message'));
 let state: GameState, models: ModelChoice[] = [], view: number | null = null, flipped = false, selected: Point | null = null;
 let hints = true, animations = !matchMedia('(prefers-reduced-motion: reduce)').matches, busy = false, cursor: Point | null = null;
 let lastRecordKey = '', toastTimer: ReturnType<typeof setTimeout>;
@@ -222,13 +224,21 @@ function receive(next: GameState) {
   const changedBoard = changedGame || state.position.moves.length !== next.position.moves.length || state.revision !== next.revision;
   const animate = !changedGame && view === null && next.position.moves.length === state.position.moves.length + 1;
   if (changedGame || next.position.moves.length < state.position.moves.length) evaluations.clear();
+  const winner = newRoundWinner(state, next);
+  if (changedGame) celebration.stop();
   state = next;
+  if (winner) {
+    view = null;
+    // The app's own animation switch also silences the particles; the sound follows the move-sound switch.
+    celebration.play(winner, next.match.winner === winner, animations);
+    if (input('sound').checked) void audio.victory(winner).catch(() => {}); // audio failures must not interrupt the game
+  }
   if (changedGame) { view = null; flipped = state.human === 2; selected = null; cursor = null; el('effects').replaceChildren(); staticBoard(); }
   if (changedBoard) { selected = null; if (view !== null) view = Math.min(view, state.position.moves.length); renderBoard(animate); if (animate && input('sound').checked) void audio.stone().catch(() => {}); }
   renderClocks(); renderStatus(); renderRecord(); renderLogs();
   if (changedBoard && dialog('expert-dialog').open) renderExpert();
 }
-function review(ply: number | null) { view = ply; selected = null; cursor = null; renderBoard(); renderStatus(); renderRecord(); if (dialog('expert-dialog').open) renderExpert(); }
+function review(ply: number | null) { if (ply !== null) celebration.stop(); view = ply; selected = null; cursor = null; renderBoard(); renderStatus(); renderRecord(); if (dialog('expert-dialog').open) renderExpert(); }
 function activate(point: Point) {
   if (!state || busy) return;
   if (view !== null) { toast('回看中，请先回到实战'); return; }
@@ -299,7 +309,7 @@ button('music').onclick = () => { void audio.toggle().catch(() => {}); };
 select('music-style').onchange = () => { void audio.setStyle(select('music-style').value as MusicStyle).catch(() => {}); };
 input('volume').oninput = () => audio.setVolume(Number(input('volume').value) / 100);
 button('music-credits').onclick = () => dialog('music-dialog').showModal(); button('music-close').onclick = () => dialog('music-dialog').close();
-window.addEventListener('beforeunload', () => audio.dispose());
+window.addEventListener('beforeunload', () => { celebration.stop(); audio.dispose(); });
 async function bootstrap() {
   const r = await window.chess.bootstrap();
   if (!r.ok) { toast(r.error); return; }

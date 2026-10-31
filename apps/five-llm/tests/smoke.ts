@@ -181,11 +181,27 @@ try {
   expect(await page.locator('#confetti').evaluate((canvas: HTMLCanvasElement) =>
     canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data.every(value => value === 0)
   )).toBe(true);
+  await expect(page.locator('#victory')).not.toHaveClass(/machine/);
+  // A machine win gets the quieter machine variant: its own message, styling and four-note phrase.
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  active.id = 'machine-win-fixture'; await sendState(active);
+  const loss: GameState = structuredClone(win);
+  loss.id = active.id; loss.outcome = { gameId: active.id, number: 1, humanColor: loss.human, winner: loss.human === 1 ? 2 : 1, reason: 'five' };
+  loss.match.winner = null; loss.match.humanWins = 0; loss.match.machineWins = 1;
+  await sendState(loss);
+  await expect(page.locator('#victory')).toBeVisible();
+  await expect(page.locator('#victory')).toHaveClass(/machine/);
+  await expect(page.locator('#victory-message')).toHaveText('这局大模型胜出，重整旗鼓再战！');
+  await expect.poll(() => page.evaluate(() => (window as any).victoryNotes)).toBe(16);
+  await expect.poll(() => page.locator('#confetti').evaluate((canvas: HTMLCanvasElement) =>
+    canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data.some((value, i) => i % 4 === 3 && value > 0)
+  )).toBe(true);
+  await page.screenshot({ path: 'artifacts/machine-win.png' });
   // Starting the next game cleans up an in-flight celebration immediately.
   active.id = 'cleanup-fixture'; await sendState(active);
   await expect(page.locator('#victory')).toBeHidden();
   expect(errors).toEqual([]);
-  console.log('PASS: Electron + no-scroll + board/replay/undo + clocks/BO3/BO5 + real timeout + offline MP3 + autosave + victory confetti/audio/reduced-motion/cleanup');
+  console.log('PASS: Electron + no-scroll + board/replay/undo + clocks/BO3/BO5 + real timeout + offline MP3 + autosave + victory confetti/machine-win effect/audio/reduced-motion/cleanup');
 } finally {
   await electronApp.close();
   if (dataDir.includes('five-llm-smoke-')) await rm(dataDir, { recursive: true, force: true });

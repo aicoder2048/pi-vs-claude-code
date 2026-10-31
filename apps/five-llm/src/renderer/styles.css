@@ -158,6 +158,7 @@ input[type=checkbox],input[type=radio] { accent-color:var(--green); }
 #victory-message { position:absolute; top:19%; left:50%; transform:translateX(-50%); padding:16px 28px;
   border:1px solid #d5b767; border-radius:12px; background:#fff9e9f5; color:#79602c;
   box-shadow:0 8px 32px #79602c25; font:600 22px "Songti SC",serif; white-space:nowrap; }
+.victory.machine #victory-message { border-color:#9aa6ae; background:#f3f5f6f2; color:#46545f; box-shadow:0 8px 32px #46545f22; }
 [hidden] { display:none!important; }
 @keyframes breathe { 50% { opacity:.25; transform:scale(.85); } }
 @media(max-width:1120px) {

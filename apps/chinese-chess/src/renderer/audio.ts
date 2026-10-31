@@ -6,7 +6,7 @@ export type MusicStyle = keyof typeof MUSIC_TRACKS;
 export interface MusicState { style: MusicStyle; playing: boolean; busy: boolean; error: string | null }
 
 // Background music is local, licensed full-length audio, not synthesized notes.
-// Web Audio is retained solely for the short, quiet stone-placement effect.
+// Web Audio supplies only short stone-placement and round-result sound effects.
 export class Ambience {
   private context?: AudioContext;
   private style: MusicStyle = 'piano';
@@ -100,6 +100,28 @@ export class Ambience {
     gain.gain.setValueAtTime(.025, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(.0001, ctx.currentTime + .1);
     osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + .12);
     osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+  }
+  async victory(winner: 'human' | 'machine' = 'human'): Promise<void> {
+    if (this.disposed) return;
+    this.context ??= new AudioContext();
+    const ctx = this.context; await ctx.resume();
+    if (this.disposed) return;
+    // Human: a soft ascending major arpeggio with a final chord. Machine: a quieter
+    // descending phrase that acknowledges the result without cheering. Entirely offline.
+    const human = winner === 'human';
+    const notes = human ? [523.25, 659.25, 783.99, 1046.5, 659.25, 783.99] : [659.25, 587.33, 523.25, 392];
+    const start = ctx.currentTime;
+    for (const [i, frequency] of notes.entries()) {
+      const at = start + (human ? (i < 4 ? i * .12 : .36) : i * .16);
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = human ? 'triangle' : 'sine'; osc.frequency.setValueAtTime(frequency, at);
+      gain.gain.setValueAtTime(0, at);
+      gain.gain.linearRampToValueAtTime(human ? .035 : .025, at + .015);
+      gain.gain.exponentialRampToValueAtTime(.0001, at + .65);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(at); osc.stop(at + .7);
+      osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+    }
   }
   dispose(): void {
     this.disposed = true; this.cancelRamp(); this.media.pause();

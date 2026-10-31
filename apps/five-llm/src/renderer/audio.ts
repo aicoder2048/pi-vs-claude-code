@@ -101,19 +101,22 @@ export class Ambience {
     osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + .12);
     osc.onended = () => { osc.disconnect(); gain.disconnect(); };
   }
-  async victory(): Promise<void> {
+  async victory(winner: 'human' | 'machine' = 'human'): Promise<void> {
     if (this.disposed) return;
     this.context ??= new AudioContext();
     const ctx = this.context; await ctx.resume();
     if (this.disposed) return;
-    // A soft ascending major arpeggio with a final chord, entirely offline.
+    // Human: a soft ascending major arpeggio with a final chord. Machine: a quieter
+    // descending phrase that acknowledges the result without cheering. Entirely offline.
+    const human = winner === 'human';
+    const notes = human ? [523.25, 659.25, 783.99, 1046.5, 659.25, 783.99] : [659.25, 587.33, 523.25, 392];
     const start = ctx.currentTime;
-    for (const [i, frequency] of [523.25, 659.25, 783.99, 1046.5, 659.25, 783.99].entries()) {
-      const at = start + (i < 4 ? i * .12 : .36);
+    for (const [i, frequency] of notes.entries()) {
+      const at = start + (human ? (i < 4 ? i * .12 : .36) : i * .16);
       const osc = ctx.createOscillator(), gain = ctx.createGain();
-      osc.type = 'triangle'; osc.frequency.setValueAtTime(frequency, at);
+      osc.type = human ? 'triangle' : 'sine'; osc.frequency.setValueAtTime(frequency, at);
       gain.gain.setValueAtTime(0, at);
-      gain.gain.linearRampToValueAtTime(.035, at + .015);
+      gain.gain.linearRampToValueAtTime(human ? .035 : .025, at + .015);
       gain.gain.exponentialRampToValueAtTime(.0001, at + .65);
       osc.connect(gain); gain.connect(ctx.destination);
       osc.start(at); osc.stop(at + .7);
