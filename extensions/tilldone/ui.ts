@@ -133,7 +133,8 @@ export function renderCall(args: Params, theme: Theme): Text {
 const RESULT_PREFIX = {
 	add: ["success", "✓ "],
 	update: ["success", "✓ "],
-	toggle: ["accent", "⟳ "],
+	start: ["accent", "▶ "],
+	done: ["success", "✓ "],
 	remove: ["warning", "✕ "],
 	split: ["accent", "✂ "],
 } as const;
@@ -168,7 +169,8 @@ export function renderResult(
 		}
 		case "add":
 		case "update":
-		case "toggle":
+		case "start":
+		case "done":
 		case "remove":
 		case "split": {
 			const [color, prefix] = RESULT_PREFIX[details.action];

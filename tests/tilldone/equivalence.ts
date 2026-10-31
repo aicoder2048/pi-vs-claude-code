@@ -1,4 +1,11 @@
 /**
+ * RETIRED. This harness proved the four-layer refactor (7ae3a67) kept the
+ * original's behavior. Since then the four-layer tilldone has changed its
+ * contract on purpose (split, start/done instead of toggle, split cues,
+ * confirm only with unfinished work), so the original is no longer the spec
+ * and this script fails by design. Behavior is covered by
+ * extensions/tilldone/state.test.ts. Kept as the record of that refactor.
+ *
  * Equivalence harness: drives the original extensions/tilldone.ts and the
  * four-layer extensions/tilldone through the real Pi runtime with the faux
  * provider (no network, no real model), records a trace of everything a user

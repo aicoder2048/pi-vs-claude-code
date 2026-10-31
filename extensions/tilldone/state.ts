@@ -42,8 +42,8 @@ export interface Model {
 	readonly spent: number;
 }
 
-/** index.ts builds the StringEnum from this order; split is appended so the original actions keep their positions. */
-export const ACTIONS = ["new-list", "add", "toggle", "remove", "update", "list", "clear", "split"] as const;
+/** index.ts builds the StringEnum from this order. */
+export const ACTIONS = ["new-list", "add", "start", "done", "remove", "update", "list", "clear", "split"] as const;
 export type Action = (typeof ACTIONS)[number];
 
 /** Tool params as Pi hands them over after schema validation. */
@@ -73,7 +73,6 @@ export interface Details {
 // Tables
 
 export const STATUS_ICON: Readonly<Record<Status, string>> = { idle: "○", inprogress: "●", done: "✓" };
-export const NEXT_STATUS: Readonly<Record<Status, Status>> = { idle: "inprogress", inprogress: "done", done: "idle" };
 export const STATUS_LABEL: Readonly<Record<Status, string>> = { idle: "idle", inprogress: "in progress", done: "done" };
 
 // Model-facing tool contract. index.ts turns this into the TypeBox schema.
@@ -83,9 +82,9 @@ export const TOOL = {
 	label: "TillDone",
 	description:
 		"Manage your task list. You MUST add tasks before using any other tools; read-only tools (read, grep, find, ls) stay available for planning. " +
-		"Actions: new-list (text=title, description), add (text or texts[] for batch), toggle (id) — cycles idle→inprogress→done, remove (id), update (id + text), list, clear, " +
+		"Actions: new-list (text=title, description), add (text or texts[] for batch), start (id) — marks a task inprogress (reopens a done one), done (id) — marks it done, remove (id), update (id + text), list, clear, " +
 		"split (id + texts[] of at least 2) — replaces a task in place with smaller subtasks; an in-progress task hands over to its first subtask. " +
-		"Always toggle a task to inprogress before starting work on it, and to done when finished. " +
+		"Always start a task before working on it, and mark it done when finished. Repeating start or done changes nothing. " +
 		"Use new-list to start a themed list with a title and description. " +
 		"Keep each task small enough to finish and verify in one focused change. If a task turns out bigger, split it instead of letting it grow; " +
 		"if you find work outside the current task, add it as a new task. " +
@@ -95,7 +94,7 @@ export const TOOL = {
 		text: "Task text (for add/update), or list title (for new-list)",
 		texts: "Multiple task texts (for add or split). Use this to batch-add several tasks at once, or to list the subtasks a split creates.",
 		description: "List description (for new-list)",
-		id: "Task ID (for toggle/remove/update/split)",
+		id: "Task ID (for start/done/remove/update/split)",
 	},
 	commandDescription: "Show all TillDone tasks on the current branch",
 } as const;
@@ -106,7 +105,7 @@ export const GATE_REASON = {
 	allDone:
 		"🚫 All TillDone tasks are done. You MUST use `tilldone add` for new tasks or `tilldone new-list` to start a fresh list before using any other tools (read-only tools — read, grep, find, ls — stay available for planning).",
 	noneActive:
-		"🚫 No task is in progress. You MUST use `tilldone toggle` to mark a task as inprogress before doing any work.",
+		"🚫 No task is in progress. You MUST use `tilldone start` to mark a task as inprogress before doing any work.",
 } as const;
 
 export const CONFIRM_TIMEOUT_MS = 30000;
@@ -210,7 +209,7 @@ type Valid =
 	| { readonly kind: "new-list"; readonly title: string; readonly description: string | undefined }
 	| { readonly kind: "list" }
 	| { readonly kind: "add"; readonly items: readonly [string, ...string[]] }
-	| { readonly kind: "toggle"; readonly id: number }
+	| { readonly kind: "start" | "done"; readonly id: number }
 	| { readonly kind: "remove"; readonly id: number }
 	| { readonly kind: "update"; readonly id: number; readonly text: string }
 	| { readonly kind: "split"; readonly id: number; readonly items: readonly [string, string, ...string[]] }
@@ -236,7 +235,8 @@ function validate(params: Params): Validation {
 			const items = texts?.length ? texts : text ? [text] : [];
 			return items.length > 0 ? valid({ kind: "add", items: items as readonly [string, ...string[]] }) : invalid(action, "Error: text or texts required for add", "text required");
 		}
-		case "toggle":
+		case "start":
+		case "done":
 		case "remove":
 			return id === undefined ? invalid(action, `Error: id required for ${action}`, "id required") : valid({ kind: action, id });
 		case "update":
@@ -307,10 +307,13 @@ export function runTool(model: Model, params: Params, consent?: boolean): Ask | 
 				added.length === 1 ? `Added task #${added[0].id}: ${added[0].text}` : `Added ${added.length} tasks: ${added.map((t) => `#${t.id}`).join(", ")}`;
 			return ok(model, "add", makeList([...list.tasks, ...added], list.nextId + added.length, list.title, list.description), text);
 		}
-		case "toggle": {
+		case "start":
+		case "done": {
 			const task = list.tasks.find((t) => t.id === cmd.id);
-			if (!task) return notFound(list, "toggle", cmd.id);
-			const next = NEXT_STATUS[task.status];
+			if (!task) return notFound(list, cmd.kind, cmd.id);
+			// Each action names its target state, so a repeated call is a no-op instead of a step past it.
+			const next: Status = cmd.kind === "start" ? "inprogress" : "done";
+			if (task.status === next) return ok(model, cmd.kind, list, `Task #${task.id} is already ${STATUS_LABEL[next]}.`);
 			const demoted: number[] = [];
 			const tasks = list.tasks.map((t): Task => {
 				if (t === task) return { ...t, status: next };
@@ -325,7 +328,7 @@ export function runTool(model: Model, params: Params, consent?: boolean): Ask | 
 				text += `\n(Auto-paused ${demoted.map((id) => `#${id}`).join(", ")} → idle. Only one task can be in progress at a time.)`;
 			}
 			if (next === "inprogress") text += SPLIT_CUE;
-			return ok(model, "toggle", makeList(tasks, list.nextId, list.title, list.description), text);
+			return ok(model, cmd.kind, makeList(tasks, list.nextId, list.title, list.description), text);
 		}
 		case "remove": {
 			const task = list.tasks.find((t) => t.id === cmd.id);
@@ -411,7 +414,7 @@ export function agentEnd(model: Model): { readonly model: Model; readonly nudge?
 		model: makeModel(model.list, true, model.spent),
 		nudge: {
 			customType: "tilldone-nudge",
-			content: `⚠️ You still have ${incomplete.length} incomplete task(s):\n\n${lines}\n\nEither continue working on them or mark them done with \`tilldone toggle\`. Don't stop until it's done!`,
+			content: `⚠️ You still have ${incomplete.length} incomplete task(s):\n\n${lines}\n\nEither continue working on them or mark them done with \`tilldone done\`. Don't stop until it's done!`,
 			display: true,
 		},
 	};

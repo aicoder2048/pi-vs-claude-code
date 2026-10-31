@@ -61,7 +61,7 @@ describe("new-list (T:405-442)", () => {
 	});
 
 	test("asks while a task is not done", () => {
-		const m = run(INITIAL_MODEL, { action: "new-list", text: "T" }, { action: "add", texts: ["a", "b"] }, { action: "toggle", id: 1 }, { action: "toggle", id: 1 });
+		const m = run(INITIAL_MODEL, { action: "new-list", text: "T" }, { action: "add", texts: ["a", "b"] }, { action: "start", id: 1 }, { action: "done", id: 1 });
 		const a = ask(runTool(m, { action: "new-list", text: "U" }));
 		expect([a.title, a.message, a.timeoutMs]).toEqual(["Start a new list?", 'This will replace "T" (2 task(s), 1 not done). Continue?', 30000]);
 		expect(ask(runTool(withTasks("a"), { action: "new-list", text: "U" })).message).toBe("This will replace the current list (1 task(s), 1 not done). Continue?");
@@ -69,7 +69,7 @@ describe("new-list (T:405-442)", () => {
 
 	test("replaces a titled-but-empty or all-done list without asking", () => {
 		const titled = step(INITIAL_MODEL, { action: "new-list", text: "T" });
-		const done = run(withTasks("a"), { action: "toggle", id: 1 }, { action: "toggle", id: 1 });
+		const done = run(withTasks("a"), { action: "start", id: 1 }, { action: "done", id: 1 });
 		for (const m of [titled, done]) expect(reply(runTool(m, { action: "new-list", text: "U" })).next!.list.title).toBe("U");
 	});
 
@@ -96,7 +96,7 @@ describe("list (T:444-458)", () => {
 	});
 
 	test("titled list lines", () => {
-		const m = run(INITIAL_MODEL, { action: "new-list", text: "T" }, { action: "add", texts: ["a", "b"] }, { action: "toggle", id: 2 });
+		const m = run(INITIAL_MODEL, { action: "new-list", text: "T" }, { action: "add", texts: ["a", "b"] }, { action: "start", id: 2 });
 		expect(reply(runTool(m, { action: "list" })).text).toBe("T:\n[○] #1 (idle): a\n[●] #2 (inprogress): b");
 	});
 
@@ -127,37 +127,57 @@ describe("add (T:460-483)", () => {
 	});
 });
 
-describe("toggle (T:485-527)", () => {
+describe("start and done", () => {
 	test("missing and unknown id", () => {
-		const a = reply(runTool(withTasks("a"), { action: "toggle" }));
-		expect([a.text, a.details.error]).toEqual(["Error: id required for toggle", "id required"]);
-		const b = reply(runTool(withTasks("a"), { action: "toggle", id: 9 }));
-		expect([b.text, b.details.error, b.next]).toEqual(["Task #9 not found", "#9 not found", undefined]);
-	});
-
-	test("cycles idle, inprogress, done, idle", () => {
-		let m = withTasks("a");
-		const texts: string[] = [];
-		for (let i = 0; i < 3; i++) {
-			const r = reply(runTool(m, { action: "toggle", id: 1 }));
-			texts.push(r.text);
-			m = r.next!;
+		for (const action of ["start", "done"] as const) {
+			const a = reply(runTool(withTasks("a"), { action }));
+			expect([a.text, a.details.error]).toEqual([`Error: id required for ${action}`, "id required"]);
+			const b = reply(runTool(withTasks("a"), { action, id: 9 }));
+			expect([b.text, b.details.error, b.next]).toEqual(["Task #9 not found", "#9 not found", undefined]);
 		}
-		expect(texts).toEqual([`Task #1: idle → inprogress${SPLIT_CUE}`, "Task #1: inprogress → done", "Task #1: done → idle"]);
 	});
 
-	test("entering inprogress demotes the other active task", () => {
-		const m = run(withTasks("a", "b"), { action: "toggle", id: 1 });
-		const r = reply(runTool(m, { action: "toggle", id: 2 }));
+	test("start then done, each named by its target state", () => {
+		const started = reply(runTool(withTasks("a"), { action: "start", id: 1 }));
+		expect(started.text).toBe(`Task #1: idle → inprogress${SPLIT_CUE}`);
+		const done = reply(runTool(started.next!, { action: "done", id: 1 }));
+		expect(done.text).toBe("Task #1: inprogress → done");
+		expect(statuses(done.next!)).toEqual(["1:done"]);
+	});
+
+	test("repeating an action changes nothing, so a double call cannot undo work", () => {
+		const active = step(withTasks("a"), { action: "start", id: 1 });
+		const again = reply(runTool(active, { action: "start", id: 1 }));
+		expect([again.text, again.next]).toEqual(["Task #1 is already in progress.", active]);
+		const finished = step(active, { action: "done", id: 1 });
+		const twice = reply(runTool(finished, { action: "done", id: 1 }));
+		expect([twice.text, twice.next]).toEqual(["Task #1 is already done.", finished]);
+	});
+
+	test("done works from idle, and start reopens a done task", () => {
+		expect(reply(runTool(withTasks("a"), { action: "done", id: 1 })).text).toBe("Task #1: idle → done");
+		const finished = run(withTasks("a"), { action: "done", id: 1 });
+		const reopened = reply(runTool(finished, { action: "start", id: 1 }));
+		expect(reopened.text).toBe(`Task #1: done → inprogress${SPLIT_CUE}`);
+		expect(statuses(reopened.next!)).toEqual(["1:inprogress"]);
+	});
+
+	test("starting a task pauses the other active task", () => {
+		const m = run(withTasks("a", "b"), { action: "start", id: 1 });
+		const r = reply(runTool(m, { action: "start", id: 2 }));
 		expect(r.text).toBe(`Task #2: idle → inprogress\n(Auto-paused #1 → idle. Only one task can be in progress at a time.)${SPLIT_CUE}`);
 		expect(statuses(r.next!)).toEqual(["1:idle", "2:inprogress"]);
 	});
 
-	test("restored data with several active tasks demotes all of them in order", () => {
+	test("restored data with several active tasks pauses all of them in order", () => {
 		const m = restore(INITIAL_MODEL, [
 			{ action: "add", nextId: 4, tasks: [{ id: 1, text: "a", status: "inprogress" }, { id: 2, text: "b", status: "inprogress" }, { id: 3, text: "c", status: "idle" }] },
 		]);
-		expect(reply(runTool(m, { action: "toggle", id: 3 })).text).toBe(`Task #3: idle → inprogress\n(Auto-paused #1, #2 → idle. Only one task can be in progress at a time.)${SPLIT_CUE}`);
+		expect(reply(runTool(m, { action: "start", id: 3 })).text).toBe(`Task #3: idle → inprogress\n(Auto-paused #1, #2 → idle. Only one task can be in progress at a time.)${SPLIT_CUE}`);
+	});
+
+	test("toggle is gone", () => {
+		expect(reply(runTool(withTasks("a"), { action: "toggle", id: 1 } as unknown as Params)).text).toBe("Unknown action: toggle");
 	});
 });
 
@@ -209,7 +229,7 @@ describe("clear (T:582-609)", () => {
 	});
 
 	test("clears an all-done list without asking", () => {
-		const done = run(withTasks("a"), { action: "toggle", id: 1 }, { action: "toggle", id: 1 });
+		const done = run(withTasks("a"), { action: "start", id: 1 }, { action: "done", id: 1 });
 		expect(reply(runTool(done, { action: "clear" })).text).toBe("Cleared 1 task(s)");
 	});
 
@@ -230,7 +250,7 @@ describe("clear (T:582-609)", () => {
 
 describe("split", () => {
 	test("errors: id, then at least two texts, then lookup, then done", () => {
-		const m = run(withTasks("a"), { action: "toggle", id: 1 }, { action: "toggle", id: 1 });
+		const m = run(withTasks("a"), { action: "start", id: 1 }, { action: "done", id: 1 });
 		expect(reply(runTool(m, { action: "split", texts: ["x", "y"] })).text).toBe("Error: id required for split");
 		const one = reply(runTool(m, { action: "split", id: 1, texts: ["x"] }));
 		expect([one.text, one.details.error]).toEqual(["Error: texts (at least 2) required for split", "texts required"]);
@@ -252,7 +272,7 @@ describe("split", () => {
 	});
 
 	test("an in-progress task hands over to its first subtask, so the gate stays open", () => {
-		const m = run(withTasks("a"), { action: "toggle", id: 1 });
+		const m = run(withTasks("a"), { action: "start", id: 1 });
 		const r = reply(runTool(m, { action: "split", id: 1, texts: ["x", "y", "z"] }));
 		expect(r.text).toBe("Split #1 into #2, #3, #4\n#2 is now in progress.");
 		expect(statuses(r.next!)).toEqual(["2:inprogress", "3:idle", "4:idle"]);
@@ -272,7 +292,7 @@ describe("split", () => {
 describe("other actions", () => {
 	test("consent on an action that never asks changes nothing", () => {
 		const m = withTasks("a");
-		expect(runTool(m, { action: "toggle", id: 1 }, false)).toEqual(reply(runTool(m, { action: "toggle", id: 1 })));
+		expect(runTool(m, { action: "start", id: 1 }, false)).toEqual(reply(runTool(m, { action: "start", id: 1 })));
 	});
 
 	test("unknown action (T:611-615)", () => {
@@ -286,18 +306,18 @@ describe("other actions", () => {
 
 	test("details JSON keeps the original makeDetails key order (T:168-175)", () => {
 		const m = run(INITIAL_MODEL, { action: "new-list", text: "T", description: "D" }, { action: "add", text: "a" });
-		expect(JSON.stringify(reply(runTool(m, { action: "toggle", id: 9 })).details)).toBe(
-			'{"action":"toggle","tasks":[{"id":1,"text":"a","status":"idle"}],"nextId":2,"listTitle":"T","listDescription":"D","error":"#9 not found"}',
+		expect(JSON.stringify(reply(runTool(m, { action: "start", id: 9 })).details)).toBe(
+			'{"action":"start","tasks":[{"id":1,"text":"a","status":"idle"}],"nextId":2,"listTitle":"T","listDescription":"D","error":"#9 not found"}',
 		);
 		expect(Object.keys(reply(runTool(INITIAL_MODEL, { action: "list" })).details)).toEqual(["action", "tasks", "nextId", "listTitle", "listDescription"]);
 	});
 });
 
 describe("B1: copy boundaries", () => {
-	test("an earlier snapshot is not rewritten by a later toggle", () => {
+	test("an earlier snapshot is not rewritten by a later start", () => {
 		const added = reply(runTool(INITIAL_MODEL, { action: "add", text: "a" }));
-		const toggled = reply(runTool(added.next!, { action: "toggle", id: 1 }));
-		expect(toggled.details.tasks[0].status).toBe("inprogress");
+		const started = reply(runTool(added.next!, { action: "start", id: 1 }));
+		expect(started.details.tasks[0].status).toBe("inprogress");
 		expect(added.details.tasks[0].status).toBe("idle");
 	});
 
@@ -376,7 +396,7 @@ describe("gate (T:335-361)", () => {
 		"🚫 No TillDone tasks defined. You MUST use `tilldone new-list` or `tilldone add` to define your tasks before using any other tools (read-only tools — read, grep, find, ls — stay available for planning). Plan your work first!";
 	const allDone =
 		"🚫 All TillDone tasks are done. You MUST use `tilldone add` for new tasks or `tilldone new-list` to start a fresh list before using any other tools (read-only tools — read, grep, find, ls — stay available for planning).";
-	const noneActive = "🚫 No task is in progress. You MUST use `tilldone toggle` to mark a task as inprogress before doing any work.";
+	const noneActive = "🚫 No task is in progress. You MUST use `tilldone start` to mark a task as inprogress before doing any work.";
 
 	test("tilldone always passes", () => {
 		expect(gate(INITIAL_MODEL, "tilldone")).toEqual({ block: false });
@@ -385,13 +405,13 @@ describe("gate (T:335-361)", () => {
 	test("reasons in order", () => {
 		const m = withTasks("a");
 		expect(gate(INITIAL_MODEL, "bash")).toEqual({ block: true, reason: noTasks });
-		expect(gate(run(m, { action: "toggle", id: 1 }, { action: "toggle", id: 1 }), "bash")).toEqual({ block: true, reason: allDone });
+		expect(gate(run(m, { action: "start", id: 1 }, { action: "done", id: 1 }), "bash")).toEqual({ block: true, reason: allDone });
 		expect(gate(m, "bash")).toEqual({ block: true, reason: noneActive });
-		expect(gate(run(m, { action: "toggle", id: 1 }), "bash")).toEqual({ block: false });
+		expect(gate(run(m, { action: "start", id: 1 }), "bash")).toEqual({ block: false });
 	});
 
 	test("read-only tools pass without an active task, so a plan can be based on files", () => {
-		const done = run(withTasks("a"), { action: "toggle", id: 1 }, { action: "toggle", id: 1 });
+		const done = run(withTasks("a"), { action: "start", id: 1 }, { action: "done", id: 1 });
 		for (const m of [INITIAL_MODEL, withTasks("a"), done]) {
 			for (const tool of ["read", "grep", "find", "ls"]) expect(gate(m, tool)).toEqual({ block: false });
 			for (const tool of ["bash", "edit", "write"]) expect(gate(m, tool).block).toBe(true);
@@ -400,7 +420,7 @@ describe("gate (T:335-361)", () => {
 });
 
 describe("split hint by tool calls", () => {
-	const active = () => run(withTasks("a", "b"), { action: "toggle", id: 1 });
+	const active = () => run(withTasks("a", "b"), { action: "start", id: 1 });
 	const calls = (m: Model, n: number, tool = "bash") => {
 		const hints: (string | undefined)[] = [];
 		for (let i = 0; i < n; i++) {
@@ -429,9 +449,9 @@ describe("split hint by tool calls", () => {
 	test("the count restarts when the active task changes, not on other edits", () => {
 		const m = calls(active(), 14).model;
 		expect(calls(step(m, { action: "add", text: "c" }), 1).hints[0]).toBe(hint(1, 15));
-		expect(calls(step(m, { action: "toggle", id: 2 }), 14).hints.some(Boolean)).toBe(false);
+		expect(calls(step(m, { action: "start", id: 2 }), 14).hints.some(Boolean)).toBe(false);
 		expect(calls(step(m, { action: "split", id: 1, texts: ["x", "y"] }), 15).hints[14]).toBe(hint(3, 15));
-		expect(calls(step(m, { action: "toggle", id: 1 }), 1).model.spent).toBe(0);
+		expect(calls(step(m, { action: "done", id: 1 }), 1).model.spent).toBe(0);
 	});
 
 	test("a nudge or a user message keeps the count", () => {
@@ -447,7 +467,7 @@ describe("split hint by tool calls", () => {
 
 describe("nudge latch (T:365-388)", () => {
 	test("no nudge without incomplete tasks", () => {
-		for (const m of [INITIAL_MODEL, run(withTasks("a"), { action: "toggle", id: 1 }, { action: "toggle", id: 1 })]) {
+		for (const m of [INITIAL_MODEL, run(withTasks("a"), { action: "start", id: 1 }, { action: "done", id: 1 })]) {
 			const r = agentEnd(m);
 			expect(r.nudge).toBeUndefined();
 			expect(r.model.nudged).toBe(false);
@@ -455,15 +475,14 @@ describe("nudge latch (T:365-388)", () => {
 	});
 
 	test("nudge text and message shape", () => {
-		const m = run(withTasks("a", "b", "c"), { action: "toggle", id: 1 }, { action: "toggle", id: 3 }, { action: "toggle", id: 3 }, { action: "toggle", id: 3 });
-		const r = agentEnd(run(m, { action: "toggle", id: 3 }, { action: "toggle", id: 3 }));
+		const r = agentEnd(run(withTasks("a", "b", "c"), { action: "start", id: 1 }, { action: "start", id: 3 }, { action: "done", id: 3 }));
 		expect(r.nudge).toEqual({
 			customType: "tilldone-nudge",
 			content:
-				"⚠️ You still have 2 incomplete task(s):\n\n  ○ #1 [idle]: a\n  ○ #2 [idle]: b\n\nEither continue working on them or mark them done with `tilldone toggle`. Don't stop until it's done!",
+				"⚠️ You still have 2 incomplete task(s):\n\n  ○ #1 [idle]: a\n  ○ #2 [idle]: b\n\nEither continue working on them or mark them done with `tilldone done`. Don't stop until it's done!",
 			display: true,
 		});
-		expect(agentEnd(run(withTasks("a"), { action: "toggle", id: 1 })).nudge!.content).toContain("\n\n  ● #1 [in progress]: a\n\n");
+		expect(agentEnd(run(withTasks("a"), { action: "start", id: 1 })).nudge!.content).toContain("\n\n  ● #1 [in progress]: a\n\n");
 	});
 
 	test("once per input", () => {
