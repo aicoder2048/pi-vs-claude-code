@@ -28,6 +28,7 @@ const zh = {
 	assistant: "助手", user: "你", nudge: "TillDone 继续提醒", notice: "通知", args: "参数", result: "结果",
 	toolRunning: "执行中", toolDone: "已完成", toolError: "出错", taskIdle: "未开始", taskInprogress: "进行中", taskDone: "已完成",
 	deny: "拒绝", allow: "允许", closesIn: "自动关闭倒计时", seconds: "秒",
+	split: "细分", splitTitle: "让边牧把这个任务拆成更小的子任务", splitRequest: "请把任务 #{id}「{text}」细分成更小的子任务：用 tilldone split（id={id}）原位替换，然后继续。",
 	newSession: "新会话", newSessionTitle: "开始新会话？", newSessionMessage: "将重启 Pi：当前对话和任务清单都会清空，模型不再记得之前的内容。", cancel: "取消", newSessionConfirm: "开始新会话",
 };
 export type Copy = typeof zh;
@@ -43,6 +44,7 @@ const en: Copy = {
 	assistant: "Assistant", user: "You", nudge: "TillDone nudge", notice: "Notification", args: "Arguments", result: "Result",
 	toolRunning: "running", toolDone: "done", toolError: "error", taskIdle: "idle", taskInprogress: "in progress", taskDone: "done",
 	deny: "Deny", allow: "Allow", closesIn: "Closes in", seconds: "s",
+	split: "Split", splitTitle: "Ask Pi to break this task into smaller subtasks", splitRequest: "Split task #{id} \"{text}\" into smaller subtasks with tilldone split (id={id}), then continue.",
 	newSession: "New session", newSessionTitle: "Start a new session?", newSessionMessage: "Pi restarts: the conversation and task list are cleared, and the model forgets everything before.", cancel: "Cancel", newSessionConfirm: "Start new session",
 };
 export function copyFor(language: Preferences["language"]): Copy { return language === "en" ? en : zh; }

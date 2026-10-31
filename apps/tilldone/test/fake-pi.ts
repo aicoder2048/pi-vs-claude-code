@@ -33,6 +33,12 @@ async function handle(r: any) {
 		emit({ type: "message_start", message: { role: "user", content: '<img src=x onerror="alert(1)">' } });
 		return;
 	}
+	if (r.message === "tasks") {
+		const details = { action: "add", tasks: [{ id: 1, text: "write the guide", status: "inprogress" }, { id: 2, text: "old", status: "done" }], nextId: 3, listTitle: "Split", listDescription: undefined };
+		emit({ type: "tool_execution_end", toolCallId: "tasks", toolName: "tilldone", result: { content: [], details }, isError: false });
+		return;
+	}
+	if (r.message.startsWith("Split task")) return;
 	if (r.message === "expiry") { emit({ type: "extension_ui_request", method: "confirm", id: "expiry-id", title: "Timeout", message: "Close only", timeout: 100 }); return; }
 	if (r.message === "dialogs") {
 		for (const method of ["select", "input", "editor"]) emit({ type: "extension_ui_request", id: method, method, title: "Unsupported" });

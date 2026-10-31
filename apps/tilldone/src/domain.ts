@@ -174,6 +174,7 @@ export function reduce(state: State, record: RecordValue): State {
 export type Intent = { type: "submit"; message: string; mode: "steer" | "followUp" }
 	| { type: "abort" | "restart" | "newSession" | "focusTasks" }
 	| { type: "confirm"; id: string; confirmed: boolean }
+	| { type: "splitTask"; id: number }
 	| { type: "preferences"; preferences: Preferences }
 	| { type: "apiOpen" | "apiClose" }
 	| { type: "apiLink"; provider: ApiProvider }
@@ -192,6 +193,7 @@ export function parseIntent(raw: unknown): Intent | undefined {
 		const preferences = parsePreferences(r.preferences);
 		if (preferences) return { type: "preferences", preferences };
 	}
+	if (r.type === "splitTask" && Number.isInteger(r.id) && r.id > 0) return { type: "splitTask", id: r.id };
 	if (r.type === "confirm" && typeof r.id === "string" && typeof r.confirmed === "boolean") return { type: "confirm", id: r.id, confirmed: r.confirmed };
 }
 export function planIntent(state: State, intent: Intent): { commands: RecordValue[]; events: RecordValue[]; restart?: boolean; saveApi?: CredentialChanges; externalUrl?: string } {
@@ -217,6 +219,13 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 	if (intent.type === "confirm") {
 		if (!state.confirms.some((c) => c.id === intent.id && (c.deadline === null || c.deadline > state.now))) return empty;
 		return { commands: [{ type: "extension_ui_response", id: intent.id, confirmed: intent.confirmed }], events: [{ type: "desk_confirm_closed", id: intent.id }] };
+	}
+	// The shepherd points at a task; the model, which has the context, decides the subtasks.
+	if (intent.type === "splitTask") {
+		const task = state.list.tasks.find((t) => t.id === intent.id && t.status !== "done");
+		if (!task) return empty;
+		const message = copyFor(state.preferences.language).splitRequest.replaceAll("{id}", String(task.id)).replace("{text}", task.text);
+		return { commands: [{ type: isRunning(state) ? "steer" : "prompt", message }], events: [] };
 	}
 	if (intent.type === "abort") return { commands: [{ type: "clear_queue" }, { type: "abort" }], events: [] };
 	if (intent.type === "submit" && intent.message.trim()) return {
@@ -258,7 +267,8 @@ export function toViewModel(state: State) {
 		tasks: { title: state.list.title ?? "TillDone", description: state.list.description ?? "", done: counts.done,
 			total: state.list.tasks.length, progress: `${counts.done} / ${state.list.tasks.length} ${ui.done}`,
 			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus,
-			items: state.list.tasks.map((t) => ({ ...t, label: t.from === undefined ? `#${t.id}` : `#${t.id} ← #${t.from}`, icon: STATUS_ICON[t.status], statusLabel: { idle: ui.taskIdle, inprogress: ui.taskInprogress, done: ui.taskDone }[t.status], current: t.id === active?.id })) },
+			items: state.list.tasks.map((t) => ({ ...t, label: t.from === undefined ? `#${t.id}` : `#${t.id} ← #${t.from}`, icon: STATUS_ICON[t.status], statusLabel: { idle: ui.taskIdle, inprogress: ui.taskInprogress, done: ui.taskDone }[t.status], current: t.id === active?.id,
+				splittable: state.connection === "ready" && t.status !== "done" })) },
 		// A tool-only assistant turn carries no text, only the call the next tool card already shows.
 		conversation: state.timeline.filter((entry) => entry.kind === "tool" || !isSilentAssistant(messages.get(entry.id)!)).map((entry) => {
 			if (entry.kind === "tool") {

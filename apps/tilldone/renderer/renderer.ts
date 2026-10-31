@@ -13,7 +13,7 @@ interface View {
 	status: { model: string; thinking: string; running: boolean; cwd: string; tilldone: string };
 	input: { enabled: boolean; running: boolean; newSession: boolean };
 	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number;
-		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean }[] };
+		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean }[] };
 	conversation: { id: string; kind: string; label: string; text: string; error: string; args: string; result: string }[];
 	confirm: { id: string; title: string; message: string; remainingSeconds: number | null } | null;
 }
@@ -148,13 +148,21 @@ function render(view: View) {
 	const progress = $<HTMLProgressElement>("progress"); progress.max = Math.max(1, view.tasks.total); progress.value = view.tasks.done;
 	// Rebuild the list only when its content changes, not on every streamed view.
 	const taskList = $("task-list");
-	const taskSignature = JSON.stringify(view.tasks.items);
+	const taskSignature = JSON.stringify([view.tasks.items, ui.split]);
 	if (taskList.dataset.signature !== taskSignature) {
 		taskList.dataset.signature = taskSignature;
 		taskList.replaceChildren(...view.tasks.items.map((task) => {
-			const li = node("li", `${task.icon}  ${task.label}  ${task.text}`);
+			const li = node("li");
 			li.className = task.current ? "current" : task.status;
 			li.setAttribute("aria-label", `${task.statusLabel}: ${task.text}`);
+			li.append(node("span", `${task.icon}  ${task.label}  ${task.text}`));
+			if (task.splittable) {
+				const split = node("button", ui.split);
+				split.type = "button"; split.className = "split"; split.title = ui.splitTitle;
+				split.setAttribute("aria-label", `${ui.split} #${task.id}`);
+				split.onclick = () => { void send({ type: "splitTask", id: task.id }); };
+				li.append(split);
+			}
 			return li;
 		}));
 	}

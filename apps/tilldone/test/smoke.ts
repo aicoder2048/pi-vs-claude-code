@@ -151,6 +151,7 @@ try {
 	assert.match(await page.locator("#confirm-message").innerText(), /remove all 2 task/);
 	assert.match(await page.locator("#countdown").innerText(), /Closes in/);
 	assert.equal(await page.locator("#task-list li").count(), 2);
+	assert.equal(await page.locator("#task-list li button.split").count(), 0, "Done tasks offer no split button");
 	assert.equal(await page.locator("details.tool[open]").count(), 0);
 	await page.locator("#allow").click();
 	await page.locator("#confirm-dialog").waitFor({ state: "hidden" });
@@ -168,6 +169,11 @@ try {
 	await page.locator("#prompt").fill("markup"); await page.locator("#send").click();
 	await page.waitForFunction(() => document.getElementById("conversation")!.textContent!.includes("<img"));
 	assert.equal(await page.locator("#conversation img").count(), 0);
+	await page.locator("#prompt").fill("tasks"); await page.locator("#send").click();
+	await page.waitForFunction(() => document.querySelectorAll("#task-list li").length === 2);
+	assert.equal(await page.locator("#task-list li button.split").count(), 1, "Only the unfinished task offers a split button");
+	await page.locator("aside").screenshot({ path: join(tmpdir(), "tilldone-desk-split.png") });
+	await page.locator("#task-list li button.split").click();
 	await page.locator("#new-session").click();
 	await page.locator("#new-session-dialog").waitFor();
 	await page.locator("#new-session-cancel").click();
@@ -177,6 +183,7 @@ try {
 	await page.waitForFunction(() => document.querySelectorAll(".message").length === 0 && !(document.querySelector("#send") as HTMLButtonElement).disabled);
 	const records = (await readFile(log, "utf8")).trim().split("\n").map((l) => JSON.parse(l));
 	assert.equal(records.some((r) => r.message === "/tilldone"), false);
+	assert.ok(records.some((r) => r.type === "prompt" && r.message === 'Split task #1 "write the guide" into smaller subtasks with tilldone split (id=1), then continue.'), "The split button prompts Pi");
 	const launches = records.filter((r) => r.type === "launch");
 	assert.equal(launches.length, 2, "New session launches a fresh Pi");
 	process.kill(launches.at(-1).pid, "SIGKILL");

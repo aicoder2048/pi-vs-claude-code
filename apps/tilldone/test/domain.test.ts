@@ -1,7 +1,7 @@
 /** TillDone Desk L3 tests: recorded protocol projection, pure transitions, and intent rules. */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { initialState, reduce, toViewModel, planIntent, immediateUIResponse, viewChanged } from "../src/domain.ts";
+import { initialState, reduce, toViewModel, planIntent, parseIntent, immediateUIResponse, viewChanged } from "../src/domain.ts";
 const records = readFileSync(new URL("fixtures/rpc-probe.jsonl", import.meta.url), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.dir === "out").map((r) => r.rec);
 const initial = () => initialState("openai-codex/gpt-6.1-sol", "/work");
 
@@ -150,4 +150,28 @@ test("split subtasks carry their origin into the task panel", () => {
 		tasks: [{ id: 2, text: "x", status: "inprogress", from: 1 }, { id: 3, text: "y", status: "idle", from: 1 }] };
 	const s = reduce(initial(), { type: "tool_execution_end", toolCallId: "t", toolName: "tilldone", result: { details }, isError: false });
 	expect(toViewModel(s).tasks.items.map((t) => t.label)).toEqual(["#2 ← #1", "#3 ← #1"]);
+});
+describe("split button", () => {
+	const ready = () => reduce(reduce(initial(), { type: "response", command: "get_state", success: true, data: {} }), { type: "tool_execution_end", toolCallId: "t", toolName: "tilldone", isError: false,
+		result: { details: { action: "add", nextId: 3, listTitle: "T", listDescription: undefined, tasks: [{ id: 1, text: "write docs", status: "idle" }, { id: 2, text: "old", status: "done" }] } } });
+	test("parses only a positive integer task id", () => {
+		expect(parseIntent({ type: "splitTask", id: 1 })).toEqual({ type: "splitTask", id: 1 });
+		for (const id of [0, 1.5, "1", undefined]) expect(parseIntent({ type: "splitTask", id })).toBeUndefined();
+	});
+	test("asks Pi to split the task: a prompt when idle, a steer while running", () => {
+		const message = "请把任务 #1「write docs」细分成更小的子任务：用 tilldone split（id=1）原位替换，然后继续。";
+		expect(planIntent(ready(), { type: "splitTask", id: 1 }).commands).toEqual([{ type: "prompt", message }]);
+		expect(planIntent(reduce(ready(), { type: "agent_start" }), { type: "splitTask", id: 1 }).commands).toEqual([{ type: "steer", message }]);
+		const en = reduce(ready(), { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
+		expect(planIntent(en, { type: "splitTask", id: 1 }).commands[0].message).toBe("Split task #1 \"write docs\" into smaller subtasks with tilldone split (id=1), then continue.");
+	});
+	test("done, unknown, or disconnected tasks send nothing", () => {
+		for (const id of [2, 9]) expect(planIntent(ready(), { type: "splitTask", id }).commands).toHaveLength(0);
+		expect(planIntent(reduce(ready(), { type: "desk_exit", error: "gone" }), { type: "splitTask", id: 1 }).commands).toHaveLength(0);
+	});
+	test("the panel offers the button on unfinished tasks while Pi is connected", () => {
+		expect(toViewModel(ready()).tasks.items.map((t) => t.splittable)).toEqual([true, false]);
+		expect(toViewModel(reduce(ready(), { type: "desk_exit", error: "gone" })).tasks.items.map((t) => t.splittable)).toEqual([false, false]);
+		expect(toViewModel(ready()).ui.split).toBe("细分");
+	});
 });
