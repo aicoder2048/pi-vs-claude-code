@@ -279,45 +279,41 @@ flowchart TB
 ### 3.5 一手棋的端到端时序
 
 ```mermaid
-sequenceDiagram
-  participant R as L4 渲染器
-  participant M as L4 主进程
-  participant S as L3 GameService
-  participant D as L1 PiDriver
-  participant P as Pi AgentSession
-  participant X as L2 xiangqiExtension
-  participant W as 搜索 Worker
-  R->>M: chess:command {move, from, to, revision}
-  M->>S: humanMove(point, revision)
-  S->>S: charge 棋钟 → 校验 revision → play → replay → analyze（含定式与案例召回）
-  S->>S: startAgent()：AbortController、TurnTimer、9 成员 TurnPort
-  S-->>M: GameState（status=thinking, progress）
-  M-->>R: chess:state 推送
-  S->>D: driver.run(port)（不 await）
-  D->>D: turnGuidance() 选剧本；createDecisionTrace()
-  D->>D: SkillCatalog 加载 19 项技能，拼系统提示词
-  D->>P: reload() 执行扩展工厂；createAgentSession（8 个工具）
-  D->>S: port.search()：回合前全根搜索
-  S->>W: 有界搜索（≤ 余时 1/12）
-  W-->>S: SearchReport（写回快照）
-  D->>P: session.prompt(turnPrompt：棋谱 + 棋盘 + 摘要 + signals)
-  loop run 内循环（≤ 8 turn）
-    P->>P: LLM 流式回复
-    P->>X: tool_call 钩子（16 次预算）
-    P->>X: 工具 execute（compare / search / read_skill / update_plan…）
+%%{init: {'flowchart': {'wrappingWidth': 700, 'htmlLabels': true, 'rankSpacing': 24, 'nodeSpacing': 18}}}%%
+flowchart TB
+  subgraph R1["① 人类走子（L4 → L3）"]
+    direction LR
+    A1["L4 渲染器<br/>chess:command<br/>{move, from, to,<br/>revision}"] --> A2["L4 主进程<br/>humanMove<br/>(point, revision)"] --> A3["GameService<br/>charge 棋钟<br/>→ 校验 revision<br/>→ play → replay<br/>→ analyze（含定式<br/>与案例召回）"] --> A4["startAgent()<br/>AbortController<br/>TurnTimer<br/>9 成员 TurnPort"] --> A5["推送 GameState<br/>status=thinking<br/>driver.run(port)<br/>不 await"]
   end
-  X->>S: move_piece → await port.commit()
-  S->>S: reviewMove → 最终搜索（700ms）→ mergeSearchReview
-  alt 明显亏子或败着且无风险说明
-    S-->>X: MoveRiskError（四字段 + 读剧本提示）
-    X-->>P: isError 结果，模型改选
-  else 通过
-    S->>S: 定稿 DecisionTrace 与 timing → notes.push → calculate → 切换棋钟
-    X-->>P: accepted + terminate:true
+  subgraph R2["② 回合准备（L1 PiDriver）"]
+    direction LR
+    B1["turnGuidance()<br/>选剧本<br/>createDecisionTrace()"] --> B2["SkillCatalog<br/>加载 19 项技能<br/>拼系统提示词"] --> B3["reload()<br/>执行扩展工厂<br/>createAgentSession<br/>（8 个工具）"] --> B4["port.search()<br/>全根搜索<br/>Worker ≤ 余时 1/12<br/>SearchReport 写回"] --> B5["session.prompt<br/>(turnPrompt)<br/>棋谱 + 棋盘<br/>+ 摘要 + signals"]
   end
-  P-->>D: agent_settled；dispose()
-  S-->>M: GameState（status=human）
-  M-->>R: 推送 + 自动保存（recordSaveKey 变化才写）
+  subgraph R3["③ run 内循环（≤ 8 turn，L2）"]
+    direction LR
+    C1["LLM 流式回复"] --> C2["tool_call 钩子<br/>16 次预算"] --> C3["工具 execute<br/>compare / search /<br/>read_skill /<br/>update_plan…"] --> C4["move_piece<br/>await<br/>port.commit()"]
+  end
+  subgraph R4["④ 提交复查（L3）"]
+    direction LR
+    C5["reviewMove<br/>→ 最终搜索 700ms<br/>→ mergeSearchReview"]
+    C5 -- "明显亏子或败着<br/>且无风险说明" --> C6["MoveRiskError<br/>四字段 + 读剧本提示<br/>isError → 模型改选<br/>（回到 ③）"]
+    C5 -- "通过" --> C7["定稿 DecisionTrace<br/>与 timing → notes.push<br/>→ calculate → 切换棋钟<br/>accepted + terminate:true"]
+  end
+  subgraph R5["⑤ 收尾"]
+    direction LR
+    D1["agent_settled<br/>dispose()"] --> D2["GameState<br/>status=human"] --> D3["推送 + 自动保存<br/>（recordSaveKey<br/>变化才写）"]
+  end
+  R1 --> R2 --> R3 --> R4 --> R5
+  classDef l1 fill:#E6F0FA,stroke:#0B5CAB,color:#1F2328
+  classDef l2 fill:#E3F4F1,stroke:#1A7F6B,color:#1F2328
+  classDef l3 fill:#FDF3E1,stroke:#B7791F,color:#1F2328
+  classDef l4 fill:#F1ECFA,stroke:#6F42C1,color:#1F2328
+  classDef warn fill:#FDECEC,stroke:#CF222E,color:#1F2328
+  class A1,A2,A5,D3 l4
+  class A3,A4,B4,C5,C7,D2 l3
+  class B1,B2,B3,B5,C1,D1 l1
+  class C2,C3,C4 l2
+  class C6 warn
 ```
 
 ### 3.6 不变量：谁是权威
@@ -331,7 +327,7 @@ sequenceDiagram
 | 走法合法 | `engine.ts` 的 `play()` + 每次提交后 `replay()` | 全谱重放 |
 | 不白丢大子（可被显式覆盖） | `needsRiskAcknowledgement`（`expert.ts:269`）+ `commit` 内独立审查（`:295-316`） | `loss` / `material-loss` 且无 `riskAcknowledgement` 时拒绝，不落子 |
 | 计划不越过局面变化 | `planForPosition`（`plan.ts:35-45`） | 被将军、对方吃子、过期即失效；对方走子后需复核 |
-| 审计与提交原子一致 | `commit` 内定稿 `DecisionTrace`（`:322-325`） | 不等提交之后的 `tool_execution_end` 再补写（3.4 节第 ⑦ 点） |
+| 审计与提交原子一致 | `commit` 内定稿 `DecisionTrace`（`:322-325`） | 不等提交之后的 `tool_execution_end` 再补写（4.3 节接入点 ⑦） |
 
 **revision 版本号**贯穿全部四层：人类走子、悔棋、取消、换模型、新局都会 `revision++` 并 `abort` 当前回合（`invalidate()`，`:88-92`）。LLM 提交必须带当前 revision，`move_piece` 先在 L2 预检（`xiangqi.ts:97`），L3 再以 `valid()` 终审。
 
@@ -408,7 +404,7 @@ flowchart LR
 | ⑥ | **run 内循环 · LLM 流式阶段** | update 多次；end M 次 |
 | ⑦ | **run 内循环 · 每个工具执行前后** | 各 K 次（被 `tool_call` 拦截的不执行） |
 | ⑧ | **任意时刻**（循环外与循环内） | 0..1 次 |
-| ⑨ | 在 ① 之前（回合前搜索）及 ③ 内同步 / 异步调用 | commit ≤ 若干次（风险拒绝后可再提交），成功 ≤ 1 次 |
+| ⑨ | 在 ① 之后、`session.prompt()` 之前（回合前搜索）及 ③ 内同步 / 异步调用 | commit ≤ 若干次（风险拒绝后可再提交），成功 ≤ 1 次 |
 
 ### 4.4 逐个接入点详解
 
@@ -497,21 +493,31 @@ Pi 的语义是：**同一批工具调用全部**返回 `terminate: true`，run 
 ### 4.5 一次 settle 的时间线
 
 ```mermaid
+%%{init: {'flowchart': {'wrappingWidth': 700, 'htmlLabels': true, 'rankSpacing': 24, 'nodeSpacing': 18}}}%%
 flowchart TB
-  S0["循环外：turnGuidance 选剧本；SkillCatalog 校验 19 项技能<br/>reload() 执行扩展工厂 ①；createAgentSession；工具隔离校验"] --> PS["循环外：回合前自动搜索（port.search）<br/>完成则审计 compare=done（宿主证据）"]
-  PS --> S1["session.prompt(turnPrompt)<br/>settle 外循环开始 · run #1"]
-  S1 --> T["turn_start ⑤（请求 +1，>8 则 abort）"]
-  T --> L["LLM 流式回复 ⑥：文本 + toolCall"]
-  L --> Q{"有工具调用？"}
-  Q -- "否" --> E["turn_end → agent_end"]
-  Q -- "是" --> P["逐个顺序执行：schema 校验 → tool_call ② → start ⑦ → execute ③ → end ⑦"]
-  P --> C{"move_piece 被接受？"}
-  C -- "是，且同批只有它" --> E
-  C -- "MoveRiskError / 其他错误" --> T
-  C -- "否" --> T
-  E --> R{"需要重试？（maxRetries=1）"}
-  R -- "是" --> S2["run #2"] --> T
-  R -- "否" --> Z["agent_settled → dispose()"]
+  subgraph R1["循环外：每个机器回合一次"]
+    direction LR
+    S0["turnGuidance 选剧本<br/>SkillCatalog 校验<br/>19 项技能"] --> S0B["reload() 执行<br/>扩展工厂 ①<br/>createAgentSession<br/>工具隔离校验"] --> PS["回合前自动搜索<br/>port.search<br/>完成则审计<br/>compare=done"] --> S1["session.prompt<br/>(turnPrompt)<br/>settle 外循环开始<br/>run #35;1"]
+  end
+  subgraph R2["run 内循环：每个 turn"]
+    direction LR
+    T["turn_start ⑤<br/>请求 +1<br/>超过 8 则 abort"] --> L["LLM 流式回复 ⑥<br/>文本 + toolCall"] --> Q{{"有工具<br/>调用？"}}
+    Q -- "是" --> P["逐个顺序执行<br/>schema 校验<br/>→ tool_call ②<br/>→ start ⑦ → execute ③<br/>→ end ⑦"] --> C{{"move_piece<br/>被接受？"}}
+    C -- "否 / MoveRiskError<br/>/ 其他错误" --> T
+  end
+  subgraph R3["收尾"]
+    direction LR
+    E["turn_end → agent_end<br/>（无工具调用；或<br/>move_piece 被接受<br/>且同批只有它）"] --> R{{"需要重试？<br/>maxRetries=1"}}
+    R -- "是" --> S2["run #35;2<br/>回到 turn_start ⑤"]
+    R -- "否" --> Z["agent_settled<br/>→ dispose()"]
+  end
+  R1 --> R2 --> R3
+  classDef l1 fill:#E6F0FA,stroke:#0B5CAB,color:#1F2328
+  classDef l2 fill:#E3F4F1,stroke:#1A7F6B,color:#1F2328
+  classDef l3 fill:#FDF3E1,stroke:#B7791F,color:#1F2328
+  class S0B,P l2
+  class PS l3
+  class S0,S1,T,L,E,S2,Z l1
 ```
 
 ### 4.6 刻意没有使用的回调
