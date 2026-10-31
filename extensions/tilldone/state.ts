@@ -18,6 +18,8 @@ export interface Task {
 	readonly id: number;
 	readonly text: string;
 	readonly status: Status;
+	/** The task this one was split from. Absent on tasks written before split existed. */
+	readonly from?: number;
 }
 
 /** The persisted part of the domain. */
@@ -37,8 +39,8 @@ export interface Model {
 	readonly nudged: boolean;
 }
 
-/** Order is load-bearing: index.ts builds the StringEnum from it and the schema must match the original byte for byte. */
-export const ACTIONS = ["new-list", "add", "toggle", "remove", "update", "list", "clear"] as const;
+/** index.ts builds the StringEnum from this order; split is appended so the original actions keep their positions. */
+export const ACTIONS = ["new-list", "add", "toggle", "remove", "update", "list", "clear", "split"] as const;
 export type Action = (typeof ACTIONS)[number];
 
 /** Tool params as Pi hands them over after schema validation. */
@@ -78,16 +80,17 @@ export const TOOL = {
 	label: "TillDone",
 	description:
 		"Manage your task list. You MUST add tasks before using any other tools; read-only tools (read, grep, find, ls) stay available for planning. " +
-		"Actions: new-list (text=title, description), add (text or texts[] for batch), toggle (id) — cycles idle→inprogress→done, remove (id), update (id + text), list, clear. " +
+		"Actions: new-list (text=title, description), add (text or texts[] for batch), toggle (id) — cycles idle→inprogress→done, remove (id), update (id + text), list, clear, " +
+		"split (id + texts[] of at least 2) — replaces a task in place with smaller subtasks; an in-progress task hands over to its first subtask. " +
 		"Always toggle a task to inprogress before starting work on it, and to done when finished. " +
 		"Use new-list to start a themed list with a title and description. " +
 		"IMPORTANT: If the user's new request does not fit the current list's theme, use clear to wipe the slate and new-list to start fresh.",
 	actions: ACTIONS,
 	params: {
 		text: "Task text (for add/update), or list title (for new-list)",
-		texts: "Multiple task texts (for add). Use this to batch-add several tasks at once.",
+		texts: "Multiple task texts (for add or split). Use this to batch-add several tasks at once, or to list the subtasks a split creates.",
 		description: "List description (for new-list)",
-		id: "Task ID (for toggle/remove/update)",
+		id: "Task ID (for toggle/remove/update/split)",
 	},
 	commandDescription: "Show all TillDone tasks on the current branch",
 } as const;
@@ -107,8 +110,13 @@ export const CONFIRM_TIMEOUT_MS = 30000;
 // so an in-place edit anywhere throws instead of rewriting history (the B1 class).
 
 function makeList(tasks: readonly Task[], nextId: number, title: string | undefined, description: string | undefined): ListState {
-	const frozen = Object.freeze(tasks.map((t) => Object.freeze({ id: t.id, text: t.text, status: t.status })));
+	const frozen = Object.freeze(tasks.map((t) => Object.freeze(copyTask(t))));
 	return Object.freeze({ tasks: frozen, nextId, title, description });
+}
+
+/** Plain copy that leaves `from` out when absent, so old tasks keep their exact wire shape. */
+function copyTask(t: Task): Task {
+	return t.from === undefined ? { id: t.id, text: t.text, status: t.status } : { id: t.id, text: t.text, status: t.status, from: t.from };
 }
 
 function makeModel(list: ListState, nudged: boolean): Model {
@@ -124,7 +132,7 @@ export const INITIAL_MODEL: Model = makeModel(EMPTY_LIST, false);
 export function toDetails(list: ListState, action: string, error?: string): Details {
 	return {
 		action,
-		tasks: list.tasks.map((t) => ({ id: t.id, text: t.text, status: t.status })),
+		tasks: list.tasks.map(copyTask),
 		nextId: list.nextId,
 		listTitle: list.title,
 		listDescription: list.description,
@@ -137,9 +145,10 @@ const isOptString = (v: unknown): v is string | undefined => v === undefined || 
 
 function parseTask(raw: unknown): Task | undefined {
 	if (!isRecord(raw)) return undefined;
-	const { id, text, status } = raw;
+	const { id, text, status, from } = raw;
 	if (typeof id !== "number" || typeof text !== "string" || !STATUSES.includes(status as Status)) return undefined;
-	return { id, text, status: status as Status };
+	if (from !== undefined && typeof from !== "number") return undefined;
+	return copyTask({ id, text, status: status as Status, from });
 }
 
 /**
@@ -193,6 +202,7 @@ type Valid =
 	| { readonly kind: "toggle"; readonly id: number }
 	| { readonly kind: "remove"; readonly id: number }
 	| { readonly kind: "update"; readonly id: number; readonly text: string }
+	| { readonly kind: "split"; readonly id: number; readonly items: readonly [string, string, ...string[]] }
 	| { readonly kind: "clear" };
 
 type Validation =
@@ -222,6 +232,10 @@ function validate(params: Params): Validation {
 			if (id === undefined) return invalid(action, "Error: id required for update", "id required");
 			if (!text) return invalid(action, "Error: text required for update", "text required");
 			return valid({ kind: "update", id, text });
+		case "split":
+			if (id === undefined) return invalid(action, "Error: id required for split", "id required");
+			if (!texts || texts.length < 2) return invalid(action, "Error: texts (at least 2) required for split", "texts required");
+			return valid({ kind: "split", id, items: texts as readonly [string, string, ...string[]] });
 		default:
 			return invalid("list", `Unknown action: ${action}`, `unknown action: ${action}`);
 	}
@@ -240,7 +254,7 @@ const notFound = (list: ListState, action: Action, id: number): Reply => fail(li
 
 function listText(list: ListState): string {
 	if (list.tasks.length === 0) return "No tasks defined yet.";
-	const lines = list.tasks.map((t) => `[${STATUS_ICON[t.status]}] #${t.id} (${t.status}): ${t.text}`).join("\n");
+	const lines = list.tasks.map((t) => `[${STATUS_ICON[t.status]}] #${t.id} (${t.status}${t.from === undefined ? "" : `, from #${t.from}`}): ${t.text}`).join("\n");
 	return list.title ? `${list.title}:\n${lines}` : lines;
 }
 
@@ -312,6 +326,17 @@ export function runTool(model: Model, params: Params, consent?: boolean): Ask | 
 			if (!task) return notFound(list, "update", cmd.id);
 			const tasks = list.tasks.map((t): Task => (t === task ? { ...t, text: cmd.text } : t));
 			return ok(model, "update", makeList(tasks, list.nextId, list.title, list.description), `Updated #${task.id}: "${task.text}" → "${cmd.text}"`);
+		}
+		case "split": {
+			const task = list.tasks.find((t) => t.id === cmd.id);
+			if (!task) return notFound(list, "split", cmd.id);
+			if (task.status === "done") return fail(list, "split", `Task #${task.id} is already done. Use add for new work instead of splitting it.`, `#${task.id} done`);
+			// The first subtask inherits the status, so splitting the active task keeps exactly one task active.
+			const parts = cmd.items.map((text, i): Task => ({ id: list.nextId + i, text, status: i === 0 ? task.status : "idle", from: task.id }));
+			const tasks = list.tasks.flatMap((t) => (t === task ? parts : [t]));
+			let text = `Split #${task.id} into ${parts.map((t) => `#${t.id}`).join(", ")}`;
+			if (task.status === "inprogress") text += `\n#${parts[0].id} is now in progress.`;
+			return ok(model, "split", makeList(tasks, list.nextId + parts.length, list.title, list.description), text);
 		}
 		case "clear": {
 			if (open > 0) {

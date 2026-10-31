@@ -226,6 +226,47 @@ describe("clear (T:582-609)", () => {
 	});
 });
 
+describe("split", () => {
+	test("errors: id, then at least two texts, then lookup, then done", () => {
+		const m = run(withTasks("a"), { action: "toggle", id: 1 }, { action: "toggle", id: 1 });
+		expect(reply(runTool(m, { action: "split", texts: ["x", "y"] })).text).toBe("Error: id required for split");
+		const one = reply(runTool(m, { action: "split", id: 1, texts: ["x"] }));
+		expect([one.text, one.details.error]).toEqual(["Error: texts (at least 2) required for split", "texts required"]);
+		expect(reply(runTool(m, { action: "split", id: 9, texts: ["x", "y"] })).text).toBe("Task #9 not found");
+		const done = reply(runTool(m, { action: "split", id: 1, texts: ["x", "y"] }));
+		expect([done.text, done.details.error, done.next]).toEqual(["Task #1 is already done. Use add for new work instead of splitting it.", "#1 done", undefined]);
+	});
+
+	test("replaces the task in place with idle subtasks that record their origin", () => {
+		const r = reply(runTool(withTasks("a", "b", "c"), { action: "split", id: 2, texts: ["b1", "b2"] }));
+		expect(r.text).toBe("Split #2 into #4, #5");
+		expect(r.next!.list.tasks).toEqual([
+			{ id: 1, text: "a", status: "idle" },
+			{ id: 4, text: "b1", status: "idle", from: 2 },
+			{ id: 5, text: "b2", status: "idle", from: 2 },
+			{ id: 3, text: "c", status: "idle" },
+		]);
+		expect(r.next!.list.nextId).toBe(6);
+	});
+
+	test("an in-progress task hands over to its first subtask, so the gate stays open", () => {
+		const m = run(withTasks("a"), { action: "toggle", id: 1 });
+		const r = reply(runTool(m, { action: "split", id: 1, texts: ["x", "y", "z"] }));
+		expect(r.text).toBe("Split #1 into #2, #3, #4\n#2 is now in progress.");
+		expect(statuses(r.next!)).toEqual(["2:inprogress", "3:idle", "4:idle"]);
+		expect(gate(r.next!, "bash")).toEqual({ block: false });
+	});
+
+	test("origin shows in list text and survives a details round trip", () => {
+		const m = step(withTasks("a"), { action: "split", id: 1, texts: ["x", "y"] });
+		expect(reply(runTool(m, { action: "list" })).text).toBe("[○] #2 (idle, from #1): x\n[○] #3 (idle, from #1): y");
+		const d = reply(runTool(m, { action: "list" })).details;
+		expect(JSON.stringify(d.tasks[0])).toBe('{"id":2,"text":"x","status":"idle","from":1}');
+		expect(restore(INITIAL_MODEL, [d]).list).toEqual(m.list);
+		expect(parseDetails({ tasks: [{ id: 1, text: "a", status: "idle", from: "1" }], nextId: 2 })).toBeUndefined();
+	});
+});
+
 describe("other actions", () => {
 	test("consent on an action that never asks changes nothing", () => {
 		const m = withTasks("a");

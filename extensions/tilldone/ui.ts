@@ -134,6 +134,7 @@ const RESULT_PREFIX = {
 	update: ["success", "✓ "],
 	toggle: ["accent", "⟳ "],
 	remove: ["warning", "✕ "],
+	split: ["accent", "✂ "],
 } as const;
 
 export function renderResult(
@@ -167,7 +168,8 @@ export function renderResult(
 		case "add":
 		case "update":
 		case "toggle":
-		case "remove": {
+		case "remove":
+		case "split": {
 			const [color, prefix] = RESULT_PREFIX[details.action];
 			return new Text(theme.fg(color, prefix) + theme.fg("muted", resultText), 0, 0);
 		}
