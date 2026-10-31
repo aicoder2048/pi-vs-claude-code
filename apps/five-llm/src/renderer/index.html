@@ -32,6 +32,7 @@
   <dialog id="resign-dialog"><form method="dialog"><h2>确认认输？</h2><p>只判当前局负，不会直接输掉整场比赛。棋钟仍在运行。</p><div class="dialog-actions"><button value="cancel">继续下棋</button><button value="resign" class="primary">确认本局认输</button></div></form></dialog>
   <audio id="background-music" loop preload="none" hidden></audio>
   <dialog id="music-dialog"><form method="dialog"><div class="eyebrow">MUSIC CREDITS</div><h2>音乐与署名</h2><p><strong>Gymnopedie No. 1</strong><br>作曲：Erik Satie · 录音提供：Kevin MacLeod</p><p><strong>Night on the Docks - Sax</strong><br>Kevin MacLeod · 电钢琴与次中音萨克斯</p><p>以上录音均由 Kevin MacLeod (incompetech.com) 提供，按 Creative Commons Attribution 4.0 授权使用。</p><p>https://creativecommons.org/licenses/by/4.0/</p><p>原始 MP3 未修改；仅在播放时调低音量、淡入淡出及循环。完整来源与署名随音频附于 ATTRIBUTION.md。</p><div class="dialog-actions"><button value="close" class="primary">知道了</button></div></form></dialog>
+  <div id="victory" class="victory" hidden><canvas id="confetti" aria-hidden="true"></canvas><div id="victory-message" role="status" aria-live="polite" aria-atomic="true"></div></div>
   <div id="toast" class="toast" role="status" hidden></div>
   <script type="module" src="app.js"></script>
 </body>

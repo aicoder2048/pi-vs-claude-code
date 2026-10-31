@@ -1,6 +1,7 @@
 import { _electron as electron, expect } from 'playwright/test';
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import type { GameState } from '../src/shared/types';
 
 await mkdir('artifacts', { recursive: true });
 const electronApp = await electron.launch({ args: ['.'], env: { ...process.env, FIVE_LLM_SMOKE: '1' }, timeout: 30000 });
@@ -130,7 +131,61 @@ try {
   expect(files.length).toBeGreaterThanOrEqual(2);
   const record = await Bun.file(path.join(dataDir, files.at(-1)!)).json();
   expect(record.format).toBe('five-llm/v1');
-  console.log('PASS: Electron + no-scroll + board/replay/undo + clocks/BO3/BO5 + real timeout + offline MP3 decoding/playback/credits + autosave');
+  // Exercise renderer-only celebrations through the real state bridge. The real round
+  // above is already over, so its stopped clock cannot interfere with these UI fixtures.
+  const bootstrap = await page.evaluate(() => window.five.bootstrap());
+  if (!bootstrap.ok) throw new Error(bootstrap.error);
+  await page.evaluate(() => {
+    (window as any).victoryNotes = 0;
+    const create = AudioContext.prototype.createOscillator;
+    AudioContext.prototype.createOscillator = function () {
+      (window as any).victoryNotes++; return create.call(this);
+    };
+  });
+  async function sendState(state: GameState): Promise<void> {
+    await electronApp.evaluate(({ BrowserWindow }, state) => BrowserWindow.getAllWindows()[0].webContents.send('five:state', state), state);
+  }
+  const active: GameState = structuredClone(bootstrap.value.state);
+  active.id = 'celebration-fixture'; active.outcome = null; active.status = 'human';
+  active.match.winner = null; active.match.humanWins = 0; active.match.machineWins = 0;
+  await sendState(active); await expect(page.locator('#victory')).toBeHidden();
+  const win: GameState = structuredClone(active);
+  win.revision++; win.status = 'over'; win.match.humanWins = 1;
+  win.outcome = { gameId: win.id, number: 1, humanColor: win.human, winner: win.human, reason: 'five' };
+  await sendState(win);
+  await expect(page.locator('#victory')).toBeVisible();
+  await expect(page.locator('#victory-message')).toHaveText('好棋，你赢了这一局！');
+  await expect.poll(() => page.evaluate(() => (window as any).victoryNotes)).toBe(6);
+  await expect.poll(() => page.locator('#confetti').evaluate((canvas: HTMLCanvasElement) =>
+    canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data.some((value, i) => i % 4 === 3 && value > 0)
+  )).toBe(true);
+  expect(await page.locator('#victory').evaluate(element => getComputedStyle(element).pointerEvents)).toBe('none');
+  await page.screenshot({ path: 'artifacts/victory-confetti.png' });
+  // A duplicate result must not extend the animation or replay its audio.
+  await sendState(win);
+  await expect(page.locator('#victory')).toBeHidden({ timeout: 4500 });
+  await sendState(win); await page.waitForTimeout(100);
+  await expect(page.locator('#victory')).toBeHidden();
+  expect(await page.evaluate(() => (window as any).victoryNotes)).toBe(6);
+  await page.locator('#replay').fill('0'); await page.locator('#live').click();
+  await expect(page.locator('#victory')).toBeHidden();
+  // Match win + reduced-motion: keep a static message and audio, without moving confetti.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  active.id = 'match-win-fixture'; await sendState(active);
+  win.id = active.id; win.outcome!.gameId = active.id;
+  win.match.winner = 'human'; win.match.humanWins = 2;
+  await sendState(win);
+  await expect(page.locator('#victory-message')).toHaveText('太棒了，赢下整场比赛！');
+  await expect(page.locator('#victory')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).victoryNotes)).toBe(12);
+  expect(await page.locator('#confetti').evaluate((canvas: HTMLCanvasElement) =>
+    canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data.every(value => value === 0)
+  )).toBe(true);
+  // Starting the next game cleans up an in-flight celebration immediately.
+  active.id = 'cleanup-fixture'; await sendState(active);
+  await expect(page.locator('#victory')).toBeHidden();
+  expect(errors).toEqual([]);
+  console.log('PASS: Electron + no-scroll + board/replay/undo + clocks/BO3/BO5 + real timeout + offline MP3 + autosave + victory confetti/audio/reduced-motion/cleanup');
 } finally {
   await electronApp.close();
   if (dataDir.includes('five-llm-smoke-')) await rm(dataDir, { recursive: true, force: true });

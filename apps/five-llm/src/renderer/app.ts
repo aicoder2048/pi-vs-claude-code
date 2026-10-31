@@ -1,10 +1,12 @@
 import { coordinate, index, replay, SIZE, type Point } from '../business/engine';
 import type { Command, GameState, Reply, ResultReason } from '../shared/types';
 import { Ambience } from './audio';
+import { isNewHumanWin, VictoryCelebration } from './celebration';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('board'), ctx = canvas.getContext('2d')!;
 const audio = new Ambience($<HTMLAudioElement>('background-music'));
+const celebration = new VictoryCelebration($('victory'), $<HTMLCanvasElement>('confetti'), $('victory-message'));
 let state: GameState | undefined;
 let showNumbers = true, showHints = false, pending = false, viewing: number | null = null;
 let hover: Point | null = null, keyboard: Point = { x: 7, y: 7 }, useKeyboard = false;
@@ -28,6 +30,12 @@ function apply(next: GameState): void {
   if (previous && previous.id !== next.id) viewing = null;
   if (viewing !== null && viewing > next.position.moves.length) viewing = next.position.moves.length;
   state = next;
+  if (previous?.id !== next.id) celebration.stop();
+  if (isNewHumanWin(previous, next)) {
+    viewing = null;
+    celebration.play(next.match.winner === 'human');
+    void audio.victory().catch(() => {}); // Sound-device/autoplay failures must not interrupt the game.
+  }
   if (previous && previous.id === next.id && previous.revision === next.revision && previous.status === next.status
     && previous.error === next.error && previous.logs.at(-1)?.text === next.logs.at(-1)?.text
     && previous.logs.at(-1)?.time === next.logs.at(-1)?.time) {
@@ -151,6 +159,7 @@ function draw(): void {
 function render(): void {
   if (!state) return;
   const p = position(), historical = viewing !== null;
+  if (historical) celebration.stop();
   const analysis = historical ? state.evaluations[(viewing ?? 0) - 1] : state.analysis;
   const nextName = p.next === 1 ? '黑棋' : '白棋', winner = historical ? p.winner : state.outcome?.winner ?? p.winner;
   const turnColor = winner && winner !== 'draw' ? winner : p.next;
@@ -318,7 +327,7 @@ $('music-credits').onclick = () => musicDialog.showModal();
 $<HTMLInputElement>('volume').oninput = event => audio.setVolume(Number((event.target as HTMLInputElement).value) / 100);
 const observer = new ResizeObserver(() => draw()); observer.observe(canvas);
 const unsubscribe = window.five.onState(apply);
-window.addEventListener('beforeunload', () => { unsubscribe(); unsubscribeAudio(); observer.disconnect(); audio.dispose(); });
+window.addEventListener('beforeunload', () => { unsubscribe(); unsubscribeAudio(); observer.disconnect(); celebration.stop(); audio.dispose(); });
 try {
   const initial = unwrap(await window.five.bootstrap()); setupError = initial.setupError;
   const select = $<HTMLSelectElement>('model'); select.replaceChildren();

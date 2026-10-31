@@ -6,7 +6,7 @@ export type MusicStyle = keyof typeof MUSIC_TRACKS;
 export interface MusicState { style: MusicStyle; playing: boolean; busy: boolean; error: string | null }
 
 // Background music is local, licensed full-length audio, not synthesized notes.
-// Web Audio is retained solely for the short, quiet stone-placement effect.
+// Web Audio supplies only short stone-placement and victory sound effects.
 export class Ambience {
   private context?: AudioContext;
   private style: MusicStyle = 'piano';
@@ -100,6 +100,25 @@ export class Ambience {
     gain.gain.setValueAtTime(.025, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(.0001, ctx.currentTime + .1);
     osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + .12);
     osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+  }
+  async victory(): Promise<void> {
+    if (this.disposed) return;
+    this.context ??= new AudioContext();
+    const ctx = this.context; await ctx.resume();
+    if (this.disposed) return;
+    // A soft ascending major arpeggio with a final chord, entirely offline.
+    const start = ctx.currentTime;
+    for (const [i, frequency] of [523.25, 659.25, 783.99, 1046.5, 659.25, 783.99].entries()) {
+      const at = start + (i < 4 ? i * .12 : .36);
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = 'triangle'; osc.frequency.setValueAtTime(frequency, at);
+      gain.gain.setValueAtTime(0, at);
+      gain.gain.linearRampToValueAtTime(.035, at + .015);
+      gain.gain.exponentialRampToValueAtTime(.0001, at + .65);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(at); osc.stop(at + .7);
+      osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+    }
   }
   dispose(): void {
     this.disposed = true; this.cancelRamp(); this.media.pause();

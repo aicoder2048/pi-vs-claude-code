@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { Ambience, MUSIC_TRACKS, type MusicState } from '../src/renderer/audio';
 class FakeMedia extends EventTarget {
@@ -15,6 +15,43 @@ function fixture() {
   audio.subscribe(value => { state = value; });
   return { audio, media, state: () => state! };
 }
+describe('victory sound effect', () => {
+  test('plays a short offline arpeggio without starting music, disconnects nodes and closes on dispose', async () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'AudioContext');
+    const oscillators: any[] = [], gains: any[] = [];
+    class FakeContext {
+      currentTime = 10; destination = {}; resume = mock(async () => {}); close = mock(async () => {});
+      createOscillator() {
+        const osc = { type: '', frequency: { setValueAtTime: mock() }, connect: mock(), disconnect: mock(), start: mock(), stop: mock(), onended: () => {} };
+        oscillators.push(osc); return osc;
+      }
+      createGain() {
+        const gain = { gain: { setValueAtTime: mock(), linearRampToValueAtTime: mock(), exponentialRampToValueAtTime: mock() }, connect: mock(), disconnect: mock() };
+        gains.push(gain); return gain;
+      }
+    }
+    const context = new FakeContext();
+    Object.defineProperty(globalThis, 'AudioContext', { configurable: true, value: function () { return context; } });
+    const f = fixture();
+    try {
+      await f.audio.victory();
+      expect(context.resume).toHaveBeenCalledTimes(1);
+      expect(oscillators).toHaveLength(6); expect(f.media.playCalls).toBe(0);
+      expect(oscillators.map(o => o.frequency.setValueAtTime.mock.calls[0][0])).toEqual([523.25, 659.25, 783.99, 1046.5, 659.25, 783.99]);
+      for (const [i, osc] of oscillators.entries()) {
+        expect(osc.stop.mock.calls[0][0] - osc.start.mock.calls[0][0]).toBeCloseTo(.7);
+        osc.onended(); expect(osc.disconnect).toHaveBeenCalledTimes(1); expect(gains[i].disconnect).toHaveBeenCalledTimes(1);
+      }
+      f.audio.dispose(); expect(context.close).toHaveBeenCalledTimes(1);
+      await f.audio.victory(); expect(oscillators).toHaveLength(6);
+    } finally {
+      f.audio.dispose();
+      if (original) Object.defineProperty(globalThis, 'AudioContext', original);
+      else Reflect.deleteProperty(globalThis, 'AudioContext');
+    }
+  });
+});
+
 describe('local recorded background music', () => {
   test('bundled MP3s are original audio bytes with accompanying attribution', async () => {
     const hashes = ['8cba6bb3da51066ad39520ec218a327bb6222d8fb32bc52f28a1e90b67756f70', '732871fa31755c4a3ae260cccbdd4044b81ad49cabf8fbb1ee0f5927d36d7d79'];
