@@ -4,13 +4,11 @@ import { boardText, moveText, play, replay } from '../business/engine';
 import { analyzeExpert, compareMoves, MoveRiskError, reviewMove } from '../business/expert';
 import { retrieveKnowledge } from '../business/knowledge';
 import type { TurnPort } from '../business/game-service';
-import { SKILLS_VERSION } from '../business/decision';
 const point = Type.Object({ x: Type.Integer({ minimum: 0, maximum: 8 }), y: Type.Integer({ minimum: 0, maximum: 9 }) });
 const move = { from: point, to: point };
-export const XIANGQI_TOOLS = ['analyze_position', 'search_position', 'review_move', 'compare_moves', 'simulate_moves', 'update_plan', 'move_piece', 'resign_game', 'read_skill'];
+export const XIANGQI_TOOLS = ['analyze_position', 'search_position', 'review_move', 'compare_moves', 'simulate_moves', 'update_plan', 'move_piece', 'resign_game'];
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], details: value });
-export interface SkillReader { names: string[]; read(name: string, reference?: string): string }
-export function xiangqiExtension(port: TurnPort, skills: SkillReader, onRead: (id: string) => void, onFinish: () => void = () => {}): ExtensionFactory {
+export function xiangqiExtension(port: TurnPort, onFinish: () => void = () => {}): ExtensionFactory {
   return pi => {
     let calls = 0, committed = false;
     const active = () => { if (port.signal.aborted || committed) throw new Error('本回合已结束或取消'); };
@@ -23,17 +21,6 @@ export function xiangqiExtension(port: TurnPort, skills: SkillReader, onRead: (i
       } else port.log('extension', `工具调用：${event.toolName}`);
       return undefined;
     });
-    pi.registerTool(defineTool({
-      name: 'read_skill', label: '读取技能全文', executionMode: 'sequential',
-      description: 'Return one bundled skill by enum name, or a flat Markdown filename in its references directory.',
-      parameters: Type.Object({ name: Type.Union(skills.names.map(name => Type.Literal(name))),
-        reference: Type.Optional(Type.String({ pattern: '^[a-z0-9-]+\\.md$' })) }),
-      async execute(_id, { name, reference }) {
-        active(); const text = skills.read(name, reference);
-        onRead(reference ? `${name}/${reference}` : name);
-        return result({ version: SKILLS_VERSION, name, ...(reference ? { reference } : {}), text });
-      },
-    }));
     pi.registerTool(defineTool({
       name: 'analyze_position', label: '象棋局势计算', executionMode: 'sequential',
       description: 'Return revision, board, plan and full analysis including all legal moves, expert facts, candidates, coverage and limitations.',

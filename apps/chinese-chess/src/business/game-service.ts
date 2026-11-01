@@ -10,6 +10,7 @@ import { planForPosition, updatePlan, type PlanUpdate, type StrategicPlan } from
 import { REASON_TEXT } from '../shared/types';
 import { recordDecisionTool, SKILLS_VERSION, type DecisionTrace } from './decision';
 import { TurnTimer, type AttemptStatus, type TimingEvent } from './turn-timing';
+import { settleCallAudit } from './call-audit';
 import type { GameRecord, GameState, LogEntry, MatchSettings, MatchState, ModelChoice, ResultReason } from '../shared/types';
 
 // Dependency inversion: the domain knows this port, not Pi's implementation.
@@ -31,7 +32,7 @@ export class GameService {
   private state: GameState;
   private active?: AbortController;
   private turnTimer?: TurnTimer;
-  private stopAttempt?: (status: AttemptStatus) => void;
+  private stopAttempt?: (status: AttemptStatus, error?: string) => void;
   private updateSequence = 0;
   private listeners = new Set<(state: GameState) => void>();
   private readonly now: () => number;
@@ -219,11 +220,16 @@ export class GameService {
     this.state.progress = timer.progress();
     this.state.status = 'thinking'; this.state.error = null;
     const attemptId = randomUUID();
-    this.stopAttempt = status => {
+    let stagedDecision: DecisionTrace | undefined;
+    this.stopAttempt = (status, error) => {
       if (this.turnTimer !== timer) return;
       const timing = timer.finish();
+      const decision = stagedDecision ? structuredClone(stagedDecision) : undefined;
+      settleCallAudit(decision?.audit);
       this.state.attempts = [...(this.state.attempts ?? []), { id: attemptId, revision,
-        ply: this.state.position.moves.length + 1, model: `${this.state.model!.provider}/${this.state.model!.id}`, status, timing }].slice(-80);
+        ply: this.state.position.moves.length + 1, model: `${this.state.model!.provider}/${this.state.model!.id}`, status, timing,
+        ...(error ? { error: error.slice(0, 1200) } : {}),
+        ...(decision ? { decision } : {}) }].slice(-80);
       this.turnTimer = undefined; this.stopAttempt = undefined; delete this.state.progress;
       this.emit(); // also saves a failed attempt when revision has not changed
     };
@@ -231,7 +237,7 @@ export class GameService {
     const snapshot = this.snapshot();
     let committed = false, submitting = false, searching = false, searchMs = 0, searchNodes = 0;
     let stagedPlan = structuredClone(snapshot.plan), planUpdate: PlanUpdate | undefined;
-    let stagedDecision: DecisionTrace | undefined, reviewNumber = 0;
+    let reviewNumber = 0;
     const publishProgress = () => {
       if (this.turnTimer === timer) { this.state.progress = timer.progress(); this.emit(); }
     };
@@ -287,6 +293,7 @@ export class GameService {
         committed = true;
         const timing = timer.finish(true), decision = stagedDecision ? structuredClone(stagedDecision) : undefined;
         if (decision) recordDecisionTool(decision, 'resign_game', true);
+        settleCallAudit(decision?.audit, 'resign_game');
         this.turnTimer = undefined; this.stopAttempt = undefined; delete this.state.progress;
         this.state.resignation = { color: snapshot.position.next, afterPly: snapshot.position.moves.length,
           reason: reason.trim(), model: `${snapshot.model!.provider}/${snapshot.model!.id}`, timing, ...(decision ? { decision } : {}) };
@@ -341,6 +348,7 @@ export class GameService {
           // accepted commit inside this transaction, never patch an emitted note.
           const decision = stagedDecision ? structuredClone(stagedDecision) : undefined;
           if (decision) recordDecisionTool(decision, 'move_piece', true);
+          settleCallAudit(decision?.audit, 'move_piece');
           this.state.notes.push({ ply: position.moves.length, reason: reason.trim(), elapsedMs: timing.totalMs, timing,
             model: `${snapshot.model!.provider}/${snapshot.model!.id}`, review,
             ...(decision ? { decision } : {}),
@@ -359,9 +367,13 @@ export class GameService {
     }).catch(error => {
       this.charge();
       if (valid() && !committed) {
-        this.stopAttempt?.('error');
-        this.state.status = 'error'; this.state.error = error instanceof Error ? error.message : String(error);
+        this.state.status = 'error'; this.state.error = (error instanceof Error ? error.message : String(error)).slice(0, 1200);
         this.log('agent', `本回合未落子，棋钟继续：${this.state.error}`);
+        // Finalize AFTER recording the reason/log so the new attempt save key
+        // persists the complete failure. Revoke even a misbehaving driver that
+        // rejects but leaves asynchronous work/tools behind.
+        this.stopAttempt?.('error', this.state.error);
+        controller.abort();
       }
     }).finally(() => { if (this.active === controller) this.active = undefined; });
   }
@@ -370,7 +382,7 @@ export class GameService {
       model: structuredClone(this.state.model), moves: structuredClone(this.state.position.moves),
       evaluations: structuredClone(this.state.evaluations), notes: structuredClone(this.state.notes), plan: structuredClone(this.state.plan),
       result: this.state.outcome?.winner ?? null, outcome: structuredClone(this.state.outcome),
-      clock: structuredClone(this.state.clock), match: structuredClone(this.state.match),
+      clock: structuredClone(this.state.clock), match: structuredClone(this.state.match), logs: structuredClone(this.state.logs),
       ...(this.state.attempts?.length ? { attempts: structuredClone(this.state.attempts) } : {}),
       ...(this.state.resignation ? { resignation: structuredClone(this.state.resignation) } : {}) };
   }

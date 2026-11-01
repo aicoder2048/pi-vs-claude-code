@@ -3,10 +3,11 @@ import { REASON_TEXT, type Command, type GameState, type ModelChoice } from '../
 import type { Risk } from '../business/expert';
 import { setupLearningUI } from './learning-ui';
 import { conditionalText, motifText, principleText } from './skill-text';
-import { progressText, timingLines, timingSummary } from './turn-feedback';
+import { failedTurnNotice, progressText, timingLines, timingSummary } from './turn-feedback';
 import { Ambience, type MusicStyle } from './audio';
 import { newRoundWinner, VictoryCelebration } from './celebration';
 import { lastMoveHighlight } from './last-move';
+import { callAuditLines } from './call-audit';
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const text = (id: string, value: string) => { el(id).textContent = value; };
 const button = (id: string) => el<HTMLButtonElement>(id);
@@ -120,6 +121,10 @@ function renderStatus() {
     description = `${state.outcome.reason === 'resign' ? state.outcome.winner === state.human ? '大模型认输' : '你已认输' : REASON_TEXT[state.outcome.reason]}。${state.resignation ? `理由：${state.resignation.reason}。` : ''}${state.match.winner ? `比赛结束，${state.match.winner === 'human' ? '你' : '大模型'}赢得本场比赛。` : '下一局重新配时；胜负局交换红黑，和棋同色重赛。'}`;
   }
   if (reviewing) { title = `回看 · 第 ${view} 手`; description = '当前为历史局面，不能走子。实战棋钟仍在运行，点击「回到实战」继续。'; }
+  const failure = failedTurnNotice(state);
+  el('turn-failure').hidden = !failure;
+  if (failure && el('turn-failure').textContent !== failure) text('turn-failure', failure);
+  button('retry').classList.toggle('needs-attention', !!failure && !state.outcome);
   text('status-badge', badge); text('status-title', title); text('status-description', description);
   text('view-label', reviewing ? `回看 ${view} / ${state.position.moves.length}` : `${colorName(state.position.next)}方行棋 · 9 × 10`);
   text('match-format', state.match.settings.bestOf === 3 ? '三局两胜' : '五局三胜');
@@ -221,8 +226,14 @@ function renderExpert() {
     const attempt = state.attempts.at(-1)!;
     const failed = section('最近未落子尝试');
     failed.append(node('p', `${attempt.status} · revision ${attempt.revision} · 拟下第${attempt.ply}手`));
+    if (attempt.error) failed.append(node('p', `失败原因：${attempt.error}`));
     for (const line of timingLines(attempt.timing)) failed.append(node('p', line));
   }
+  const latestAttempt = view === null ? state.attempts?.at(-1) : undefined;
+  const audit = view === null && state.resignation?.decision?.audit ? state.resignation.decision.audit :
+    latestAttempt && latestAttempt.ply > (note?.ply ?? 0) ? latestAttempt.decision?.audit : note?.decision?.audit;
+  const auditSection = section('调用证据 · 重读、重算与计划推进');
+  for (const line of callAuditLines(audit)) auditSection.append(node('p', line));
   if (note?.review) { const s = section('最近一次机器提交的独立复查'); s.append(node('p', `第 ${note.ply} 手：${note.review.notation} · ${RISK_TEXT[note.review.risk]} · 交换估计 ${note.review.estimatedNet}`)); if (note.riskAcknowledgement) s.append(node('p', `模型明确接受风险：${note.riskAcknowledgement}`)); }
   if (note?.review?.search) {
     const search = note.review.search, s = section('实际落子的多步复查');

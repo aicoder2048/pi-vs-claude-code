@@ -17,6 +17,8 @@ export interface TurnTiming {
 }
 export interface TurnAttempt {
   id: string; revision: number; ply: number; model: string; status: AttemptStatus; timing: TurnTiming;
+  error?: string;
+  decision?: import('./decision').DecisionTrace;
 }
 export interface TurnProgress {
   revision: number; elapsedMs: number; phase: TimingKind | 'preparing'; name?: string;

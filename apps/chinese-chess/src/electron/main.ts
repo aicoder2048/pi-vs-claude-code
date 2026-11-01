@@ -1,10 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, screen } from 'electron';
-import { mkdir, writeFile, rename } from 'node:fs/promises';
+import { cp, mkdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PiDriver } from '../agent/pi-driver';
-import { assertSkills, SkillCatalog } from '../agent/skill-loader';
-import { DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { createReadTool, DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { selectStartupModel } from '../agent/model-selection';
 import { GameService, type AgentDriver } from '../business/game-service';
 import type { Command, GameRecord, ModelChoice, Reply } from '../shared/types';
@@ -62,15 +61,26 @@ function validCommand(value: unknown): Command {
 async function initialize(): Promise<void> {
   let driver: AgentDriver;
   try {
+    // Development uses apps/chinese-chess, never the harness cwd or userData root.
+    // An installed asar is not a writable shell workspace: seed missing files
+    // into a project folder, retaining local edits on subsequent launches.
+    const workspace = app.isPackaged ? path.join(app.getPath('userData'), 'chinese-chess') : app.getAppPath();
+    if (app.isPackaged) {
+      await mkdir(workspace, { recursive: true });
+      await cp(path.join(here, '../skills'), path.join(workspace, 'skills'), { recursive: true, force: false });
+    }
     if (isSmoke) {
-      // Exercise Pi discovery plus fs/readdir/realpath through Electron's asar
-      // layer, even though the UI move fixture deliberately never uses an LLM.
-      const catalog = new SkillCatalog(path.join(here, '../skills'));
-      const loader = new DefaultResourceLoader({ cwd: app.getPath('userData'), agentDir: app.getPath('userData'),
-        settingsManager: SettingsManager.inMemory(), noSkills: true, additionalSkillPaths: [catalog.dir],
+      // Exercise the same workspace and native Pi discovery/read as normal launch.
+      // In a packaged app the copy above exercises Electron's asar fs layer.
+      // The UI move fixture below deliberately never uses an LLM.
+      const loader = new DefaultResourceLoader({ cwd: workspace, agentDir: app.getPath('userData'),
+        settingsManager: SettingsManager.inMemory(), noSkills: true, additionalSkillPaths: [path.join(workspace, 'skills')],
         noExtensions: true, noThemes: true, noPromptTemplates: true, noContextFiles: true });
-      await loader.reload(); const loaded = loader.getSkills(); assertSkills(loaded.skills, loaded.diagnostics);
-      catalog.read('read-expert-report', 'principles.md');
+      await loader.reload();
+      const loaded = loader.getSkills();
+      const report = loaded.skills.find(skill => skill.name === 'read-expert-report');
+      if (loaded.diagnostics.length || !report) throw new Error('应用技能加载失败');
+      await createReadTool(workspace).execute('smoke-read', { path: path.join(report.baseDir, 'references/principles.md') });
       // Explicit UI-test fixture, never used by a normal app launch.
       models = [{ provider: 'test', id: 'fixture', name: 'UI test fixture (not LLM)' }];
       driver = { async run(port) {
@@ -91,7 +101,7 @@ async function initialize(): Promise<void> {
         port.telemetry?.({ type: 'end', id: 'fixture-move', ok: true });
       } };
     } else {
-      const pi = await PiDriver.create(app.getPath('userData'), path.join(here, '../skills'));
+      const pi = await PiDriver.create(workspace);
       models = await pi.models(); driver = pi;
     }
   } catch (error) {

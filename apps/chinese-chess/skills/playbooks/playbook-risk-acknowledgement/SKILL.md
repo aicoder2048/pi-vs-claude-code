@@ -1,7 +1,6 @@
 ---
 name: playbook-risk-acknowledgement
 description: 收到 MoveRiskError 且考虑有依据弃子或不可避免败势时按需读取，不参与默认路由。
-disable-model-invocation: true
 ---
 # 风险说明
 风险拒绝尚未落子，先比较替代候选。只有确有具体补偿或不可避免败势才提交 riskAcknowledgement（12–400 字）；说明具体路线、风险和未知覆盖，不能用“争取主动”等套话习惯性绕过。

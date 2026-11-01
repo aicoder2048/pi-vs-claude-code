@@ -5,6 +5,7 @@ import { MoveRiskError } from '../src/business/expert';
 import { createDecisionTrace, recordDecisionTool, turnGuidance } from '../src/business/decision';
 import { normalizeRecord } from '../src/business/learning';
 import { searchPosition } from '../src/business/search';
+import { recordSaveKey } from '../src/business/turn-timing';
 const noSearch = { async search(p: import('../src/business/engine').Position) { return searchPosition(p, { maxMs: 0, maxNodes: 0 }); } };
 import { RECORDED_GAME } from './fixtures/recorded-game';
 import type { MatchSettings } from '../src/shared/types';
@@ -192,6 +193,47 @@ describe('turn validity and matches', () => {
     for (const driver of [{ async run() {} }, { async run() { throw new Error('network error'); } }]) {
       const s = new GameService(driver, model); s.humanMove(red, 0); await Bun.sleep(5); expect(s.snapshot().status).toBe('error'); expect(s.snapshot().position.moves).toHaveLength(1); s.dispose();
     }
+  });
+});
+describe('failed-turn recovery and durable diagnostics', () => {
+  test('failure saves its cause/audit, revokes late tools, and retry remains usable without a clock refund', async () => {
+    let now = 0;
+    const turns: TurnPort[] = [], saves: ReturnType<GameService['record']>[] = [];
+    const service = new GameService({ async run(port) {
+      turns.push(port);
+      if (turns.length > 1) return new Promise<void>(() => {});
+      const trace = createDecisionTrace(port.state.revision, turnGuidance(port.state)!);
+      recordDecisionTool(trace, 'update_plan', true); port.setDecision!(trace);
+      port.log('agent', 'LLM 请求 8/8');
+      now = 23475; throw new Error('已达到单回合 8 次 LLM 请求上限');
+    } }, model, { now: () => now, search: noSearch });
+    let savedKey = '';
+    service.subscribe(state => {
+      const key = recordSaveKey(state);
+      if (key !== savedKey) { savedKey = key; saves.push(service.record()); }
+    });
+    try {
+      service.humanMove(red, 0); await Bun.sleep(5);
+      const failure = service.snapshot();
+      expect(failure.status).toBe('error'); expect(failure.outcome).toBeNull();
+      expect(turns[0].signal.aborted).toBe(true);
+      const saved = saves.at(-1)!;
+      expect(saved.attempts?.at(-1)?.error).toContain('8 次');
+      expect(saved.attempts?.at(-1)?.decision?.tools).toEqual([{ name: 'update_plan', ok: true }]);
+      expect(saved.logs?.at(-1)?.text).toContain('本回合未落子');
+      expect(saved.attempts?.at(-1)?.timing.totalMs).toBe(23475);
+      await expect(turns[0].commit(black, '失败回合不能迟到提交')).rejects.toThrow();
+      now += 1000;
+      expect(service.retry().status).toBe('thinking');
+      expect(service.snapshot().clock.players[2].mainMs).toBe(DEFAULT_SETTINGS.mainTimeMs - now);
+      expect(turns[1].signal.aborted).toBe(false);
+      turns[0].log('agent', '旧请求不应污染重试日志');
+      expect(service.record().logs?.some(l => l.text.includes('污染'))).toBe(false);
+      await turns[1].commit(black, '重试后合法落子。');
+      expect(service.snapshot().status).toBe('human');
+      expect(service.record().moves).toHaveLength(2);
+      expect(service.record().attempts?.at(-1)?.error).toContain('8 次');
+    } finally { service.dispose(); }
   });
 });
 describe('pushed views stay small as the game grows', () => {

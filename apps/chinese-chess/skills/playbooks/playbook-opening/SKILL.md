@@ -1,7 +1,6 @@
 ---
 name: playbook-opening
 description: 宿主判定开局且没有更高优先威胁时使用，协调出子并核对定式匹配。
-disable-model-invocation: true
 ---
 # 开局
 先查直接威胁，再协调车马炮、疏通车路。比较至少一个安全发展候选，不为口诀把车放到车口；避免无收益重复动同一子。

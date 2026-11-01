@@ -1,5 +1,6 @@
 # 楚河 · Chinese Chess LLM 技术白皮书：四层 Agent Harness、双循环接入点、Pi 原生技能组与上下文工程
 
+> 设计更正：5.4 节已更新为 `xiangqi-skills/v3` 原生方案；其余章节及行号、测试数字保留 v2 历史快照，不应当作当前实现。当前完整说明见 [原生 Skill 与内置工具](native-skills.md)。现有 PDF 尚未重生成。
 > 版本：v1.0 · 2026-10-30
 > 对象：`apps/chinese-chess`（工作区快照，含尚未提交的 L3 技能组重构 `xiangqi-skills/v2` 与回合耗时诊断）
 > 依赖：`@earendil-works/pi-coding-agent` 1.4.0、`@earendil-works/pi-ai` 1.4.0、Electron 45
@@ -626,23 +627,25 @@ skills/                                   # 按 Pi package 约定命名，构建
 | 5 项专项技能 | 工作流技能 | 索引常驻；全文与 references 按需 |
 | `xiangqi-review` | 离线复盘技能 | 只在 Pi TUI，`/skill:xiangqi-review <棋谱>` |
 
-### 5.4 加载：Pi 负责“发现与格式”，宿主负责“选择与授权”
+### 5.4 设计更正：直接使用 Pi 原生 Skill，不自建支持子系统
 
-`src/agent/skill-loader.ts`（60 行）没有任何自写的 Markdown / frontmatter 解析器：
+**原设计把优先级弄反了。** 禁用内置工具不是业务目标，不应因此增加宿主技能目录、索引拼接和专用读取协议。“没有自写解析器”也不等于“没有自建 Skill 子系统”。v3 已删除 `src/agent/skill-loader.ts`、`SkillCatalog`、`SkillReader` 和 `read_skill`。
 
-| 步骤 | 实现 | 出处 |
-|---|---|---|
-| 发现与校验 | `loadSkillsFromDir({ dir, source: 'app' })`：递归找 `SKILL.md`，校验 `name` 字符集、`description` 必填、名字冲突 | `skill-loader.ts:32`；`pi/…/skills.js:121` |
-| 集合断言 | 名字集合必须恰好等于 `EXPECTED_SKILLS`（19 项），`diagnostics` 必须为空 | `:7-14`、`:20-25` |
-| 越界防护 | `realpathSync` + `within(root, file)`：拒绝软链逃逸与路径遍历 | `:16-19`、`:35-38`、`:44-55` |
-| 失败即关 | 构造时把每个技能读一遍，空文件或不可读直接抛错 | `:37` |
-| 索引格式 | `formatSkillsForPrompt(skills, 'indirect')`，`<location>` 改写为 `skills/…` 逻辑路径，不泄露安装目录 | `:40-42`；`pi/…/skills.js:278` |
-| 去 frontmatter | Pi 导出的 `stripFrontmatter` | `:52` |
-| 系统提示词 | `[SYSTEM, coach 全文, 索引, "## 当前剧本：…" + 剧本全文]` | `:56-59` |
+| 能力 | v3 的负责人和方式 |
+|---|---|
+| 发现与校验 | Pi `DefaultResourceLoader`，宿主只配置 `noSkills: true` + `additionalSkillPaths: [workspace/skills]` |
+| 技能索引 | Pi 原生生成 `<available_skills>` 和真实文件路径；宿主不格式化、不改写 location |
+| 入口展开 | `session.prompt('/skill:xiangqi-coach ' + turnPrompt(state))`，由 Pi 展开到用户消息，不再由宿主读入系统提示词 |
+| 按需全文与 references | 模型使用原生 `read`，不经过应用专用 Skill 协议 |
+| 工具权限 | 原生 `read/bash/edit/write` + 8 个象棋业务工具，不再设 `noTools: 'builtin'` |
+| 业务流程 | `turnGuidance()` 只给建议剧本和依据，不选择并拼接全文；19 项技能均可由 Pi 原生索引发现 |
+| 规则与预算 | 宿主继续负责规则、棋钟、revision、搜索、提交复查、8 次模型请求和16次工具调用预算 |
 
-为什么不让 Pi 自动把技能写进系统提示词？因为 Pi 只有在工具集里有 `read` 或 `bash` 时才生成技能段（`pi/…/system-prompt.js:102-106`），而楚河 `noTools: 'builtin'`，故意不开放文件系统。所以宿主自己调用 `formatSkillsForPrompt(…, 'indirect')`：`'indirect'` 的引导句不提 `read` 工具，与“只能用 `read_skill` 枚举读取”一致。新工具也特意**不叫 `read`**，否则会被 Pi 当作文件读取工具而改写引导语。
+资源发现限制不是权限沙箱。开发版工作目录为 `apps/chinese-chess`；安装版为可写的 `userData/chinese-chess` 工作区，复制自带技能且不覆盖已有编辑。提示词要求文件与脚本只在项目目录内操作，但 **Pi 的 cwd 不阻止绝对路径、../、软链或 shell 越界**；本次没有自建路径过滤器或 OS 沙箱。如需硬隔离，应另接成熟沙箱或容器。
 
-隔离方面，`DefaultResourceLoader` 设置 `noSkills: true` + `additionalSkillPaths: [catalog.dir]`（`pi-driver.ts:51-52`）：Pi 只加载应用自带目录，不扫描 `~/.pi/agent/skills`、项目 `.pi/skills` 或设置里的路径（`pi/…/resource-loader.js:424-426`）。加载后再用 `assertSkills` 断言一次。打包后的 asar 内能否正常 `readdir / realpath`，由 Electron 冒烟测试在主进程里实测（`main.ts:66-73`）。
+新记录为 `xiangqi-skills/v3`：`playbook` 是建议，`skillsInjected` 仅记录原生展开的入口。旧 `skillsRead` 字段保留为空，原生读写和 shell 统一记入通用工具完成序列及耗时，不根据工具名推断读了哪项技能。原生工具可能并行，完成顺序不等于调用顺序。
+
+**以下章节保留 v2 历史快照。** 其中“唯一剧本全文注入”“11项索引”“enum read_skill”“禁止文件系统”等说法已由本节替代；当前工作区、升级与权限细节见 [原生 Skill 与内置工具](native-skills.md)。
 
 ### 5.5 路由：三级，外加数据驱动的信号
 

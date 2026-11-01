@@ -89,6 +89,8 @@ try {
   await expect(page.locator('#expert-report')).toContainText('计算边界');
   await expect(page.locator('#expert-report')).toContainText('回合耗时分解');
   await expect(page.locator('#expert-report')).toContainText('首次响应增量');
+  await expect(page.locator('#expert-report')).toContainText('调用证据 · 重读、重算与计划推进');
+  await expect(page.locator('#expert-report')).toContainText('未记录结构化调用证据');
   await page.screenshot({ path: 'artifacts/expert-report.png' }); await page.locator('#expert-close').click();
   // Backfill an independently stored finished game, not the current live board.
   await mkdir(path.join(dataDir, 'records'), { recursive: true });
@@ -214,6 +216,25 @@ try {
   await sendState(win); await page.waitForTimeout(100);
   await expect(page.locator('#victory')).toBeHidden();
   expect(await page.evaluate(() => (window as any).victoryNotes)).toBe(notesBefore + 6);
+  // A stopped turn must be unmistakable even after the clock later expires.
+  const failed: GameState = structuredClone(active);
+  failed.id = 'failure-fixture'; failed.revision = win.revision + 1;
+  failed.status = 'error'; failed.position.next = failed.human === 1 ? 2 : 1;
+  failed.error = '已达到单回合 8 次 LLM 请求上限';
+  failed.attempts = [{ ...bootstrap.value.state.attempts!.at(-1)!, status: 'error',
+    ply: failed.position.moves.length + 1, error: failed.error }];
+  await sendState(failed);
+  await expect(page.locator('#turn-failure')).toBeVisible();
+  await expect(page.locator('#turn-failure')).toContainText('棋钟仍在运行');
+  await expect(page.locator('#retry')).toBeEnabled();
+  await expect(page.locator('#retry')).toHaveClass(/needs-attention/);
+  await page.waitForTimeout(4700); // no toast lifetime may erase the warning
+  await expect(page.locator('#turn-failure')).toContainText('8 次 LLM');
+  failed.revision++; failed.status = 'over'; failed.error = null;
+  failed.outcome = { gameId: failed.id, number: 1, humanColor: failed.human, winner: failed.human, reason: 'main-time' };
+  await sendState(failed);
+  await expect(page.locator('#turn-failure')).toContainText('8 次 LLM');
+  await expect(page.locator('#retry')).toBeDisabled();
   expect(await page.evaluate(() => typeof (window as any).require)).toBe('undefined');
   expect(await page.evaluate(() => Object.keys(window.chess).sort())).toEqual(['bootstrap', 'command', 'evaluation', 'exportRecord', 'onLearning', 'onState', 'rescanLearning', 'reviewGame']);
   expect(errors).toEqual([]);

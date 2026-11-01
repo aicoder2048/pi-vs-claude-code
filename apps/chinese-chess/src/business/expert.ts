@@ -317,7 +317,7 @@ export function analyzeExpert(p: Position, options: ExpertOptions = {}): Analysi
 export function needsRiskAcknowledgement(review: MoveReview): boolean { return review.risk === 'loss' || review.risk === 'material-loss'; }
 export class MoveRiskError extends Error {
   constructor(public readonly review: MoveReview) {
-    super(`专家审查发现风险，尚未落子。优先比较替代走法；坚持接受风险前 read_skill('playbook-risk-acknowledgement')。${JSON.stringify({ risk: review.risk, estimatedNet: review.estimatedNet, line: review.line, warnings: review.warnings })}`);
+    super(`专家审查发现风险，尚未落子。优先比较替代走法；坚持接受风险前用 read 读取技能索引中的 playbook-risk-acknowledgement。${JSON.stringify({ risk: review.risk, estimatedNet: review.estimatedNet, line: review.line, warnings: review.warnings })}`);
     this.name = 'MoveRiskError';
   }
 }

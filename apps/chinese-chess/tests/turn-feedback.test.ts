@@ -6,7 +6,7 @@ const progress: TurnProgress = { revision: 1, phase: 'model', receiving: false, 
 test('public phase labels distinguish waiting, streaming, tools and independent review', () => {
   expect(progressText(progress)).toBe('等待模型响应 · 第2次 · 本回合 12.0秒');
   expect(progressText({ ...progress, receiving: true })).toContain('接收模型响应');
-  for (const [name, text] of [['compare_moves', '比较候选'], ['analyze_position', '读取完整报告'], ['update_plan', '复核计划'], ['read_skill', '读取技能']]) {
+  for (const [name, text] of [['compare_moves', '比较候选'], ['analyze_position', '读取完整报告'], ['update_plan', '复核计划'], ['read_skill', '读取技能（旧版）'], ['read', '读取文件'], ['bash', '执行脚本'], ['edit', '编辑文件'], ['write', '写入文件'], ['resign_game', '主动认输']]) {
     expect(progressText({ ...progress, phase: 'tool', name })).toContain(text);
   }
   expect(progressText({ ...progress, phase: 'review' })).toContain('提交复查');

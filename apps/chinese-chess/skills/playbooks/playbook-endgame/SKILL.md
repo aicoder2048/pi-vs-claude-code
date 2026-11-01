@@ -1,7 +1,6 @@
 ---
 name: playbook-endgame
 description: 宿主判定大子较少的残局时使用，核对马炮价值、兵将协同和兑换后攻击力量。
-disable-model-invocation: true
 ---
 # 残局
 核查将帅安全与合法出口，注意困毙也判负。马炮价值随空间和炮架变化；支持将帅与兵卒协同，不机械兑子。

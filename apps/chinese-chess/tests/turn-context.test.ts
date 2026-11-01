@@ -4,9 +4,11 @@ import { analyzeExpert } from '../src/business/expert';
 import { boardText, colorName, emptyPosition, play, type MoveInput } from '../src/business/engine';
 import { retrieveKnowledge } from '../src/business/knowledge';
 import { searchPosition } from '../src/business/search';
-import { turnGuidance } from '../src/business/decision';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { formatSkillsForPrompt, loadSkillsFromDir, stripFrontmatter } from '@earendil-works/pi-coding-agent';
 import { turnSignals, evaluationSummaries } from '../src/business/turn-context';
-import { SkillCatalog } from '../src/agent/skill-loader';
+import { SKILLS_DIR } from './fixtures/skills';
 import { SYSTEM } from '../src/agent/pi-driver';
 import { turnPrompt } from '../src/agent/turn-prompt';
 import { HUMAN_MISTAKES } from './fixtures/human-mistakes';
@@ -28,9 +30,12 @@ describe('compact first-turn context', () => {
   for (const [name, moves] of [['initial', []], ['human-mistakes-before-42', HUMAN_MISTAKES.slice(0, 41)], ['passive-before-53', PASSIVE_GAME.slice(0, 52)]] as const) {
     test(`${name}: first system+user context is at least 40% smaller than full-report injection`, () => {
       const state = fixture([...moves]), before = JSON.stringify(state), p = state.position;
-      const system = new SkillCatalog().systemPrompt(SYSTEM, turnGuidance(state)!.playbook);
+      // Test-only accounting: native system index plus /skill-expanded user prefix.
+      // The real session's prompt construction is covered by pi-integration.test.ts.
+      const system = SYSTEM + formatSkillsForPrompt(loadSkillsFromDir({ dir: SKILLS_DIR, source: 'app' }).skills, 'read') +
+        stripFrontmatter(readFileSync(path.join(SKILLS_DIR, 'xiangqi-coach/SKILL.md'), 'utf8'));
       const compact = turnPrompt(state);
-      // Stage-1 shape: same skill prefix, full move coordinates, all summaries,
+      // Full-report baseline: same skill prefix, full move coordinates, all summaries,
       // duplicated plan and full Analysis. Common headers omitted conservatively.
       const full = `现在轮到你，执${colorName(p.next)}。revision=${state.revision}。
 ${p.moves.map((m, i) => `${i + 1}. ${m.notation} ${JSON.stringify({ from: m.from, to: m.to })}`).join('\n')}

@@ -46,6 +46,8 @@ export interface GameRecord {
   moves: Move[]; evaluations: Analysis[]; notes: TurnNote[]; plan?: StrategicPlan | null; result: Position['winner'];
   outcome: RoundResult | null; clock: ClockState; match: MatchState;
   attempts?: TurnAttempt[];
+  /** Bounded public host log; no raw model reasoning, prompts or credentials. */
+  logs?: LogEntry[];
   resignation?: ResignationNote;
 }
 export type Command =

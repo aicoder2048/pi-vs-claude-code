@@ -1,7 +1,6 @@
 ---
 name: playbook-under-attack
 description: 己方价值至少 400 的大子遭合法攻击时由宿主使用，比较撤、保、兑与反击。
-disable-model-invocation: true
 ---
 # 大子受攻
 先确认对方合法吃子和己方回吃，不把几何保护当事实。比较安全撤退、增加合法保护、兑换进攻子/解除牵制、具体反击，不被位置发展分数挤掉真实逃生候选。

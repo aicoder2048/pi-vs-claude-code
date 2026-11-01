@@ -1,7 +1,6 @@
 ---
 name: playbook-in-check
 description: 当前被将军时由宿主优先使用，比较吃将军子、垫子与移将的合法应手。
-disable-model-invocation: true
 ---
 # 被将军
 全部合法走法已经只剩应将；需要穷举时用 analyze_position，不考虑其他走法。

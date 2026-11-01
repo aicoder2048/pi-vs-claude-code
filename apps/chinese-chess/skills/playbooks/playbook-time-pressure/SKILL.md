@@ -1,7 +1,6 @@
 ---
 name: playbook-time-pressure
 description: 剩余棋钟低于宿主预算阈值时使用，优先已有证据并及时完成合法落子。
-disable-model-invocation: true
 ---
 # 时间压力
 直接读取已有 signals、回合前搜索和当前计划，减少额外技能读取。仅比较 1–2 个可行候选，优先处理强制威胁；需要报告才 analyze_position。

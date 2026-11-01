@@ -2,20 +2,24 @@ import { inCheck } from './engine';
 import { inspectSafety, phaseOf } from './expert';
 import type { GameState } from '../shared/types';
 
-export const SKILLS_VERSION = 'xiangqi-skills/v2' as const;
+export const SKILLS_VERSION = 'xiangqi-skills/v3' as const;
 export type Playbook = 'playbook-opening' | 'playbook-middlegame' | 'playbook-endgame' |
   'playbook-in-check' | 'playbook-under-attack' | 'playbook-time-pressure';
 export interface TurnGuidance { playbook: Playbook; evidence: string }
 export type DecisionStep = 'observe' | 'compare' | 'plan' | 'commit';
 export interface DecisionTrace {
-  version: 'xiangqi-skills/v1' | typeof SKILLS_VERSION; revision: number; playbook: Playbook;
-  skillsInjected: string[]; skillsRead: string[];
+  version: 'xiangqi-skills/v1' | 'xiangqi-skills/v2' | typeof SKILLS_VERSION; revision: number; playbook: Playbook;
+  skillsInjected: string[];
+  /** Legacy v1/v2 read_skill audit. v3 leaves this empty; native reads appear in tools. */
+  skillsRead: string[];
   tools: { name: string; ok: boolean }[];
+  /** Optional structured public evidence; legacy records have only tool names. */
+  audit?: import('./call-audit').TurnCallAudit;
   steps: { id: DecisionStep; status: 'done' | 'skipped'; evidence: string }[];
 }
 export function createDecisionTrace(revision: number, guidance: TurnGuidance): DecisionTrace {
   return { version: SKILLS_VERSION, revision, playbook: guidance.playbook,
-    skillsInjected: ['xiangqi-coach', guidance.playbook], skillsRead: [], tools: [],
+    skillsInjected: ['xiangqi-coach'], skillsRead: [], tools: [],
     steps: (['observe', 'compare', 'plan', 'commit'] as const).map(id => ({
       id, status: id === 'observe' ? 'done' : 'skipped',
       evidence: id === 'observe' ? `已注入当前局面信号；${guidance.evidence}` : '尚无成功工具证据',
@@ -31,7 +35,8 @@ export function recordDecisionTool(trace: DecisionTrace, name: string, ok: boole
 }
 type TurnState = Pick<GameState, 'position' | 'analysis' | 'clock' | 'match' | 'notes' | 'outcome'>;
 
-// Routing is deterministic policy, not a claim that the recommended move wins.
+// Recommend a business workflow; Pi and the model handle skill loading.
+// This is not a claim that the recommended move wins.
 export function turnGuidance(state: TurnState): TurnGuidance | null {
   const { position: p } = state;
   if (p.winner || state.outcome) return null;

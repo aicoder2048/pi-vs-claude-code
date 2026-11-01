@@ -1,5 +1,7 @@
 # L3 技能组重构实施与验收
 
+> **历史记录（v1/v2）**：下文保留首版实现与当时验收，不再代表当前架构。v3 已删除 `skill-loader.ts`、`SkillCatalog`、专用 `read_skill`、宿主索引和全文拼接，改用 Pi 原生 Skill 与 `read/bash/edit/write`。宿主只给剧本建议；当前边界与记录语义见 [原生 Skill 与内置工具](native-skills.md)。原验收数字不作为 v3 的验收结论。
+
 依据 `discussions/2026-10-30-refactor-chinese-chess-pi-skills.md`，采用 D1–D8 推荐项：系统提示词注入、七剧本、允许按需读取其他剧本、TUI 复盘物理隔离、保留 caution、同计划独立瘦身阶段、接线 CCPD、不发布 Pi package。
 
 ## 边界

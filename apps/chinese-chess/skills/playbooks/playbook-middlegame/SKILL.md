@@ -1,7 +1,6 @@
 ---
 name: playbook-middlegame
 description: 宿主判定中局且无应将、读秒或大子受攻时使用，比较兵力协调与反击。
-disable-model-invocation: true
 ---
 # 中局
 先查将军、杀棋、吃大子，再比较直接防守、兑换进攻子或解除牵制、改善闲子与反击。中路被固守时检查肋道和侧翼；进兵应改善马路或得到支持。

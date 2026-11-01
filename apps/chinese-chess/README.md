@@ -76,11 +76,13 @@ just smoke-dist    # 在打包后的 楚河.app 上跑同一套桌面 smoke
 
 ## L3 业务技能组
 
-`skills/` 包含 **19 项 Pi 原生技能**：入口、6 原则、7 剧本、5 专项。代码按应将/棋钟/受攻大子/阶段选择唯一当前剧本，其他内容通过 `read_skill` 按需读取；不开放文件系统工具，不混入用户技能。每手 `notes[].decision` 保存版本、注入、读取、顺序工具结果和四步证据。规则、棋钟与提交复查仍由代码裁决。
+`skills/` 包含 **19 项 Pi 原生技能**：入口、6 原则、7 剧本、5 专项。Pi 原生负责发现、索引和 `/skill:xiangqi-coach` 入口展开；模型用原生 `read` 按需读取其他技能与 references。宿主只按应将/棋钟/受攻大子/阶段提供剧本建议，不读入或拼接剧本全文，不混入外部技能。不再维护 `skill-loader.ts` 或专用 `read_skill`。
 
-当前技能版本 `xiangqi-skills/v2` 强调复用同一 revision 的已有报告与自动搜索、一次比较多个新候选，减少无意义往返；不强制省略必要计算，不跳过计划与最终独立复查，尚不宣称真实模型已提速。
+当前版本 `xiangqi-skills/v3` 开放原生 `read/bash/edit/write`，仍保留 v2 的证据复用与批量候选比较指引。每手 `notes[].decision` 保存版本、入口展开、建议剧本、工具完成结果和四步证据；旧 v1/v2 记录仍可展示。规则、棋钟与提交复查由代码裁决，不宣称棋力或真实模型速度提升。
 
-流程说明见 [xiangqi-coach](skills/xiangqi-coach/SKILL.md)，实施及验收见 [L3 重构记录](docs/l3-skills-refactor.md)。在本目录运行 Pi TUI 可用 `/skill:xiangqi-review <棋谱路径>` 离线解释复盘；该技能不进入应用。当前不发布 Pi package。
+开发版工作目录为 `apps/chinese-chess`；安装版为独立的 `userData/chinese-chess` 工作区，并复制自带技能（不覆盖已有编辑）。提示词要求文件与脚本仅在该项目目录内操作。**这只是行为约定，不是沙箱：原生工具仍可能访问项目外文件和环境变量。** 需要硬隔离时应接现成 OS 沙箱或容器。
+
+当前设计见 [原生 Skill 与工具边界](docs/native-skills.md)，流程见 [xiangqi-coach](skills/xiangqi-coach/SKILL.md)，历史实施见 [L3 重构记录](docs/l3-skills-refactor.md)。在本目录运行 Pi TUI 可用 `/skill:xiangqi-review <棋谱路径>` 离线解释复盘；该技能不进入应用。当前不发布 Pi package。
 
 ## 业务层专家 Know-how
 
@@ -98,6 +100,8 @@ just smoke-dist    # 在打包后的 楚河.app 上跑同一套桌面 smoke
 - **连续计划**：新增 `update_plan`，保存当前问题、目标、对方计划、近期步骤与放弃条件；每回合明确继续 / 修订 / 放弃。计划只随成功落子持久化，将军、对方吃子或 8 半回合过期后失效；悔棋、换模型、新局清空。
 
 实战的「平车送车」和「贪兵丢炮」已加入独立回归，分别识别 −900 与 −350 的交换损失。2026-10-31 对局另加入第 8 手调炮困车（−450）与第 64 手送车（−900）回归，详见 [本局复盘](docs/2026-10-31-cannon-trap-review.md)。完整机制、性能预算和局限见 [EXPERT.md](EXPERT.md)。
+
+第33手后黑方停止落子的问题已定位为请求预算耗尽后等待人工重试，而非网络死循环；现请求上限为10次（前8次分析，最后两次仅落子/认输，用于提交/纠错），持久化失败原因，并持续提示重试。新增[调用证据审计](docs/call-audit.md)：按请求关联读取路径/范围、候选与计划摘要及输入/结果指纹，辅助判断重复读取或无新证据的复算，不保存私有思维链和原始文件输出。日志证据、双攻战术及修复边界见 [故障调查](docs/2026-10-31-request-budget-review.md)。
 
 ## 成型知识 + 赛后学习闭环
 
@@ -126,11 +130,12 @@ Electron 桌面层
           ↓ 回合快照 + 完整棋谱 + 逐手摘要
 Pi 扩展层
   analyze_position / search_position / review_move / compare_moves
-  simulate_moves / update_plan / move_piece / resign_game / read_skill
+  simulate_moves / update_plan / move_piece / resign_game
   工具参数校验 → TurnPort.commit / resign → 再次业务校验
           ↕ 工具调用及结果
 Agent Loop 层
-  原生 Pi SDK createAgentSession + ModelRuntime
+  原生 Pi SDK createAgentSession + ModelRuntime + Skill
+  read / bash / edit / write + 象棋业务工具
   模型 ↔ 工具循环，允许非法走法纠错，成功提交结束回合
 ```
 
@@ -142,16 +147,16 @@ Agent Loop 层
 | 权威棋钟、比赛和回合 | `src/business/clock.ts`、`game-service.ts` |
 | Pi 扩展 | `src/extensions/xiangqi.ts` |
 | Agent Loop、认证与模型 | `src/agent/pi-driver.ts`、`model-selection.ts` |
-| Pi 技能加载与紧凑上下文 | `src/agent/skill-loader.ts`、`turn-prompt.ts`、`src/business/turn-context.ts` |
+| 原生 Skill 配置与紧凑上下文 | `src/agent/pi-driver.ts`、`turn-prompt.ts`、`src/business/turn-context.ts` |
 | L3 路由、审计与知识文本 | `src/business/decision.ts`、`skills/` |
 | 桌面及 UI | `src/electron/`、`src/renderer/` |
 | 跨层 DTO | `src/shared/types.ts` |
 
-业务层不依赖 Pi 或 Electron，以 `AgentDriver` / `TurnPort` 注入。每次走子从完整棋谱重建棋盘、校验胜负并记录分析。模型收到完整棋谱、当前棋盘、逐手摘要、全部合法走法、专家报告与结构化旧计划；可自行试算最多 6 手，或调用有界对抗搜索。候选分数结合有限反击、同格交换与位置因素，**不是胜率或完备搜索**，不代替模型决策。
+业务层不依赖 Pi 或 Electron，以 `AgentDriver` / `TurnPort` 注入。每次走子从完整棋谱重建棋盘、校验胜负并记录分析。模型收到完整棋谱、当前棋盘、逐手摘要、紧凑 signals 与结构化旧计划，全部合法走法和专家报告按需读取；可自行试算最多 6 手，或调用有界对抗搜索。候选分数结合有限反击、同格交换与位置因素，**不是胜率或完备搜索**，不代替模型决策。
 
 每次 Agent 尝试的搜索总预算至多 2600ms / 70000 节点，工具搜索预留最终审查的 700ms / 20000 节点；单次受棋钟余量约束（至多余时的 1/12），危险局面适当增加预算。Worker 启动 / IPC 计入墙钟预算，硬看门狗允许额外 150ms 清理余量。搜索未完成或失败明确记录为未知，不伪造安全或胜率；最终提交仍执行原来的独立交换审查。
 
-每个机器回合使用隔离的内存 Pi 会话，仅启用九个象棋工具；不加载用户 / 项目扩展、技能、上下文文件、MCP 或编码工具。单回合最多 8 个模型回合；16 次工具调用预算耗尽后仍保留落子 / 认输出口，其余工具拒绝。取消、悔棋、换模型、新比赛或超时会使旧请求失效；重复提交和过期版本均拒绝。此工具隔离不是操作系统沙箱，仍应只使用可信的本机 Pi 配置。
+每个机器回合使用独立的内存 Pi 会话，启用 8 个象棋业务工具及原生 `read/bash/edit/write`；只发现应用配置的技能目录，不加载外部用户 / 项目扩展、技能、上下文文件或 MCP。单回合最多 8 个模型回合；16 次工具调用（含内置工具）预算耗尽后仍保留落子 / 认输出口，其余工具拒绝。取消、悔棋、换模型、新比赛或超时会使旧请求失效；重复提交和过期版本均拒绝。资源发现范围和工作目录不是操作系统沙箱；请在可信环境运行并审阅文件修改。
 
 ## 规则范围
 
@@ -186,6 +191,6 @@ just chinese-chess-smoke
 
 离线测试还覆盖真实双方失误回归、交换 / 牵制 / 毒卒 / 一步杀 / 预算截断、提交风险复查、案例验证 / 去重 / 镜像换色召回 / 并发持久化 / 损坏恢复 / 回填，以及全部定式路线和偏离定式的处理。新增 53 手被动败局回归：底炮配合双车转肋的多步杀、垫象 / 垫马比较、搜索 Worker 取消 / 崩溃 / 硬时限、异步提交竞争 / 棋钟超时、位置指标和计划生命周期。测试数量以 `bun test` 输出为准；不据此宣称实战胜率提高。
 
-Pi 集成测试通过本地 OpenAI-compatible SSE 服务运行**真实 Pi SDK Agent Loop**，验证七个工具的隔离、专家分析 / 审查 / 比较 / 试算、多步搜索与计划更新、等待异步提交、非法走法与送车风险纠错、成功后终止、请求预算、取消、超过旧 90 秒阈值的长考和总棋钟耗尽后的网络中止，不消耗外部 API 额度。
+Pi 集成测试通过本地 OpenAI-compatible SSE 服务运行**真实 Pi SDK Agent Loop**，验证原生 Skill 索引与入口展开、内置工具读写和 shell、工作目录、专家分析 / 审查 / 比较 / 试算、多步搜索与计划更新、等待异步提交、非法走法与送车风险纠错、成功后终止、请求预算、取消、超过旧 90 秒阈值的长考和总棋钟耗尽后的网络中止，不消耗外部 API 额度。
 
 Electron smoke 使用显式 `CHINESE_CHESS_SMOKE=1` 的 UI 测试替身；正常启动不使用此分支。验证吃子动画、键盘、回看 / 悔棋、黑方开局、三局两胜、五局设置、真实棋钟超时、三个窗口尺寸、本地 MP3 实际解码播放 / 切换、自动保存、来源专家报告、真实 Worker 回填 / 复盘界面 / 案例事务及 IPC 隔离。截图输出到 `artifacts/`（gitignored）。外部模型的网络与认证仍需使用你自己的账户实测。
