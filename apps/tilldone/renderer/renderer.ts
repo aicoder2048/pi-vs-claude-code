@@ -18,7 +18,7 @@ interface View {
 			toolCallsLabel: string; toolCallsTitle: string; heavy: boolean; modelCallsLabel: string; modelCallsTitle: string }[] };
 	queued: string[];
 	conversation: { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean }[];
-	confirm: { id: string; title: string; message: string; remainingSeconds: number | null } | null;
+	dialog: { id: string; kind: "confirm" | "select" | "input" | "editor"; title: string; message: string; options: string[]; placeholder: string; prefill: string; remainingSeconds: number | null } | null;
 }
 declare global {
 	interface Window { tilldone: { send(intent: unknown): Promise<{ ok: boolean; error?: string }>; onView(callback: (view: View) => void): () => void } }
@@ -170,7 +170,7 @@ function render(view: View) {
 	for (const [id, key] of Object.entries({ "product-name": "productName", "brand-slogan": "slogan", "brand-logo-title": "logo", workspace: "workspace", "settings-label": "settings", "settings-title": "settings", "theme-label": "theme", "language-label": "language",
 		"message-label": "message", "keyboard-hint": "keyboard",
 		stop: "stop", send: "send", restart: "restart", "task-list-label": "taskList",
-		"diagnostics-label": "diagnostics", deny: "deny", allow: "allow", "new-session-label": "newSession", "new-session-title": "newSessionTitle",
+		"diagnostics-label": "diagnostics", deny: "deny", allow: "allow", "ask-cancel": "cancel", "ask-ok": "answerOk", "new-session-label": "newSession", "new-session-title": "newSessionTitle",
 		"new-session-message": "newSessionMessage", "new-session-cancel": "cancel", "new-session-confirm": "newSessionConfirm" })) setText(id, ui[key]);
 	$<HTMLTextAreaElement>("prompt").placeholder = ui.placeholder;
 	$("chat").setAttribute("aria-label", ui.chat);
@@ -283,16 +283,53 @@ function render(view: View) {
 		panel.dataset.focus = String(view.tasks.focus);
 		if (view.tasks.focus) panel.focus();
 	}
+	renderConfirm(view.dialog?.kind === "confirm" ? view.dialog : null, ui);
+	renderAsk(view.dialog && view.dialog.kind !== "confirm" ? view.dialog : null, ui);
+}
+const countdown = (seconds: number | null, ui: View["ui"]) => seconds === null ? "" : `${ui.closesIn} ${seconds} ${ui.seconds}`;
+function renderConfirm(confirm: View["dialog"], ui: View["ui"]) {
 	const dialog = $<HTMLDialogElement>("confirm-dialog");
-	if (view.confirm) {
-		const confirm = view.confirm;
+	if (confirm) {
 		setText("confirm-title", confirm.title); setText("confirm-message", confirm.message);
-		setText("countdown", confirm.remainingSeconds === null ? "" : `${ui.closesIn} ${confirm.remainingSeconds} ${ui.seconds}`);
+		setText("countdown", countdown(confirm.remainingSeconds, ui));
 		$("allow").onclick = () => { void send({ type: "confirm", id: confirm.id, confirmed: true }); };
 		$("deny").onclick = () => { void send({ type: "confirm", id: confirm.id, confirmed: false }); };
 		dialog.oncancel = (event) => { event.preventDefault(); void send({ type: "confirm", id: confirm.id, confirmed: false }); };
 		if (!dialog.open) { dialog.showModal(); $("deny").focus(); }
 	} else if (dialog.open) dialog.close();
+}
+// select: one button per option; input/editor: a field and OK. Esc or Cancel cancels.
+// Fields and options are filled once per dialog id, so view updates (countdown ticks) keep what the user typed.
+function renderAsk(ask: View["dialog"], ui: View["ui"]) {
+	const dialog = $<HTMLDialogElement>("ask-dialog");
+	if (!ask) { if (dialog.open) dialog.close(); dialog.dataset.id = ""; return; }
+	const answer = (value: string | null) => { void send({ type: "answer", id: ask.id, value }); };
+	const input = $<HTMLInputElement>("ask-input"), editor = $<HTMLTextAreaElement>("ask-editor");
+	setText("ask-title", ask.title);
+	setText("ask-countdown", countdown(ask.remainingSeconds, ui));
+	if (dialog.dataset.id !== ask.id) {
+		dialog.dataset.id = ask.id;
+		dialog.dataset.kind = ask.kind;
+		const options = $("ask-options");
+		options.replaceChildren(...ask.options.map((option) => {
+			const button = document.createElement("button");
+			button.type = "button"; button.textContent = option;
+			button.onclick = () => answer(option);
+			return button;
+		}));
+		options.hidden = ask.kind !== "select";
+		input.hidden = ask.kind !== "input"; input.value = ""; input.placeholder = ask.placeholder;
+		editor.hidden = ask.kind !== "editor"; editor.value = ask.prefill;
+		$("ask-ok").hidden = ask.kind === "select";
+	}
+	$("ask-cancel").onclick = () => answer(null);
+	$("ask-ok").onclick = () => answer(ask.kind === "editor" ? editor.value : input.value);
+	input.onkeydown = (event) => { if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); answer(input.value); } };
+	dialog.oncancel = (event) => { event.preventDefault(); answer(null); };
+	if (!dialog.open) {
+		dialog.showModal();
+		(ask.kind === "select" ? $("ask-options").querySelector("button") : ask.kind === "input" ? input : editor)?.focus();
+	}
 }
 // Links in replies open in the system browser; the main process checks the address against the reply first.
 function openLink(event: Event) {

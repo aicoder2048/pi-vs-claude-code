@@ -33,11 +33,28 @@ export interface Tool {
 	readonly result: unknown;
 	readonly phase: "running" | "done" | "error";
 }
-export interface Confirm {
+/** A question an extension is blocked on: Pi's four RPC dialog methods. */
+export type DialogKind = "confirm" | "select" | "input" | "editor";
+export interface Dialog {
 	readonly id: string;
+	readonly kind: DialogKind;
 	readonly title: string;
+	/** confirm only. */
 	readonly message: string;
+	/** select only. */
+	readonly options: readonly string[];
+	/** input: a hint inside the empty field; editor: the starting text. */
+	readonly placeholder: string;
+	readonly prefill: string;
 	readonly deadline: number | null;
+}
+const DIALOG_KINDS: readonly string[] = ["confirm", "select", "input", "editor"];
+/** Bounds on what an extension may ask, so a broken request cannot flood the window. */
+const MAX_OPTIONS = 200;
+const MAX_ANSWER = 100000;
+function selectOptions(raw: unknown): string[] | undefined {
+	if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_OPTIONS || !raw.every((o) => typeof o === "string")) return;
+	return raw;
 }
 export interface State {
 	readonly list: ListState;
@@ -46,7 +63,8 @@ export interface State {
 	readonly timeline: readonly { kind: "message" | "tool"; id: string }[];
 	readonly assistantId: string | null;
 	readonly sequence: number;
-	readonly confirms: readonly Confirm[];
+	/** Waiting extension dialogs, shown one at a time in arrival order. */
+	readonly dialogs: readonly Dialog[];
 	/** Pi's steering and follow-up queues: messages accepted but not yet delivered to the model. */
 	readonly queued: readonly string[];
 	/** Tasks whose split button was pressed and whose split has not landed yet. */
@@ -76,7 +94,7 @@ export interface State {
 }
 export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false): State {
 	return { list: EMPTY_LIST, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
-		confirms: [], statuses: {}, now: 0, runActive: false, streaming: false, compacting: false,
+		dialogs: [], statuses: {}, now: 0, runActive: false, streaming: false, compacting: false,
 		queued: [], pendingSplits: [], toolCalls: {}, modelCalls: {}, model, imageInput: false, thinking: "unknown", cwd, sessionFile: "", connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
 }
 const text = (value: unknown): string => typeof value === "string" ? value : "";
@@ -98,10 +116,10 @@ function updateAssistant(state: State, change: (message: Message) => Message): S
 export function isRunning(state: State): boolean {
 	return state.runActive || state.streaming || state.compacting;
 }
-/** False when next renders the same view as previous: identical, or only the clock moved with no confirm counting down. */
+/** False when next renders the same view as previous: identical, or only the clock moved with no dialog counting down. */
 export function viewChanged(previous: State, next: State): boolean {
 	if (previous === next) return false;
-	if (next.confirms.length) return true;
+	if (next.dialogs.length) return true;
 	for (const key of Object.keys(next) as (keyof State)[]) if (key !== "now" && previous[key] !== next[key]) return true;
 	return false;
 }
@@ -127,8 +145,8 @@ export function reduce(state: State, record: RecordValue): State {
 		case "desk_api_error": return { ...state, api: { ...state.api, saving: false, error: record.error, saved: false } };
 		case "desk_api_saved": return { ...state, api: { ...state.api, saving: false, error: null, summary: record.summary, savedRevision: state.api.savedRevision + 1, saved: true } };
 		case "desk_tick": {
-			const confirms = state.confirms.filter((c) => c.deadline === null || c.deadline > record.now);
-			return { ...state, now: record.now, confirms: confirms.length === state.confirms.length ? state.confirms : confirms };
+			const dialogs = state.dialogs.filter((d) => d.deadline === null || d.deadline > record.now);
+			return { ...state, now: record.now, dialogs: dialogs.length === state.dialogs.length ? state.dialogs : dialogs };
 		}
 		case "desk_preferences": {
 			const preferences = parsePreferences(record.preferences);
@@ -136,10 +154,10 @@ export function reduce(state: State, record: RecordValue): State {
 		}
 		case "desk_system_theme": return { ...state, systemDark: record.dark === true };
 		case "desk_focus_tasks": return { ...state, taskFocus: state.taskFocus + 1 };
-		case "desk_confirm_closed": return { ...state, confirms: state.confirms.filter((c) => c.id !== record.id) };
+		case "desk_dialog_closed": return { ...state, dialogs: state.dialogs.filter((d) => d.id !== record.id) };
 		case "desk_error": return { ...state, error: text(record.error) };
 		case "desk_stderr": return { ...state, diagnostics: (state.diagnostics + text(record.text)).slice(-8000) };
-		case "desk_exit": return { ...state, connection: "exited", error: text(record.error), runActive: false, streaming: false, compacting: false, confirms: [], queued: [], pendingSplits: [] };
+		case "desk_exit": return { ...state, connection: "exited", error: text(record.error), runActive: false, streaming: false, compacting: false, dialogs: [], queued: [], pendingSplits: [] };
 		case "desk_resume_unavailable": return addMessage(state, "notice", { 0: copyFor(state.preferences.language).resumeUnavailable });
 		case "desk_split_requested": return { ...state, pendingSplits: [...state.pendingSplits, record.id] };
 		case "queue_update": {
@@ -207,10 +225,16 @@ export function reduce(state: State, record: RecordValue): State {
 				else delete statuses[record.statusKey];
 				return { ...state, statuses };
 			}
-			if (record.method === "confirm") return { ...state, confirms: [...state.confirms, {
-				id: record.id, title: text(record.title), message: text(record.message),
-				deadline: typeof record.timeout === "number" ? state.now + Math.max(0, record.timeout) : null,
-			}] };
+			if (DIALOG_KINDS.includes(record.method)) {
+				const options = record.method === "select" ? selectOptions(record.options) : [];
+				// An unusable select was already cancelled by immediateUIResponse.
+				if (!options) return state;
+				return { ...state, dialogs: [...state.dialogs, {
+					id: record.id, kind: record.method, title: text(record.title), message: record.method === "confirm" ? text(record.message) : "",
+					options, placeholder: record.method === "input" ? text(record.placeholder) : "", prefill: record.method === "editor" ? text(record.prefill) : "",
+					deadline: typeof record.timeout === "number" ? state.now + Math.max(0, record.timeout) : null,
+				}] };
+			}
 			if (record.method === "notify") return addMessage(state, "notice", { 0: text(record.message) });
 			return state;
 		}
@@ -222,6 +246,8 @@ export function reduce(state: State, record: RecordValue): State {
 export type Intent = { type: "submit"; message: string; images?: readonly Image[] }
 	| { type: "abort" | "restart" | "newSession" | "focusTasks" }
 	| { type: "confirm"; id: string; confirmed: boolean }
+	/** Answers a select, input or editor dialog; null cancels it. */
+	| { type: "answer"; id: string; value: string | null }
 	| { type: "splitTask"; id: number }
 	| { type: "copyMessage"; id: string }
 	| { type: "openLink"; id: string; url: string }
@@ -260,6 +286,7 @@ export function parseIntent(raw: unknown): Intent | undefined {
 		return { type: "openLink", id: r.id, url: r.url };
 	}
 	if (r.type === "confirm" && typeof r.id === "string" && typeof r.confirmed === "boolean") return { type: "confirm", id: r.id, confirmed: r.confirmed };
+	if (r.type === "answer" && typeof r.id === "string" && (r.value === null || (typeof r.value === "string" && r.value.length <= MAX_ANSWER))) return { type: "answer", id: r.id, value: r.value };
 }
 export function planIntent(state: State, intent: Intent): { commands: RecordValue[]; events: RecordValue[]; restart?: "resume" | "fresh"; saveApi?: CredentialChanges; externalUrl?: string; clipboard?: string } {
 	const empty = { commands: [], events: [] };
@@ -292,9 +319,15 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 	// A new session is a fresh Pi process with a new session file; mid-run, Stop first.
 	if (intent.type === "newSession") return state.connection === "ready" && !isRunning(state) ? { ...empty, restart: "fresh" } : empty;
 	if (state.connection !== "ready") return empty;
-	if (intent.type === "confirm") {
-		if (!state.confirms.some((c) => c.id === intent.id && (c.deadline === null || c.deadline > state.now))) return empty;
-		return { commands: [{ type: "extension_ui_response", id: intent.id, confirmed: intent.confirmed }], events: [{ type: "desk_confirm_closed", id: intent.id }] };
+	if (intent.type === "confirm" || intent.type === "answer") {
+		const dialog = state.dialogs.find((d) => d.id === intent.id && (d.deadline === null || d.deadline > state.now));
+		if (!dialog || (dialog.kind === "confirm") !== (intent.type === "confirm")) return empty;
+		const closed = [{ type: "desk_dialog_closed", id: intent.id }];
+		if (intent.type === "confirm") return { commands: [{ type: "extension_ui_response", id: intent.id, confirmed: intent.confirmed }], events: closed };
+		if (intent.value === null) return { commands: [{ type: "extension_ui_response", id: intent.id, cancelled: true }], events: closed };
+		// A select answer must be one of the offered options, exactly.
+		if (dialog.kind === "select" && !dialog.options.includes(intent.value)) return empty;
+		return { commands: [{ type: "extension_ui_response", id: intent.id, value: intent.value }], events: closed };
 	}
 	// The shepherd points at a task; the model, which has the context, decides the subtasks.
 	if (intent.type === "splitTask") {
@@ -315,10 +348,15 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 	}
 	return empty;
 }
+/** A select with no usable options cannot be answered, so Pi gets a cancel instead of waiting forever. */
 export function immediateUIResponse(record: RecordValue): RecordValue | undefined {
-	if (record.type === "extension_ui_request" && ["select", "input", "editor"].includes(record.method)) {
+	if (record.type === "extension_ui_request" && record.method === "select" && !selectOptions(record.options)) {
 		return { type: "extension_ui_response", id: record.id, cancelled: true };
 	}
+}
+function dialogView(dialog: Dialog, now: number) {
+	const { deadline, ...shown } = dialog;
+	return { ...shown, remainingSeconds: deadline === null ? null : Math.max(0, Math.ceil((deadline - now) / 1000)) };
 }
 const pretty = (value: unknown) => JSON.stringify(value, null, 2) ?? "";
 type Entry = { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean };
@@ -386,6 +424,6 @@ export function toViewModel(state: State) {
 			return entryFor(m, ui, () => ({ id: m.id, kind: m.kind, label: { assistant: ui.assistant, user: ui.user, nudge: ui.nudge, notice: ui.notice }[m.kind],
 				text: messageText(m), images: m.images, error: m.error, args: "", result: "", copyable: copyable(m) }));
 		}),
-		confirm: state.confirms.length ? { ...state.confirms[0], remainingSeconds: state.confirms[0].deadline === null ? null : Math.max(0, Math.ceil((state.confirms[0].deadline - state.now) / 1000)) } : null,
+		dialog: state.dialogs.length ? dialogView(state.dialogs[0], state.now) : null,
 	};
 }

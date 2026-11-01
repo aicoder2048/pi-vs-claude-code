@@ -158,6 +158,23 @@ try {
 	await page.waitForFunction(() => document.getElementById("conversation")!.textContent!.includes("ok"));
 	// Views are coalesced, so wait for the cleared list instead of sampling it once.
 	await page.waitForFunction(() => document.querySelectorAll("#task-list li").length === 0);
+	// select / input / editor: click an option, type and press Enter, then Esc cancels the editor.
+	await page.locator("#prompt").fill("dialogs");
+	await page.locator("#send").click();
+	await page.locator("#ask-dialog[open][data-kind=select]").waitFor();
+	assert.equal(await page.locator("#ask-title").innerText(), "Model for judge");
+	assert.equal(await page.locator("#ask-ok").isVisible(), false);
+	await page.locator("#ask-options button", { hasText: "gpt-6.1-terra" }).click();
+	await page.locator("#ask-dialog[open][data-kind=input]").waitFor();
+	assert.equal(await page.locator("#ask-input").getAttribute("placeholder"), "type a name");
+	await page.locator("#ask-input").evaluate((el) => { if (el !== document.activeElement) throw new Error("Input not focused"); });
+	await page.keyboard.type("collie");
+	await page.keyboard.press("Enter");
+	await page.locator("#ask-dialog[open][data-kind=editor]").waitFor();
+	assert.equal(await page.locator("#ask-editor").inputValue(), "line 1\nline 2");
+	await page.keyboard.press("Escape");
+	await page.locator("#ask-dialog").waitFor({ state: "hidden" });
+	console.log("Smoke: select/input/editor dialogs answered");
 	await page.locator("details.tool summary").first().click();
 	await page.waitForTimeout(350);
 	assert.equal(await page.locator("details.tool[open]").count(), 1);

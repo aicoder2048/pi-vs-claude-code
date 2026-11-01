@@ -128,7 +128,13 @@ footer { padding: 10px 20px; border-top: 1px solid var(--line); display: flex; f
 #alert { background: var(--danger-bg); padding: 12px 28px; border-bottom: 1px solid var(--danger); } #alert p { margin: 4px 0; }
 #diagnostics { padding: 8px 20px; font-size: 12px; } #diagnostics pre { max-height: 120px; overflow: auto; }
 dialog { color: var(--ink); background: var(--surface); border: 1px solid var(--control-line); border-radius: var(--panel-radius); padding: 25px; width: min(550px, 85vw); }
-dialog::backdrop { background: #0009; } dialog p { white-space: pre-wrap; overflow-wrap: anywhere; } #countdown { color: var(--warning); font-size: 12px; }
+dialog::backdrop { background: #0009; } dialog p { white-space: pre-wrap; overflow-wrap: anywhere; } #countdown, .countdown { color: var(--warning); font-size: 12px; }
+.ask-options { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; max-height: 55vh; overflow-y: auto; }
+.ask-options button { text-align: left; }
+#ask-input, #ask-editor { box-sizing: border-box; width: 100%; margin: 12px 0 4px; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--control-line); border-radius: 6px; padding: 8px; }
+#ask-editor { font-family: var(--mono, monospace); resize: vertical; }
+#ask-dialog[data-kind="editor"] { width: min(760px, 90vw); }
+#ask-dialog [hidden] { display: none; }
 /* API credentials stay in new-password fields only; every skin uses the same semantic tokens. */
 #api-open { margin-top: 2px; border-top-color: var(--line); }
 #api-dialog { width: min(820px, 92vw); max-height: 88vh; overflow-y: auto; font-family: var(--sans); }

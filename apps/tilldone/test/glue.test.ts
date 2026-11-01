@@ -65,7 +65,7 @@ test("spawn failure is observable and pending requests reject", async () => {
 		await until(() => records.some((r) => r.type === "desk_exit"));
 	} finally { await pi.stop(); }
 });
-test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, cancels unsupported dialogs, restarts", async () => {
+test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, answers select/input/editor in order, restarts", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "tilldone-rpc-"));
 	const log = join(dir, "stdin.jsonl");
 	const old = process.env.FAKE_PI_LOG;
@@ -80,12 +80,12 @@ test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, cancels unsupp
 		expect(view!.tasks.focus).toBe(1);
 		expect(readLog().some((r) => r.message === "/tilldone")).toBe(false);
 		await desk.send({ type: "submit", message: "replay" });
-		await until(() => Boolean(view!.confirm));
-		const id = view!.confirm!.id;
+		await until(() => Boolean(view!.dialog));
+		const id = view!.dialog!.id;
 		expect(id).toBe("7a978bb5-c471-4607-8090-15786d956978");
 		expect(view!.tasks.total).toBe(2);
 		await desk.send({ type: "confirm", id: "wrong", confirmed: true });
-		expect(view!.confirm!.id).toBe(id);
+		expect(view!.dialog!.id).toBe(id);
 		await desk.send({ type: "confirm", id, confirmed: true });
 		await until(() => view!.conversation.at(-1)?.text === "ok" && !view!.status.running);
 		expect(view!.tasks.total).toBe(0);
@@ -99,11 +99,29 @@ test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, cancels unsupp
 		expect(readLog().filter((r) => ["steer", "follow_up", "clear_queue", "abort"].includes(r.type)).map((r) => r.type)).toEqual(["steer", "steer", "clear_queue", "abort"]);
 		await expect(desk.send({ type: "set_model", provider: "anthropic" })).rejects.toThrow("Invalid desktop intent");
 		await desk.send({ type: "submit", message: "dialogs" });
-		await until(() => readLog().filter((r) => r.cancelled === true).length === 3);
-		expect(readLog().filter((r) => r.cancelled === true).map((r) => r.id)).toEqual(["select", "input", "editor"]);
+		await until(() => view!.dialog?.id === "select");
+		expect(readLog().find((r) => r.id === "bad-select" && r.type === "extension_ui_response")).toEqual({ type: "extension_ui_response", id: "bad-select", cancelled: true });
+		expect(view!.dialog!.options).toEqual(["openai-codex/gpt-6.1-sol", "openai-codex/gpt-6.1-terra"]);
+		await desk.send({ type: "answer", id: "select", value: "not offered" });
+		expect(view!.dialog!.id).toBe("select");
+		await desk.send({ type: "confirm", id: "select", confirmed: true });
+		expect(view!.dialog!.id).toBe("select");
+		await desk.send({ type: "answer", id: "select", value: "openai-codex/gpt-6.1-terra" });
+		await until(() => view!.dialog?.id === "input");
+		expect(view!.dialog!.placeholder).toBe("type a name");
+		await desk.send({ type: "answer", id: "input", value: "collie" });
+		await until(() => view!.dialog?.id === "editor");
+		expect(view!.dialog!.prefill).toBe("line 1\nline 2");
+		await desk.send({ type: "answer", id: "editor", value: null });
+		await until(() => !view!.dialog && readLog().some((r) => r.id === "editor" && r.type === "extension_ui_response"));
+		expect(readLog().filter((r) => r.type === "extension_ui_response" && ["select", "input", "editor"].includes(r.id))).toEqual([
+			{ type: "extension_ui_response", id: "select", value: "openai-codex/gpt-6.1-terra" },
+			{ type: "extension_ui_response", id: "input", value: "collie" },
+			{ type: "extension_ui_response", id: "editor", cancelled: true },
+		]);
 		await desk.send({ type: "submit", message: "expiry" });
-		await until(() => view!.confirm?.id === "expiry-id");
-		await until(() => !view!.confirm);
+		await until(() => view!.dialog?.id === "expiry-id");
+		await until(() => !view!.dialog);
 		expect(readLog().some((r) => r.type === "extension_ui_response" && r.id === "expiry-id")).toBe(false);
 		const launches = readLog().filter((r) => r.type === "launch");
 		expect(launches[0].args).toEqual(["--mode", "rpc", "--no-extensions", "--model", config().model, "-e", config().extension]);
@@ -176,10 +194,10 @@ test("Desk coalesces streamed records and stays quiet while idle", async () => {
 	try {
 		await until(() => last?.connection === "ready");
 		await desk.send({ type: "submit", message: "replay" });
-		await until(() => Boolean(last?.confirm));
+		await until(() => Boolean(last?.dialog));
 		// The replay bursts ~150 records before the confirm; a view per record would publish that many.
 		expect(views).toBeLessThan(20);
-		await desk.send({ type: "confirm", id: last!.confirm!.id, confirmed: true });
+		await desk.send({ type: "confirm", id: last!.dialog!.id, confirmed: true });
 		await until(() => last!.conversation.at(-1)?.text === "ok" && !last!.status.running);
 		await Bun.sleep(300);
 		const settled = views;

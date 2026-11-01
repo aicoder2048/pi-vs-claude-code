@@ -333,7 +333,7 @@ sequenceDiagram
 | a | 出 | `prompt` / `steer`（可带 `images`） | `desk/src/domain.ts:264-272` | 空闲发 prompt，运行中一律 steer |
 | b | 出 | `clear_queue` + `abort` | `desk/src/domain.ts:263` | 停止：先清掉待送达消息，再中止 |
 | c | 出 | `get_state` | `desk/src/desk.ts:70-76` | 模型、思考深度、流式 / 压缩状态、图片能力 |
-| d | 出 | `extension_ui_response` | `desk/src/domain.ts:252-255`、 `:275-279` | 确认弹窗应答；`select` / `input` / `editor` 立即回 `cancelled: true` |
+| d | 出 | `extension_ui_response` | `desk/src/domain.ts:252-255`、 `:275-279` | 弹窗应答：confirm 回 `confirmed`，`select` / `input` / `editor` 回 `value`，取消回 `cancelled: true` |
 | e | 入 | `agent_start` / `agent_settled` | `desk/src/domain.ts:140-142` | 运行闩锁 |
 | f | 入 | `message_start` / `message_update` / `message_end` | `desk/src/domain.ts:144-163` | 对话区：用户、助手、督促三种消息；按 `contentIndex` 拼接 `text_delta` |
 | g | 入 | `tool_execution_start` / `_update` / `_end` | `desk/src/domain.ts:164-176` | 工具卡片；tilldone 的 `details` 更新清单 |
@@ -424,7 +424,7 @@ RPC 下确认变成 `extension_ui_request`：`{id, method:"confirm", title, mess
 | Pi SDK 进程内嵌入 | 需求要求“不嵌入 Pi”；RPC 让扩展在 TUI 和桌面端行为一致，见 7.2 节 |
 | `follow_up` 命令 | 见 4.4 节 a；TillDone 场景下运行中的消息就是改方向 |
 | `setWidget` / `setFooter` / `ui.custom()` | RPC 下拿不到 TUI 组件；当前任务从 `details` 现算，`/tilldone` 本地拦截 |
-| `select` / `input` / `editor` | MVP 不做；立即回 `cancelled: true`，避免 Pi 卡住（`desk/src/domain.ts:275-279`） |
+| `select` / `input` / `editor` | 已支持：与 confirm 同一队列逐个显示；只有选项为空或不合法的 select 会立即回 `cancelled: true` |
 | `agent_before_settle` 续跑 | 督促用排队消息续跑，不需要 before-settle 处理器 |
 | 会话持久化 | Pi 默认保存会话文件；重启即新会话，桌面端不恢复旧会话 |
 | 模型切换命令 | 渲染端不能改模型；只能启动时用 `TILLDONE_MODEL` 指定 |
@@ -625,7 +625,7 @@ README 说得很清楚：这些措施保护的是**渲染端边界**，不保护
 - 设置：7 种主题（系统 / 浅色 / 深色 / 素纸 / 星夜 / 水墨 / 霓虹），4 个快捷切换按钮，中英文界面，API Key 设置。
 - 新会话按钮：仅在已连接且空闲时可用，二次确认后重启 Pi。
 
-还缺的（README 也承认）：思考内容显示、模型 / 思考深度选择、会话恢复、`select` / `input` / `editor` 类扩展 UI。
+还缺的（README 也承认）：思考内容显示、模型 / 思考深度选择、会话恢复。（`select` / `input` / `editor` 弹窗后来已补上。）
 
 ### 7.7 持久化
 

@@ -25,8 +25,8 @@ describe("recorded Pi run", () => {
 				intermediate = true;
 			}
 			if (r.type === "extension_ui_request" && r.method === "confirm") {
-				expect(state.confirms).toHaveLength(1);
-				expect(vm.confirm?.id).toBe(r.id);
+				expect(state.dialogs).toHaveLength(1);
+				expect(vm.dialog?.id).toBe(r.id);
 				confirmed = true;
 			}
 			if (r.type === "tool_execution_end" && r.result.details.action === "clear") {
@@ -80,13 +80,57 @@ test("nudge is distinct, and get_state false cannot prematurely settle a run", (
 	expect(toViewModel(reduce(s, { type: "agent_settled" })).status.running).toBe(false);
 });
 
-test("confirm expiry is clock-driven, closes without responding; unsupported dialogs cancel", () => {
+test("dialog expiry is clock-driven and closes without responding", () => {
 	let s = reduce(initial(), { type: "desk_tick", now: 100 });
 	s = reduce(s, { type: "extension_ui_request", method: "confirm", id: "c", title: "Clear?", message: "All", timeout: 2000 });
-	expect(toViewModel(s).confirm?.remainingSeconds).toBe(2);
+	expect(toViewModel(s).dialog?.remainingSeconds).toBe(2);
 	s = reduce(s, { type: "desk_tick", now: 2100 });
-	expect(toViewModel(s).confirm).toBeNull();
-	for (const method of ["select", "input", "editor"]) expect(immediateUIResponse({ type: "extension_ui_request", method, id: "a" })).toEqual({ type: "extension_ui_response", id: "a", cancelled: true });
+	expect(toViewModel(s).dialog).toBeNull();
+	s = reduce(s, { type: "extension_ui_request", method: "input", id: "i", title: "Name", timeout: 1000 });
+	expect(toViewModel(s).dialog?.remainingSeconds).toBe(1);
+	expect(toViewModel(reduce(s, { type: "desk_tick", now: 3100 })).dialog).toBeNull();
+});
+describe("select, input and editor dialogs", () => {
+	const ready = () => reduce(initialState("openai-codex/gpt-6.1-sol", "/w"), { type: "response", command: "get_state", success: true, data: { model: { provider: "openai-codex", id: "gpt-6.1-sol" }, thinkingLevel: "low", isStreaming: false } });
+	const ask = (state = ready()) => [
+		{ type: "extension_ui_request", method: "select", id: "s", title: "Pick", options: ["a", "b"] },
+		{ type: "extension_ui_request", method: "input", id: "i", title: "Name", placeholder: "hint" },
+		{ type: "extension_ui_request", method: "editor", id: "e", title: "Notes", prefill: "x\ny" },
+	].reduce(reduce, state);
+	test("queue in arrival order and show one at a time with their own fields", () => {
+		const s = ask();
+		expect(s.dialogs.map((d) => d.kind)).toEqual(["select", "input", "editor"]);
+		expect(toViewModel(s).dialog).toEqual({ id: "s", kind: "select", title: "Pick", message: "", options: ["a", "b"], placeholder: "", prefill: "", remainingSeconds: null });
+		const closed = reduce(reduce(s, { type: "desk_dialog_closed", id: "s" }), { type: "desk_dialog_closed", id: "i" });
+		expect(toViewModel(closed).dialog?.prefill).toBe("x\ny");
+	});
+	test("answers become value responses; null cancels", () => {
+		const s = ask();
+		expect(planIntent(s, { type: "answer", id: "s", value: "b" })).toEqual({ commands: [{ type: "extension_ui_response", id: "s", value: "b" }], events: [{ type: "desk_dialog_closed", id: "s" }] });
+		expect(planIntent(s, { type: "answer", id: "i", value: "" }).commands).toEqual([{ type: "extension_ui_response", id: "i", value: "" }]);
+		expect(planIntent(s, { type: "answer", id: "e", value: null }).commands).toEqual([{ type: "extension_ui_response", id: "e", cancelled: true }]);
+	});
+	test("rejects an option that was not offered, a wrong-kind reply, and stale ids", () => {
+		const s = reduce(ask(), { type: "extension_ui_request", method: "confirm", id: "c", title: "t", message: "m" });
+		expect(planIntent(s, { type: "answer", id: "s", value: "c" }).commands).toHaveLength(0);
+		expect(planIntent(s, { type: "confirm", id: "s", confirmed: true }).commands).toHaveLength(0);
+		expect(planIntent(s, { type: "answer", id: "c", value: "yes" }).commands).toHaveLength(0);
+		expect(planIntent(s, { type: "answer", id: "gone", value: "a" }).commands).toHaveLength(0);
+		expect(planIntent(reduce(s, { type: "desk_exit", error: "x" }), { type: "answer", id: "s", value: "a" }).commands).toHaveLength(0);
+	});
+	test("a select without usable options is cancelled at once and never shown", () => {
+		for (const options of [undefined, [], [1, 2], Array.from({ length: 201 }, (_, i) => String(i))]) {
+			const request = { type: "extension_ui_request", method: "select", id: "bad", title: "x", options };
+			expect(immediateUIResponse(request)).toEqual({ type: "extension_ui_response", id: "bad", cancelled: true });
+			expect(reduce(ready(), request).dialogs).toHaveLength(0);
+		}
+		for (const method of ["input", "editor", "confirm"]) expect(immediateUIResponse({ type: "extension_ui_request", method, id: "a" })).toBeUndefined();
+	});
+	test("parses answers: a bounded string or null", () => {
+		expect(parseIntent({ type: "answer", id: "s", value: "a" })).toEqual({ type: "answer", id: "s", value: "a" });
+		expect(parseIntent({ type: "answer", id: "s", value: null })).toEqual({ type: "answer", id: "s", value: null });
+		for (const value of [undefined, 1, "x".repeat(100001)]) expect(parseIntent({ type: "answer", id: "s", value })).toBeUndefined();
+	});
 });
 
 test("intent planning handles local /tilldone, steers every message sent while running, and rejects stale confirmations", () => {
@@ -124,7 +168,7 @@ test("views stay put when only the clock or an unchanged state poll moves", () =
 	const ready = reduce(initial(), polled);
 	expect(reduce(ready, polled)).toBe(ready);
 	const ticked = reduce(ready, { type: "desk_tick", now: 1000 });
-	expect(ticked.confirms).toBe(ready.confirms);
+	expect(ticked.dialogs).toBe(ready.dialogs);
 	expect(viewChanged(ready, ticked)).toBe(false);
 	const asking = reduce(ticked, { type: "extension_ui_request", method: "confirm", id: "c", title: "t", message: "m", timeout: 5000 });
 	expect(viewChanged(ticked, asking)).toBe(true);

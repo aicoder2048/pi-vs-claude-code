@@ -67,7 +67,18 @@ async function handle(r: any) {
 	if (r.message.startsWith("Split task")) return;
 	if (r.message === "expiry") { emit({ type: "extension_ui_request", method: "confirm", id: "expiry-id", title: "Timeout", message: "Close only", timeout: 100 }); return; }
 	if (r.message === "dialogs") {
-		for (const method of ["select", "input", "editor"]) emit({ type: "extension_ui_request", id: method, method, title: "Unsupported" });
+		// An unusable select is cancelled at once; the others block until answered, in order, like real extension calls.
+		emit({ type: "extension_ui_request", id: "bad-select", method: "select", title: "No options", options: [] });
+		for (const request of [
+			{ id: "select", method: "select", title: "Model for judge", options: ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-6.1-terra"] },
+			{ id: "input", method: "input", title: "Name", placeholder: "type a name" },
+			{ id: "editor", method: "editor", title: "Notes", prefill: "line 1\nline 2" },
+		]) {
+			const answer = new Promise<void>((resolve) => waits.set(request.id, resolve));
+			emit({ type: "extension_ui_request", ...request });
+			await answer;
+			waits.delete(request.id);
+		}
 		return;
 	}
 	for (const record of records) {
