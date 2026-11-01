@@ -324,3 +324,35 @@ describe("model calls per task", () => {
 		expect(toViewModel(one).tasks.items[0].modelCallsTitle).toContain("大模型");
 	});
 });
+describe("copying an assistant reply", () => {
+	const reply = () => [
+		{ type: "message_start", message: { role: "user", content: "hi" } },
+		{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "## Title" }, { type: "toolCall", id: "c" }, { type: "text", text: "- **a**\n- b" }] } },
+	].reduce(reduce, initial());
+	const idOf = (s: ReturnType<typeof initial>, kind: string) => toViewModel(s).conversation.find((e) => e.kind === kind)!.id;
+	test("parses only a message id", () => {
+		expect(parseIntent({ type: "copyMessage", id: "message-2" })).toEqual({ type: "copyMessage", id: "message-2" });
+		for (const id of [2, "", undefined, "x".repeat(65)]) expect(parseIntent({ type: "copyMessage", id })).toBeUndefined();
+	});
+	test("copies the reply's Markdown source, not rendered text", () => {
+		const s = reply();
+		expect(planIntent(s, { type: "copyMessage", id: idOf(s, "assistant") })).toEqual({ commands: [], events: [], clipboard: "## Title\n- **a**\n- b" });
+	});
+	test("works while Pi is busy or gone; it touches no RPC", () => {
+		const s = reduce(reduce(reply(), { type: "agent_start" }), { type: "desk_exit", error: "gone" });
+		expect(planIntent(s, { type: "copyMessage", id: idOf(s, "assistant") }).clipboard).toBe("## Title\n- **a**\n- b");
+	});
+	test("only assistant replies with text can be copied", () => {
+		const s = reply();
+		expect(planIntent(s, { type: "copyMessage", id: idOf(s, "user") }).clipboard).toBeUndefined();
+		expect(planIntent(s, { type: "copyMessage", id: "message-99" }).clipboard).toBeUndefined();
+		const silent = reduce(initial(), { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "  " }], errorMessage: "boom" } });
+		expect(planIntent(silent, { type: "copyMessage", id: idOf(silent, "assistant") }).clipboard).toBeUndefined();
+	});
+	test("the view marks which entries offer a copy button, with localized labels", () => {
+		const s = reply();
+		const view = toViewModel(s);
+		expect(view.conversation.map((e) => [e.kind, e.copyable])).toEqual([["user", false], ["assistant", true]]);
+		expect([view.ui.copy, view.ui.copied]).toEqual(["复制 Markdown", "已复制"]);
+	});
+});

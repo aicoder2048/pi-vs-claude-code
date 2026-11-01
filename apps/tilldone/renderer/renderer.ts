@@ -17,7 +17,7 @@ interface View {
 		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean; splitting: boolean;
 			toolCallsLabel: string; toolCallsTitle: string; heavy: boolean; modelCallsLabel: string; modelCallsTitle: string }[] };
 	queued: string[];
-	conversation: { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string }[];
+	conversation: { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean }[];
 	confirm: { id: string; title: string; message: string; remainingSeconds: number | null } | null;
 }
 declare global {
@@ -42,6 +42,35 @@ function setMarkdown(element: Element, source: string) {
 	if (renderedMarkdown.get(element) === source) return;
 	renderedMarkdown.set(element, source);
 	element.replaceChildren(markdownFragment(markdownTree(source)));
+}
+const SVG = "http://www.w3.org/2000/svg";
+function icon(className: string, shapes: [string, Record<string, string>][]) {
+	const svg = document.createElementNS(SVG, "svg");
+	svg.setAttribute("viewBox", "0 0 16 16"); svg.setAttribute("aria-hidden", "true"); svg.classList.add(className);
+	for (const [tag, attributes] of shapes) {
+		const shape = document.createElementNS(SVG, tag);
+		for (const [name, value] of Object.entries(attributes)) shape.setAttribute(name, value);
+		svg.append(shape);
+	}
+	return svg;
+}
+/** The reply's Markdown source goes to the clipboard through the main process; the renderer holds no clipboard permission. */
+function copyButton(id: string) {
+	const button = node("button");
+	button.type = "button"; button.className = "copy";
+	button.append(icon("icon-copy", [["rect", { x: "5.5", y: "5.5", width: "8", height: "8", rx: "1.5" }], ["path", { d: "M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H3A1.5 1.5 0 0 0 1.5 3v6A1.5 1.5 0 0 0 3 10.5h.5" }]]),
+		icon("icon-done", [["path", { d: "m3 8.5 3.2 3L13 4.5" }]]));
+	button.onclick = () => {
+		void send({ type: "copyMessage", id }).then((ok) => { if (ok) button.classList.add("copied"); labelCopy(button); });
+	};
+	// The check mark stays until the pointer or focus moves on, so no timer is needed.
+	const reset = () => { button.classList.remove("copied"); labelCopy(button); };
+	button.addEventListener("mouseleave", reset); button.addEventListener("blur", reset);
+	return button;
+}
+function labelCopy(button: HTMLElement) {
+	const label = button.classList.contains("copied") ? latest?.ui.copied ?? "" : latest?.ui.copy ?? "";
+	if (button.title !== label) { button.title = label; button.setAttribute("aria-label", label); }
 }
 async function send(intent: unknown): Promise<boolean> {
 	try {
@@ -193,6 +222,7 @@ function render(view: View) {
 					const body = item.kind === "assistant" ? node("div") : node("p");
 					if (item.kind === "assistant") body.className = "markdown";
 					element.append(node("h3"), body, error, images);
+					if (item.kind === "assistant") element.append(copyButton(item.id));
 				}
 				element.dataset.key = item.id; conversation.append(element);
 			}
@@ -203,6 +233,8 @@ function render(view: View) {
 				if (item.kind === "assistant" && index === 1) setMarkdown(child, value);
 				else if (child.textContent !== value) child.textContent = value;
 			});
+			const copy = element.querySelector<HTMLButtonElement>("button.copy");
+			if (copy) { if (copy.hidden === item.copyable) copy.hidden = !item.copyable; labelCopy(copy); }
 			existing.delete(item.id);
 		}
 		for (const element of existing.values()) element.remove();

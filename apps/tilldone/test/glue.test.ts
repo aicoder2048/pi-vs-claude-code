@@ -145,3 +145,32 @@ test("Desk coalesces streamed records and stays quiet while idle", async () => {
 		expect(views).toBe(settled);
 	} finally { await desk.stop(); }
 });
+test("Desk copies an assistant reply's Markdown through the injected clipboard", async () => {
+	const copied: string[] = [];
+	let last: ReturnType<Desk["view"]> | undefined;
+	const desk = new Desk(config(), (view) => { last = view; }, { writeClipboard: (text) => { copied.push(text); } });
+	desk.start();
+	try {
+		await until(() => last?.connection === "ready");
+		await desk.send({ type: "submit", message: "markdown" });
+		await until(() => Boolean(last?.conversation.some((e) => e.copyable && e.text.includes("<img"))));
+		const reply = last!.conversation.find((e) => e.copyable)!;
+		await desk.send({ type: "copyMessage", id: reply.id });
+		expect(copied).toEqual([reply.text]);
+		expect(copied[0]).toStartWith("## 周度小结\n\n第一行\n");
+		// Naming a message that cannot be copied writes nothing.
+		await desk.send({ type: "copyMessage", id: "message-404" });
+		expect(copied).toHaveLength(1);
+	} finally { await desk.stop(); }
+});
+test("Desk reports a copy it cannot perform instead of pretending it worked", async () => {
+	let last: ReturnType<Desk["view"]> | undefined;
+	const desk = new Desk(config(), (view) => { last = view; }, { writeClipboard: () => { throw new Error("denied"); } });
+	desk.start();
+	try {
+		await until(() => last?.connection === "ready");
+		await desk.send({ type: "submit", message: "markdown" });
+		await until(() => Boolean(last?.conversation.some((e) => e.copyable && e.text.includes("<img"))));
+		await expect(desk.send({ type: "copyMessage", id: last!.conversation.find((e) => e.copyable)!.id })).rejects.toThrow("Cannot copy");
+	} finally { await desk.stop(); }
+});

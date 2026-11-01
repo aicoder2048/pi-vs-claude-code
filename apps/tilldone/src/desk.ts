@@ -17,7 +17,7 @@ export class Desk {
 	private restarting = false;
 	constructor(private readonly config: Config, private readonly publish: (view: ReturnType<typeof toViewModel>) => void,
 		private readonly options: { preferences?: Preferences; systemDark?: boolean; savePreferences?: (preferences: Preferences) => void;
-			credentials?: PiCredentials; openExternal?: (url: string) => Promise<void> } = {}) {
+			credentials?: PiCredentials; openExternal?: (url: string) => Promise<void>; writeClipboard?: (text: string) => void } = {}) {
 		this.state = initialState(config.model, config.cwd, options.preferences, options.systemDark);
 		if (options.credentials) this.state = reduce(this.state, { type: "desk_api_summary", summary: options.credentials.summary() });
 	}
@@ -88,6 +88,13 @@ export class Desk {
 		if (plan.externalUrl) {
 			try { await this.options.openExternal?.(plan.externalUrl); }
 			catch { this.error("Cannot open the official API key page."); }
+		}
+		if (plan.clipboard !== undefined) {
+			// Rejecting lets the renderer show an error instead of a "copied" mark.
+			try {
+				if (!this.options.writeClipboard) throw new Error("no clipboard");
+				this.options.writeClipboard(plan.clipboard);
+			} catch { throw new Error("Cannot copy to the clipboard."); }
 		}
 		if (plan.saveApi) {
 			this.dispatch({ type: "desk_api_saving" });

@@ -217,6 +217,7 @@ export type Intent = { type: "submit"; message: string; images?: readonly Image[
 	| { type: "abort" | "restart" | "newSession" | "focusTasks" }
 	| { type: "confirm"; id: string; confirmed: boolean }
 	| { type: "splitTask"; id: number }
+	| { type: "copyMessage"; id: string }
 	| { type: "preferences"; preferences: Preferences }
 	| { type: "apiOpen" | "apiClose" }
 	| { type: "apiLink"; provider: ApiProvider }
@@ -247,9 +248,10 @@ export function parseIntent(raw: unknown): Intent | undefined {
 		if (preferences) return { type: "preferences", preferences };
 	}
 	if (r.type === "splitTask" && Number.isInteger(r.id) && r.id > 0) return { type: "splitTask", id: r.id };
+	if (r.type === "copyMessage" && typeof r.id === "string" && r.id.length > 0 && r.id.length <= 64) return { type: "copyMessage", id: r.id };
 	if (r.type === "confirm" && typeof r.id === "string" && typeof r.confirmed === "boolean") return { type: "confirm", id: r.id, confirmed: r.confirmed };
 }
-export function planIntent(state: State, intent: Intent): { commands: RecordValue[]; events: RecordValue[]; restart?: boolean; saveApi?: CredentialChanges; externalUrl?: string } {
+export function planIntent(state: State, intent: Intent): { commands: RecordValue[]; events: RecordValue[]; restart?: boolean; saveApi?: CredentialChanges; externalUrl?: string; clipboard?: string } {
 	const empty = { commands: [], events: [] };
 	if (intent.type === "apiOpen") return { commands: [], events: [{ type: "desk_api_open" }] };
 	if (intent.type === "apiClose") return state.api.saving ? empty : { commands: [], events: [{ type: "desk_api_close" }] };
@@ -266,6 +268,11 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 	}
 	if (intent.type === "preferences") return { commands: [], events: [{ type: "desk_preferences", preferences: intent.preferences }] };
 	if (intent.type === "restart") return { ...empty, restart: state.connection === "exited" };
+	// The renderer names a message; the text comes from state, so it is the reply's Markdown source as Pi sent it.
+	if (intent.type === "copyMessage") {
+		const message = state.messages.find((m) => m.id === intent.id);
+		return message && copyable(message) ? { ...empty, clipboard: messageText(message) } : empty;
+	}
 	// A new session is a fresh --no-session Pi process; mid-run, Stop first.
 	if (intent.type === "newSession") return { ...empty, restart: state.connection === "ready" && !isRunning(state) };
 	if (state.connection !== "ready") return empty;
@@ -298,7 +305,7 @@ export function immediateUIResponse(record: RecordValue): RecordValue | undefine
 	}
 }
 const pretty = (value: unknown) => JSON.stringify(value, null, 2) ?? "";
-type Entry = { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string };
+type Entry = { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean };
 // Messages and tools are immutable, so an entry stays valid while its source object and copy are unchanged.
 // Without this, every streamed token re-serializes the whole history, including every tool result.
 const entries = new WeakMap<Message | Tool, { ui: ReturnType<typeof copyFor>; entry: Entry }>();
@@ -317,6 +324,8 @@ function modelCallsView(count: number, ui: ReturnType<typeof copyFor>) {
 	const label = count === 0 ? "" : count === 1 ? ui.modelCallOne : ui.modelCalls.replace("{n}", String(count));
 	return { modelCalls: count, modelCallsLabel: label, modelCallsTitle: ui.modelCallsTitle };
 }
+const messageText = (m: Message) => Object.entries(m.blocks).sort(([a], [b]) => Number(a) - Number(b)).map(([, value]) => value).join("\n");
+const copyable = (m: Message) => m.kind === "assistant" && messageText(m).trim() !== "";
 const isSilentAssistant = (m: Message) => m.kind === "assistant" && !m.error && Object.values(m.blocks).every((value) => !value.trim());
 export function toViewModel(state: State) {
 	const ui = copyFor(state.preferences.language);
@@ -342,11 +351,11 @@ export function toViewModel(state: State) {
 		conversation: state.timeline.filter((entry) => entry.kind === "tool" || !isSilentAssistant(messages.get(entry.id)!)).map((entry) => {
 			if (entry.kind === "tool") {
 				const t = tools.get(entry.id)!;
-				return entryFor(t, ui, () => ({ id: t.id, kind: "tool", label: `${t.name} · ${{ running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]}`, text: "", images: 0, args: pretty(t.args), result: pretty(t.result), error: "" }));
+				return entryFor(t, ui, () => ({ id: t.id, kind: "tool", label: `${t.name} · ${{ running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]}`, text: "", images: 0, args: pretty(t.args), result: pretty(t.result), error: "", copyable: false }));
 			}
 			const m = messages.get(entry.id)!;
 			return entryFor(m, ui, () => ({ id: m.id, kind: m.kind, label: { assistant: ui.assistant, user: ui.user, nudge: ui.nudge, notice: ui.notice }[m.kind],
-				text: Object.entries(m.blocks).sort(([a], [b]) => Number(a) - Number(b)).map(([, value]) => value).join("\n"), images: m.images, error: m.error, args: "", result: "" }));
+				text: messageText(m), images: m.images, error: m.error, args: "", result: "", copyable: copyable(m) }));
 		}),
 		confirm: state.confirms.length ? { ...state.confirms[0], remainingSeconds: state.confirms[0].deadline === null ? null : Math.max(0, Math.ceil((state.confirms[0].deadline - state.now) / 1000)) } : null,
 	};

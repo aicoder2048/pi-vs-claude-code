@@ -71,6 +71,13 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; flex: 1; min-
 .message.nudge { border-color: var(--warning); background: var(--warning-bg); border-radius: var(--radius); }
 .message.nudge h3 { color: var(--warning); }
 .message.notice { border-color: var(--notice); }
+.message.assistant { position: relative; }
+.message .copy { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; opacity: 0; transition: opacity .15s; }
+.message .copy[hidden] { display: none; }
+.message:hover .copy, .message .copy:focus-visible, .message .copy.copied { opacity: 1; }
+.message .copy svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.message .copy .icon-done, .message .copy.copied .icon-copy { display: none; }
+.message .copy.copied .icon-done { display: block; color: var(--accent); }
 /* Assistant Markdown. The task panel's global ol/li rules must not reach these lists. */
 .markdown { overflow-wrap: anywhere; }
 .markdown > :first-child { margin-top: 0; } .markdown > :last-child { margin-bottom: 0; }

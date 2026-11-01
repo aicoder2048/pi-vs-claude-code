@@ -1,5 +1,5 @@
 /** TillDone Desk L2: Electron lifecycle, trusted-frame IPC, and view delivery. No domain rules. */
-import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, nativeTheme, shell } from "electron";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -31,7 +31,7 @@ function createDesk(credentials: PiCredentials): Desk {
 			if (!window.webContents.isLoadingMainFrame()) window.webContents.send("desk:view", view);
 		}
 	}, {
-		credentials, openExternal: (url) => shell.openExternal(url),
+		credentials, openExternal: (url) => shell.openExternal(url), writeClipboard: (text) => clipboard.writeText(text),
 		preferences: readPreferences(), systemDark: nativeTheme.shouldUseDarkColors,
 		savePreferences: (preferences) => {
 			mkdirSync(app.getPath("userData"), { recursive: true });

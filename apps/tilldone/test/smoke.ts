@@ -1,7 +1,7 @@
 /** TillDone Desk L2/L4 smoke: real sandboxed Electron window with a fake Pi, no model calls. */
 import { _electron as electron } from "@playwright/test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 const directory = await mkdtemp(join(tmpdir(), "tilldone-ui-"));
@@ -180,7 +180,29 @@ try {
 	assert.equal(await reply.locator("a, img, script").count(), 0, "No links, images or scripts are created from model text");
 	assert.equal(await reply.locator(".link").getAttribute("title"), "https://example.com/docs");
 	assert.match(await reply.innerText(), /<img src=x onerror="alert\(1\)">/, "Raw HTML stays literal text");
+	await page.locator(".message.assistant").last().hover();
+	await page.waitForTimeout(300);
 	await page.locator(".message.assistant").last().screenshot({ path: join(tmpdir(), "tilldone-desk-markdown.png") });
+	assert.equal(await page.locator(".message.user button.copy").count(), 0, "Only assistant replies offer a copy button");
+	// The smoke runs on a real desktop: put the user's clipboard back afterwards.
+	const savedClipboard = await application.evaluate(({ clipboard }) => clipboard.readText());
+	try {
+		const copy = page.locator(".message.assistant").last().locator("button.copy");
+		assert.equal(await copy.getAttribute("aria-label"), "Copy Markdown");
+		await copy.click();
+		await page.waitForFunction(() => document.querySelectorAll(".message.assistant button.copy.copied").length === 1);
+		assert.equal(await copy.getAttribute("aria-label"), "Copied");
+		const copied = await application.evaluate(({ clipboard }) => clipboard.readText());
+		assert.match(copied, /^## 周度小结\n\n第一行\n第二行，\*\*加粗\*\* 和 `inline`/, "The clipboard gets the Markdown source, not the rendered text");
+		await page.waitForTimeout(300);
+		// Captured by the main process: Playwright's own screenshot blurs the button, which resets the mark.
+		const box = (await copy.boundingBox())!;
+		const png = await application.evaluate(async ({ BrowserWindow }, rect) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage(rect)).toPNG().toString("base64"),
+			{ x: Math.round(box.x - 8), y: Math.round(box.y - 8), width: Math.round(box.width + 16), height: Math.round(box.height + 16) });
+		await writeFile(join(tmpdir(), "tilldone-desk-copied.png"), Buffer.from(png, "base64"));
+		await page.locator("#prompt").hover();
+		await page.waitForFunction(() => document.querySelectorAll("button.copy.copied").length === 0);
+	} finally { await application.evaluate(({ clipboard }, text) => clipboard.writeText(text), savedClipboard); }
 	const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 	const paste = () => page.evaluate((png) => {
 		const file = new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], "shot.png", { type: "image/png" });
