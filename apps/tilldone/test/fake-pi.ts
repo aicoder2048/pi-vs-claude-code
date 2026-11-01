@@ -34,6 +34,14 @@ async function handle(r: any) {
 	if (r.type === "abort") { emit({ type: "agent_settled", aborted: true }); return; }
 	if (r.type !== "prompt") return;
 	if (r.message === "busy") { emit({ type: "agent_start" }); return; }
+	if (r.message === "markdown") {
+		const text = "## 周度小结\n\n第一行\n第二行，**加粗** 和 `inline`\n\n- 一\n- [x] 二\n\n| 指标 | 数值 |\n|:--|--:|\n| 收盘 | 135.2 |\n\n```ts\nconst a = 1 < 2;\n```\n\n> 引用\n\n见 [文档](https://example.com/docs)。<img src=x onerror=\"alert(1)\">";
+		emit({ type: "message_start", message: { role: "assistant", content: [] } });
+		// Stream in pieces first, so the half-written Markdown renders on the way.
+		for (let i = 0; i < text.length; i += 40) emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text.slice(i, i + 40) } });
+		emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text }] } });
+		return;
+	}
 	if (r.message === "markup") {
 		emit({ type: "message_start", message: { role: "user", content: '<img src=x onerror="alert(1)">' } });
 		return;

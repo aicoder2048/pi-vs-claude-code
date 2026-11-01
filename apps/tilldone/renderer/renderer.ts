@@ -3,6 +3,7 @@
  * No RPC parsing, domain imports, business state, or client-side clock. Only DOM presentation persists.
  */
 import { renderApi, setupApi, type ApiView } from "./api-settings.ts";
+import { markdownFragment, markdownTree } from "./markdown.ts";
 interface View {
 	api: ApiView;
 	ui: Record<string, string>;
@@ -34,6 +35,13 @@ function setSelectValue(id: string, value: string) {
 }
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, content = "") {
 	const element = document.createElement(tag); element.textContent = content; return element;
+}
+// Source each assistant body was last rendered from, so unchanged messages are not re-parsed on every view.
+const renderedMarkdown = new WeakMap<Element, string>();
+function setMarkdown(element: Element, source: string) {
+	if (renderedMarkdown.get(element) === source) return;
+	renderedMarkdown.set(element, source);
+	element.replaceChildren(markdownFragment(markdownTree(source)));
 }
 async function send(intent: unknown): Promise<boolean> {
 	try {
@@ -181,13 +189,20 @@ function render(view: View) {
 					element = node("article"); element.className = `message ${item.kind}`;
 					const error = node("p"); error.className = "message-error";
 					const images = node("p"); images.className = "message-images";
-					element.append(node("h3"), node("p"), error, images);
+					// Assistant replies are Markdown; user, nudge and notice text is shown as written.
+					const body = item.kind === "assistant" ? node("div") : node("p");
+					if (item.kind === "assistant") body.className = "markdown";
+					element.append(node("h3"), body, error, images);
 				}
 				element.dataset.key = item.id; conversation.append(element);
 			}
 			const values = item.kind === "tool" ? [item.label, `${ui.args}\n${item.args}`, `${ui.result}\n${item.result}`]
 				: [item.label, item.text, item.error, item.images ? `🖼 ${ui.image} ×${item.images}` : ""];
-			values.forEach((value, index) => { if (element!.children[index].textContent !== value) element!.children[index].textContent = value; });
+			values.forEach((value, index) => {
+				const child = element!.children[index];
+				if (item.kind === "assistant" && index === 1) setMarkdown(child, value);
+				else if (child.textContent !== value) child.textContent = value;
+			});
 			existing.delete(item.id);
 		}
 		for (const element of existing.values()) element.remove();

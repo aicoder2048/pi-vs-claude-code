@@ -169,6 +169,18 @@ try {
 	await page.locator("#prompt").fill("markup"); await page.locator("#send").click();
 	await page.waitForFunction(() => document.getElementById("conversation")!.textContent!.includes("<img"));
 	assert.equal(await page.locator("#conversation img").count(), 0);
+	await page.locator("#prompt").fill("markdown"); await page.locator("#send").click();
+	await page.waitForFunction(() => document.querySelector(".message.assistant .markdown table td.align-right")?.textContent === "135.2");
+	const reply = page.locator(".message.assistant .markdown").last();
+	assert.equal(await reply.locator("h5").innerText(), "周度小结");
+	assert.equal(await reply.locator("ul > li").count(), 2, "Markdown lists render as list items");
+	assert.equal(await reply.locator("pre code").innerText(), "const a = 1 < 2;");
+	assert.equal(await reply.locator("strong").innerText(), "加粗");
+	assert.match(await reply.locator("p").first().innerText(), /^第一行\n第二行/, "A single line break inside a paragraph is kept");
+	assert.equal(await reply.locator("a, img, script").count(), 0, "No links, images or scripts are created from model text");
+	assert.equal(await reply.locator(".link").getAttribute("title"), "https://example.com/docs");
+	assert.match(await reply.innerText(), /<img src=x onerror="alert\(1\)">/, "Raw HTML stays literal text");
+	await page.locator(".message.assistant").last().screenshot({ path: join(tmpdir(), "tilldone-desk-markdown.png") });
 	const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 	const paste = () => page.evaluate((png) => {
 		const file = new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], "shot.png", { type: "image/png" });
