@@ -356,3 +356,37 @@ describe("copying an assistant reply", () => {
 		expect([view.ui.copy, view.ui.copied]).toEqual(["复制 Markdown", "已复制"]);
 	});
 });
+describe("opening a link in a reply", () => {
+	const source = "见 [MU历史行情](https://finance.example.com/MU?range=1w&x=行情)、www.example.org 和 [脚本](javascript:alert(1))、[凭据](https://user:pw@evil.example.com/)、[相对](/docs)";
+	const reply = () => [
+		{ type: "message_start", message: { role: "user", content: "看 https://user.example.com/" } },
+		{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: source }] } },
+	].reduce(reduce, initial());
+	const idOf = (s: ReturnType<typeof initial>, kind: string) => toViewModel(s).conversation.find((e) => e.kind === kind)!.id;
+	const open = (s: ReturnType<typeof initial>, id: string, url: string) => planIntent(s, { type: "openLink", id, url });
+	test("parses a message id and a bounded URL string", () => {
+		expect(parseIntent({ type: "openLink", id: "message-2", url: "https://a.example/" })).toEqual({ type: "openLink", id: "message-2", url: "https://a.example/" });
+		for (const bad of [{ id: 2, url: "https://a.example/" }, { id: "m", url: 5 }, { id: "m", url: "" }, { id: "m", url: `https://a.example/${"x".repeat(2048)}` }]) {
+			expect(parseIntent({ type: "openLink", ...bad })).toBeUndefined();
+		}
+	});
+	test("opens an http(s) link that the reply really contains, in the system browser", () => {
+		const s = reply(), id = idOf(s, "assistant");
+		expect(open(s, id, "https://finance.example.com/MU?range=1w&x=行情")).toEqual({ commands: [], events: [], externalUrl: "https://finance.example.com/MU?range=1w&x=行情" });
+		expect(open(s, id, "http://www.example.org").externalUrl).toBe("http://www.example.org");
+	});
+	test("works while Pi is busy or gone; it sends no RPC", () => {
+		const s = reduce(reduce(reply(), { type: "agent_start" }), { type: "desk_exit", error: "gone" });
+		expect(open(s, idOf(s, "assistant"), "http://www.example.org").externalUrl).toBe("http://www.example.org");
+	});
+	test("a URL the reply does not contain is not opened", () => {
+		const s = reply();
+		expect(open(s, idOf(s, "assistant"), "https://other.example.com/").externalUrl).toBeUndefined();
+		expect(open(s, idOf(s, "user"), "https://user.example.com/").externalUrl).toBeUndefined();
+		expect(open(s, "message-99", "http://www.example.org").externalUrl).toBeUndefined();
+	});
+	test("links in the reply that are not plain http(s) addresses are not opened", () => {
+		const s = reply(), id = idOf(s, "assistant");
+		for (const url of ["javascript:alert(1)", "https://user:pw@evil.example.com/", "/docs"]) expect(open(s, id, url).externalUrl).toBeUndefined();
+	});
+});

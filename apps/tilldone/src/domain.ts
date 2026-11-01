@@ -5,6 +5,8 @@
  */
 import { EMPTY_LIST, countByStatus, current, parseDetails, SPLIT_HINT_EVERY, STATUS_ICON, TOOL, type ListState } from "../../../extensions/tilldone/state.ts";
 
+import { marked } from "marked";
+
 import { DEFAULT_PREFERENCES, parsePreferences, copyFor, appearanceView, type Preferences } from "./appearance.ts";
 
 import { INITIAL_API, apiView, API_PROVIDERS, isApiProvider, parseCredentialChanges, type ApiProvider, type ApiState, type CredentialChanges } from "./api-domain.ts";
@@ -218,6 +220,7 @@ export type Intent = { type: "submit"; message: string; images?: readonly Image[
 	| { type: "confirm"; id: string; confirmed: boolean }
 	| { type: "splitTask"; id: number }
 	| { type: "copyMessage"; id: string }
+	| { type: "openLink"; id: string; url: string }
 	| { type: "preferences"; preferences: Preferences }
 	| { type: "apiOpen" | "apiClose" }
 	| { type: "apiLink"; provider: ApiProvider }
@@ -249,6 +252,9 @@ export function parseIntent(raw: unknown): Intent | undefined {
 	}
 	if (r.type === "splitTask" && Number.isInteger(r.id) && r.id > 0) return { type: "splitTask", id: r.id };
 	if (r.type === "copyMessage" && typeof r.id === "string" && r.id.length > 0 && r.id.length <= 64) return { type: "copyMessage", id: r.id };
+	if (r.type === "openLink" && typeof r.id === "string" && r.id.length > 0 && r.id.length <= 64 && typeof r.url === "string" && r.url.length > 0 && r.url.length <= 2048) {
+		return { type: "openLink", id: r.id, url: r.url };
+	}
 	if (r.type === "confirm" && typeof r.id === "string" && typeof r.confirmed === "boolean") return { type: "confirm", id: r.id, confirmed: r.confirmed };
 }
 export function planIntent(state: State, intent: Intent): { commands: RecordValue[]; events: RecordValue[]; restart?: boolean; saveApi?: CredentialChanges; externalUrl?: string; clipboard?: string } {
@@ -272,6 +278,11 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 	if (intent.type === "copyMessage") {
 		const message = state.messages.find((m) => m.id === intent.id);
 		return message && copyable(message) ? { ...empty, clipboard: messageText(message) } : empty;
+	}
+	// The renderer reports the address it shows; it opens only if this reply's own Markdown links to it.
+	if (intent.type === "openLink") {
+		const message = state.messages.find((m) => m.id === intent.id && m.kind === "assistant");
+		return message && openableUrl(intent.url) && linksIn(messageText(message)).includes(intent.url) ? { ...empty, externalUrl: intent.url } : empty;
 	}
 	// A new session is a fresh --no-session Pi process; mid-run, Stop first.
 	if (intent.type === "newSession") return { ...empty, restart: state.connection === "ready" && !isRunning(state) };
@@ -323,6 +334,19 @@ function toolCallsView(count: number, ui: ReturnType<typeof copyFor>) {
 function modelCallsView(count: number, ui: ReturnType<typeof copyFor>) {
 	const label = count === 0 ? "" : count === 1 ? ui.modelCallOne : ui.modelCalls.replace("{n}", String(count));
 	return { modelCalls: count, modelCallsLabel: label, modelCallsTitle: ui.modelCallsTitle };
+}
+/** Plain web addresses only: no other schemes, and no user:password@ that could disguise the real host. */
+function openableUrl(url: string): boolean {
+	try {
+		const parsed = new URL(url);
+		return (parsed.protocol === "http:" || parsed.protocol === "https:") && !parsed.username && !parsed.password;
+	} catch { return false; }
+}
+/** Link targets as the renderer's Markdown shows them: the same marked lexer, so addresses compare exactly. */
+function linksIn(source: string): string[] {
+	const hrefs: string[] = [];
+	marked.walkTokens(marked.lexer(source), (token) => { if (token.type === "link") hrefs.push(token.href); });
+	return hrefs;
 }
 const messageText = (m: Message) => Object.entries(m.blocks).sort(([a], [b]) => Number(a) - Number(b)).map(([, value]) => value).join("\n");
 const copyable = (m: Message) => m.kind === "assistant" && messageText(m).trim() !== "";

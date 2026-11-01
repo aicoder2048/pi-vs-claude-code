@@ -177,8 +177,21 @@ try {
 	assert.equal(await reply.locator("pre code").innerText(), "const a = 1 < 2;");
 	assert.equal(await reply.locator("strong").innerText(), "加粗");
 	assert.match(await reply.locator("p").first().innerText(), /^第一行\n第二行/, "A single line break inside a paragraph is kept");
-	assert.equal(await reply.locator("a, img, script").count(), 0, "No links, images or scripts are created from model text");
+	assert.equal(await reply.locator("a, img, script").count(), 0, "No anchors, images or scripts are created from model text");
 	assert.equal(await reply.locator(".link").getAttribute("title"), "https://example.com/docs");
+	// Links go to the system browser through the main process; record them instead of opening a real browser.
+	await application.evaluate(({ shell }) => {
+		(globalThis as any).__openedLinks = [];
+		shell.openExternal = async (url) => { (globalThis as any).__openedLinks.push(url); };
+	});
+	const pageUrl = page.url();
+	await reply.locator(".link").click();
+	await reply.locator(".link-inert").click();
+	await reply.locator(".link").focus(); await page.keyboard.press("Enter");
+	await page.waitForTimeout(200);
+	assert.deepEqual(await application.evaluate(() => (globalThis as any).__openedLinks), ["https://example.com/docs", "https://example.com/docs"],
+		"Click and Enter open the http(s) link; a javascript: link opens nothing");
+	assert.equal(page.url(), pageUrl, "The window itself never navigates");
 	assert.match(await reply.innerText(), /<img src=x onerror="alert\(1\)">/, "Raw HTML stays literal text");
 	await page.locator(".message.assistant").last().hover();
 	await page.waitForTimeout(300);

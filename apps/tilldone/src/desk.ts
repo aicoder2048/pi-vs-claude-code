@@ -87,7 +87,7 @@ export class Desk {
 		for (const event of plan.events) this.dispatch(event);
 		if (plan.externalUrl) {
 			try { await this.options.openExternal?.(plan.externalUrl); }
-			catch { this.error("Cannot open the official API key page."); }
+			catch { this.error("Cannot open the link in the browser."); }
 		}
 		if (plan.clipboard !== undefined) {
 			// Rejecting lets the renderer show an error instead of a "copied" mark.

@@ -2,7 +2,8 @@
  * TillDone Desk L4: assistant Markdown as DOM, without HTML strings.
  * marked only tokenizes; every node is built from a fixed tag whitelist and filled with textContent,
  * so raw HTML stays literal text and nothing needs a sanitizer or a looser CSP.
- * Links are not navigable: the window denies navigation, and opening model-supplied URLs is not allowed.
+ * Links never navigate the window. A plain http(s) link is marked openable; clicking it asks the main process,
+ * which opens it in the system browser only if the reply's own Markdown links to that address.
  */
 import { lexer, type Token, type Tokens } from "marked";
 
@@ -31,13 +32,21 @@ function inline(tokens: readonly Token[] = []): MdNode[] {
 			case "del": return [element("del", inline(t.tokens))];
 			case "codespan": return [{ tag: "code", text: t.text }];
 			case "br": return [element("br", [])];
-			case "link": return [element("span", inline(t.tokens), { className: "link", title: t.href })];
+			case "link": return [element("span", inline(t.tokens), { className: openable(t.href) ? "link" : "link-inert", title: t.href })];
 			case "image": return [{ tag: "span", className: "image-alt", text: `🖼 ${t.text || t.href}` }];
 			case "text": return t.tokens ? inline(t.tokens) : [textNode(t.text)];
 			case "escape": case "html": return [textNode(t.text)];
 			default: return [textNode(t.raw ?? "")];
 		}
 	});
+}
+
+/** Presentation hint only; L3 makes the authoritative check before anything opens. */
+function openable(href: string): boolean {
+	try {
+		const url = new URL(href);
+		return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password;
+	} catch { return false; }
 }
 
 function cells(row: readonly Tokens.TableCell[], tag: "th" | "td", align: Tokens.Table["align"]): MdNode {
@@ -87,6 +96,7 @@ export function markdownFragment(nodes: readonly MdNode[]): DocumentFragment {
 		const el = document.createElement(n.tag);
 		if (n.className) el.className = n.className;
 		if (n.title) el.title = n.title;
+		if (n.className === "link") { el.setAttribute("role", "link"); el.tabIndex = 0; }
 		if (n.start !== undefined) (el as HTMLOListElement).start = n.start;
 		if (n.text !== undefined) el.textContent = n.text;
 		if (n.children) el.append(markdownFragment(n.children));

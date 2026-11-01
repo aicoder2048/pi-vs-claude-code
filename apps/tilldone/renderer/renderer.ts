@@ -294,6 +294,16 @@ function render(view: View) {
 		if (!dialog.open) { dialog.showModal(); $("deny").focus(); }
 	} else if (dialog.open) dialog.close();
 }
+// Links in replies open in the system browser; the main process checks the address against the reply first.
+function openLink(event: Event) {
+	const link = (event.target as Element).closest<HTMLElement>(".markdown .link");
+	const message = link?.closest<HTMLElement>(".message");
+	if (!link || !message?.dataset.key) return;
+	event.preventDefault();
+	void send({ type: "openLink", id: message.dataset.key, url: link.title });
+}
+$("conversation").addEventListener("click", openLink);
+$("conversation").addEventListener("keydown", (event) => { if (event.key === "Enter") openLink(event); });
 $("composer").addEventListener("submit", (event) => {
 	event.preventDefault();
 	const input = $<HTMLTextAreaElement>("prompt");

@@ -501,6 +501,7 @@ D-L3 的核心是 `reduce(state, record)`（`desk/src/domain.ts:101-194`）。�
 | `confirm` | `id` 为字符串，弹窗存在且未过期 | `extension_ui_response` |
 | `splitTask` | 正整数 id，任务未完成，没有待处理的同一请求 | `prompt` / `steer` + `desk_split_requested` |
 | `copyMessage` | 消息 id；只认有文字的助手回复 | 把这条回复的 Markdown 原文交给 D-L2 写剪贴板，不发 RPC |
+| `openLink` | 消息 id + 网址（≤ 2048 字符）；网址须是这条助手回复自己的 Markdown 链接，`http`/`https`，不含 `用户名:密码@` | 交给 D-L2 用系统浏览器打开，不发 RPC |
 | `restart` | 仅在 Pi 已退出时 | 重启子进程 |
 | `newSession` | 仅在已连接且空闲时 | 重启子进程（新的 `--no-session` 会话） |
 | `preferences` | 主题 7 选 1、语言 2 选 1 | `desk_preferences` |
@@ -716,7 +717,7 @@ TUI 下，用户在运行中也能输入，但桌面端把它做成了明确的�
 | R7 | **只显示第一个确认弹窗**：`confirms` 是数组，视图只取 `[0]` | 目前扩展同时最多一个确认，暂无问题 | 保持现状，但在注释里写明假设 |
 | R8 | **细分按钮在“模型决定不拆”时要等 settle 结束才恢复** | 长 settle 里按钮一直是“细分中…” | 可接受；或者在下一次 tilldone 结果到达、任务仍未被拆时就提示“边牧认为不需要拆” |
 | R9 | **`spent` 不在线上** | 桌面端看不到“这个任务已经吃了多少次工具调用” | **已补**：D-L3 从 `tool_execution_start` 自己数（不改扩展），任务面板显示次数，达到细分提示阈值后加强调 |
-| R10 | **无 Markdown 渲染**，助手回复以纯文本显示 | 代码块、列表的可读性差 | **已补**：`marked` 只做词法分析，渲染端按白名单标签用 `textContent` 建 DOM，不用 `innerHTML`，无需消毒器，CSP 不变；链接不可点、图片只显示替代文字 |
+| R10 | **无 Markdown 渲染**，助手回复以纯文本显示 | 代码块、列表的可读性差 | **已补**：`marked` 只做词法分析，渲染端按白名单标签用 `textContent` 建 DOM，不用 `innerHTML`，无需消毒器，CSP 不变；普通 http(s) 链接点击后用系统浏览器打开（L3 先核对该地址确实是这条回复里的链接），其他链接不可点；图片只显示替代文字 |
 
 ---
 

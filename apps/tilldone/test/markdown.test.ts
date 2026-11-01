@@ -31,10 +31,14 @@ test("tables carry header cells and column alignment", () => {
 		["thead", ["tr", ["th", ".align-center", "a"], ["th", ".align-right", "b"]]],
 		["tbody", ["tr", ["td", ".align-center", "1"], ["td", ".align-right", ["strong", "2"]]]]]]);
 });
-test("links show their text and keep the address as a title; nothing is navigable", () => {
+test("links show their text and keep the address as a title", () => {
 	const [p] = markdownTree("see [docs](https://example.com/a \"A\") and https://example.com/b");
 	const links = p.children!.filter((n) => n.tag === "span");
 	expect(links.map((n) => [n.className, n.title, shape(n.children!)])).toEqual([["link", "https://example.com/a", ["docs"]], ["link", "https://example.com/b", ["https://example.com/b"]]]);
+});
+test("only plain http(s) links are marked as openable", () => {
+	const [p] = markdownTree("[a](https://a.example/) [b](javascript:alert(1)) [c](/rel) [d](mailto:x@y.z) [e](https://u:p@a.example/)");
+	expect(p.children!.filter((n) => n.tag === "span").map((n) => n.className)).toEqual(["link", "link-inert", "link-inert", "link-inert", "link-inert"]);
 });
 test("images become their alt text, since the page loads no images", () => {
 	expect(shape(markdownTree("![chart](x.png)"))).toEqual([["p", ["span", ".image-alt", "🖼 chart"]]]);
