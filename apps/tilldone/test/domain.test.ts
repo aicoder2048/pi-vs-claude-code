@@ -89,13 +89,12 @@ test("confirm expiry is clock-driven, closes without responding; unsupported dia
 	for (const method of ["select", "input", "editor"]) expect(immediateUIResponse({ type: "extension_ui_request", method, id: "a" })).toEqual({ type: "extension_ui_response", id: "a", cancelled: true });
 });
 
-test("intent planning handles local /tilldone, steer, follow-up and rejects stale confirmations", () => {
+test("intent planning handles local /tilldone, steers every message sent while running, and rejects stale confirmations", () => {
 	const s = reduce(initial(), { type: "response", command: "get_state", success: true, data: {} });
-	expect(planIntent(s, { type: "submit", message: "/tilldone", mode: "steer" }).commands).toHaveLength(0);
-	expect(planIntent(s, { type: "submit", message: "Hi", mode: "steer" }).commands[0].type).toBe("prompt");
+	expect(planIntent(s, { type: "submit", message: "/tilldone" }).commands).toHaveLength(0);
+	expect(planIntent(s, { type: "submit", message: "Hi" }).commands[0].type).toBe("prompt");
 	const running = reduce(s, { type: "agent_start" });
-	expect(planIntent(running, { type: "submit", message: "Hi", mode: "steer" }).commands[0].type).toBe("steer");
-	expect(planIntent(running, { type: "submit", message: "Hi", mode: "followUp" }).commands[0].type).toBe("follow_up");
+	expect(planIntent(running, { type: "submit", message: "Hi" }).commands[0].type).toBe("steer");
 	expect(planIntent(s, { type: "confirm", id: "stale", confirmed: true }).commands).toHaveLength(0);
 });
 test("new session restarts Pi only while connected and idle", () => {
@@ -179,24 +178,23 @@ describe("pasted images", () => {
 	const png = { mimeType: "image/png", data: "iVBORw0KGgo=" };
 	const withModel = (input: string[]) => reduce(initial(), { type: "response", command: "get_state", success: true, data: { model: { provider: "p", id: "m", input } } });
 	test("parseIntent accepts up to 10 well-formed images and rejects the rest", () => {
-		expect(parseIntent({ type: "submit", message: "hi", mode: "steer", images: [png] })).toEqual({ type: "submit", message: "hi", mode: "steer", images: [png] });
-		expect(parseIntent({ type: "submit", message: "hi", mode: "steer" })).toEqual({ type: "submit", message: "hi", mode: "steer", images: [] });
+		expect(parseIntent({ type: "submit", message: "hi", images: [png] })).toEqual({ type: "submit", message: "hi", images: [png] });
+		expect(parseIntent({ type: "submit", message: "hi" })).toEqual({ type: "submit", message: "hi", images: [] });
 		for (const images of [[{ ...png, mimeType: "image/svg+xml" }], [{ ...png, data: "not base64!" }], [{ ...png, data: 5 }], Array(11).fill(png), "x"]) {
-			expect(parseIntent({ type: "submit", message: "hi", mode: "steer", images })).toBeUndefined();
+			expect(parseIntent({ type: "submit", message: "hi", images })).toBeUndefined();
 		}
 	});
-	test("images ride along on prompt, steer and follow_up; an image alone is enough", () => {
+	test("images ride along on prompt and steer; an image alone is enough", () => {
 		const ready = withModel(["text", "image"]);
 		const wire = [{ type: "image", data: png.data, mimeType: png.mimeType }];
-		expect(planIntent(ready, { type: "submit", message: "  ", mode: "steer", images: [png] }).commands).toEqual([{ type: "prompt", message: "", images: wire }]);
+		expect(planIntent(ready, { type: "submit", message: "  ", images: [png] }).commands).toEqual([{ type: "prompt", message: "", images: wire }]);
 		const running = reduce(ready, { type: "agent_start" });
-		expect(planIntent(running, { type: "submit", message: "look", mode: "steer", images: [png] }).commands).toEqual([{ type: "steer", message: "look", images: wire }]);
-		expect(planIntent(running, { type: "submit", message: "look", mode: "followUp", images: [png] }).commands).toEqual([{ type: "follow_up", message: "look", images: wire }]);
-		expect(planIntent(ready, { type: "submit", message: "text", mode: "steer", images: [] }).commands).toEqual([{ type: "prompt", message: "text" }]);
+		expect(planIntent(running, { type: "submit", message: "look", images: [png] }).commands).toEqual([{ type: "steer", message: "look", images: wire }]);
+		expect(planIntent(ready, { type: "submit", message: "text", images: [] }).commands).toEqual([{ type: "prompt", message: "text" }]);
 	});
 	test("a text-only model gets no images, and the view says so", () => {
 		const textOnly = withModel(["text"]);
-		expect(planIntent(textOnly, { type: "submit", message: "look", mode: "steer", images: [png] }).commands).toHaveLength(0);
+		expect(planIntent(textOnly, { type: "submit", message: "look", images: [png] }).commands).toHaveLength(0);
 		expect(toViewModel(textOnly).input.images).toBe(false);
 		expect(toViewModel(withModel(["text", "image"])).input.images).toBe(true);
 	});
@@ -207,5 +205,48 @@ describe("pasted images", () => {
 	test("conversation entries count the images a message carries", () => {
 		const s = reduce(initial(), { type: "message_start", message: { role: "user", content: [{ type: "text", text: "see" }, { type: "image", data: "x", mimeType: "image/png" }, { type: "image", data: "y", mimeType: "image/png" }] } });
 		expect(toViewModel(s).conversation.map((e) => [e.text, e.images])).toEqual([["see", 2]]);
+	});
+});
+describe("messages waiting for delivery", () => {
+	const running = () => reduce(reduce(initial(), { type: "response", command: "get_state", success: true, data: {} }), { type: "agent_start" });
+	test("the view lists Pi's pending steering and follow-up queue", () => {
+		const s = reduce(running(), { type: "queue_update", steering: ["redirect"], followUp: ["later"] });
+		expect(toViewModel(s).queued).toEqual(["redirect", "later"]);
+		expect(toViewModel(reduce(s, { type: "queue_update", steering: [], followUp: [] })).queued).toEqual([]);
+	});
+	test("a settled run or a dead Pi leaves nothing pending", () => {
+		const s = reduce(running(), { type: "queue_update", steering: ["redirect"], followUp: [] });
+		expect(toViewModel(reduce(s, { type: "agent_settled" })).queued).toEqual([]);
+		expect(toViewModel(reduce(s, { type: "desk_exit", error: "" })).queued).toEqual([]);
+	});
+	test("malformed queue updates are ignored", () => {
+		const s = reduce(running(), { type: "queue_update", steering: ["a"], followUp: [] });
+		expect(reduce(s, { type: "queue_update", steering: "a", followUp: [] })).toBe(s);
+	});
+});
+describe("split requests", () => {
+	const details = (tasks: object[]) => ({ type: "tool_execution_end", toolCallId: "t", toolName: "tilldone", isError: false, result: { details: { action: "add", nextId: 9, listTitle: "T", listDescription: undefined, tasks } } });
+	const ready = () => reduce(reduce(reduce(initial(), { type: "response", command: "get_state", success: true, data: {} }), { type: "agent_start" }),
+		details([{ id: 1, text: "big", status: "inprogress" }, { id: 2, text: "next", status: "idle" }]));
+	const request = (s: ReturnType<typeof ready>, id: number) => {
+		const plan = planIntent(s, { type: "splitTask", id });
+		return { plan, state: plan.events.reduce(reduce, s) };
+	};
+	test("a second click on the same task sends nothing while the first is pending", () => {
+		const first = request(ready(), 1);
+		expect(first.plan.commands).toHaveLength(1);
+		expect(request(first.state, 1).plan.commands).toHaveLength(0);
+		expect(request(first.state, 2).plan.commands).toHaveLength(1);
+	});
+	test("the pending task shows as splitting until the split replaces it", () => {
+		const { state } = request(ready(), 1);
+		expect(toViewModel(state).tasks.items.map((t) => [t.id, t.splitting])).toEqual([[1, true], [2, false]]);
+		const split = reduce(state, details([{ id: 3, text: "a", status: "inprogress", from: 1 }, { id: 4, text: "b", status: "idle", from: 1 }, { id: 2, text: "next", status: "idle" }]));
+		expect(toViewModel(split).tasks.items.some((t) => t.splitting)).toBe(false);
+		expect(split.pendingSplits).toEqual([]);
+	});
+	test("a run that ends without splitting releases the button", () => {
+		const { state } = request(ready(), 1);
+		expect(reduce(state, { type: "agent_settled" }).pendingSplits).toEqual([]);
 	});
 });

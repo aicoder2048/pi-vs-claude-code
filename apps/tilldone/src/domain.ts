@@ -45,6 +45,10 @@ export interface State {
 	readonly assistantId: string | null;
 	readonly sequence: number;
 	readonly confirms: readonly Confirm[];
+	/** Pi's steering and follow-up queues: messages accepted but not yet delivered to the model. */
+	readonly queued: readonly string[];
+	/** Tasks whose split button was pressed and whose split has not landed yet. */
+	readonly pendingSplits: readonly number[];
 	readonly statuses: Readonly<Record<string, string>>;
 	readonly now: number;
 	readonly runActive: boolean;
@@ -65,7 +69,7 @@ export interface State {
 export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false): State {
 	return { list: EMPTY_LIST, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
 		confirms: [], statuses: {}, now: 0, runActive: false, streaming: false, compacting: false,
-		model, imageInput: false, thinking: "unknown", cwd, connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
+		queued: [], pendingSplits: [], model, imageInput: false, thinking: "unknown", cwd, connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
 }
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 function contentBlocks(content: any): Record<number, string> {
@@ -115,7 +119,13 @@ export function reduce(state: State, record: RecordValue): State {
 		case "desk_confirm_closed": return { ...state, confirms: state.confirms.filter((c) => c.id !== record.id) };
 		case "desk_error": return { ...state, error: text(record.error) };
 		case "desk_stderr": return { ...state, diagnostics: (state.diagnostics + text(record.text)).slice(-8000) };
-		case "desk_exit": return { ...state, connection: "exited", error: text(record.error), runActive: false, streaming: false, compacting: false, confirms: [] };
+		case "desk_exit": return { ...state, connection: "exited", error: text(record.error), runActive: false, streaming: false, compacting: false, confirms: [], queued: [], pendingSplits: [] };
+		case "desk_split_requested": return { ...state, pendingSplits: [...state.pendingSplits, record.id] };
+		case "queue_update": {
+			const strings = (value: unknown) => Array.isArray(value) && value.every((v) => typeof v === "string");
+			if (!strings(record.steering) || !strings(record.followUp)) return state;
+			return { ...state, queued: [...record.steering, ...record.followUp] };
+		}
 		case "response": {
 			if (!record.success) return { ...state, error: `${record.command}: ${text(record.error)}` };
 			if (record.command !== "get_state" || !record.data) return state;
@@ -129,7 +139,7 @@ export function reduce(state: State, record: RecordValue): State {
 		}
 		case "agent_start": return { ...state, runActive: true, error: "" };
 		// agent_end is intentionally not an idle transition: a nudge may start another run.
-		case "agent_settled": return { ...state, runActive: false, streaming: false, compacting: false };
+		case "agent_settled": return { ...state, runActive: false, streaming: false, compacting: false, queued: [], pendingSplits: [] };
 		case "thinking_level_changed": return { ...state, thinking: text(record.level) };
 		case "message_start": {
 			const m = record.message;
@@ -159,7 +169,9 @@ export function reduce(state: State, record: RecordValue): State {
 			return { ...state, tools: state.tools.map((t) => t.id === record.toolCallId ? { ...t, result: record.partialResult } : t) };
 		case "tool_execution_end": {
 			const list = record.toolName === "tilldone" ? parseDetails(record.result?.details) ?? state.list : state.list;
-			return { ...state, list, tools: state.tools.map((t) => t.id === record.toolCallId
+			// A pending split is resolved once its task is gone from the list (split replaces it) or done.
+			const pendingSplits = list === state.list ? state.pendingSplits : state.pendingSplits.filter((id) => list.tasks.some((t) => t.id === id && t.status !== "done"));
+			return { ...state, list, pendingSplits, tools: state.tools.map((t) => t.id === record.toolCallId
 				? { ...t, result: record.result, phase: record.isError ? "error" : "done" } : t) };
 		}
 		case "extension_ui_request": {
@@ -181,7 +193,7 @@ export function reduce(state: State, record: RecordValue): State {
 	}
 }
 
-export type Intent = { type: "submit"; message: string; mode: "steer" | "followUp"; images?: readonly Image[] }
+export type Intent = { type: "submit"; message: string; images?: readonly Image[] }
 	| { type: "abort" | "restart" | "newSession" | "focusTasks" }
 	| { type: "confirm"; id: string; confirmed: boolean }
 	| { type: "splitTask"; id: number }
@@ -206,9 +218,9 @@ export function parseIntent(raw: unknown): Intent | undefined {
 	if (r.type === "apiLink" && isApiProvider(r.provider)) return { type: "apiLink", provider: r.provider };
 	if (r.type === "apiSave") return { type: "apiSave", result: parseCredentialChanges(r.providers) };
 	if (["abort", "restart", "newSession", "focusTasks"].includes(r.type)) return { type: r.type } as Intent;
-	if (r.type === "submit" && typeof r.message === "string" && r.message.length <= 100000 && ["steer", "followUp"].includes(r.mode)) {
+	if (r.type === "submit" && typeof r.message === "string" && r.message.length <= 100000) {
 		const images = parseImages(r.images ?? []);
-		return images && { type: "submit", message: r.message, mode: r.mode, images };
+		return images && { type: "submit", message: r.message, images };
 	}
 	if (r.type === "preferences") {
 		const preferences = parsePreferences(r.preferences);
@@ -244,16 +256,17 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 	// The shepherd points at a task; the model, which has the context, decides the subtasks.
 	if (intent.type === "splitTask") {
 		const task = state.list.tasks.find((t) => t.id === intent.id && t.status !== "done");
-		if (!task) return empty;
+		if (!task || state.pendingSplits.includes(task.id)) return empty;
 		const message = copyFor(state.preferences.language).splitRequest.replaceAll("{id}", String(task.id)).replace("{text}", task.text);
-		return { commands: [{ type: isRunning(state) ? "steer" : "prompt", message }], events: [] };
+		return { commands: [{ type: isRunning(state) ? "steer" : "prompt", message }], events: [{ type: "desk_split_requested", id: task.id }] };
 	}
 	if (intent.type === "abort") return { commands: [{ type: "clear_queue" }, { type: "abort" }], events: [] };
 	if (intent.type === "submit") {
 		const images = intent.images ?? [];
 		if (!intent.message.trim() && !images.length) return empty;
 		if (images.length && !state.imageInput) return empty;
-		const command: RecordValue = { type: isRunning(state) ? intent.mode === "steer" ? "steer" : "follow_up" : "prompt", message: intent.message.trim() };
+		// While running, a message always steers: the user is redirecting the work in progress.
+		const command: RecordValue = { type: isRunning(state) ? "steer" : "prompt", message: intent.message.trim() };
 		if (images.length) command.images = images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }));
 		return { commands: [command], events: [] };
 	}
@@ -294,7 +307,8 @@ export function toViewModel(state: State) {
 			total: state.list.tasks.length, progress: `${counts.done} / ${state.list.tasks.length} ${ui.done}`,
 			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus,
 			items: state.list.tasks.map((t) => ({ ...t, label: t.from === undefined ? `#${t.id}` : `#${t.id} ← #${t.from}`, icon: STATUS_ICON[t.status], statusLabel: { idle: ui.taskIdle, inprogress: ui.taskInprogress, done: ui.taskDone }[t.status], current: t.id === active?.id,
-				splittable: state.connection === "ready" && t.status !== "done" })) },
+				splittable: state.connection === "ready" && t.status !== "done", splitting: state.pendingSplits.includes(t.id) })) },
+		queued: state.queued,
 		// A tool-only assistant turn carries no text, only the call the next tool card already shows.
 		conversation: state.timeline.filter((entry) => entry.kind === "tool" || !isSilentAssistant(messages.get(entry.id)!)).map((entry) => {
 			if (entry.kind === "tool") {

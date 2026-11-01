@@ -140,3 +140,7 @@ body, header, aside, footer, #composer, button, select, textarea, .message, .too
 .message-images { font: 12px var(--sans); color: var(--muted); margin: 4px 0 0; }
 .message-images:empty { display: none; }
 #attachments[hidden] { display: none; }
+#queued { list-style: none; padding: 0; margin: 0 0 8px; display: grid; gap: 4px; }
+#queued[hidden] { display: none; }
+#queued li { display: block; margin: 0; padding: 6px 10px; font: 12px var(--sans); color: var(--muted); background: var(--surface-2); border: 1px dashed var(--line); border-radius: var(--radius); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+li .split:disabled { opacity: 1; cursor: progress; }

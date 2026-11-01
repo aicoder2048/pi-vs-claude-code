@@ -76,10 +76,10 @@ test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, cancels unsupp
 	desk.start();
 	try {
 		await until(() => view?.connection === "ready");
-		await desk.send({ type: "submit", mode: "steer", message: "/tilldone" });
+		await desk.send({ type: "submit", message: "/tilldone" });
 		expect(view!.tasks.focus).toBe(1);
 		expect(readLog().some((r) => r.message === "/tilldone")).toBe(false);
-		await desk.send({ type: "submit", mode: "steer", message: "replay" });
+		await desk.send({ type: "submit", message: "replay" });
 		await until(() => Boolean(view!.confirm));
 		const id = view!.confirm!.id;
 		expect(id).toBe("7a978bb5-c471-4607-8090-15786d956978");
@@ -90,25 +90,25 @@ test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, cancels unsupp
 		await until(() => view!.conversation.at(-1)?.text === "ok" && !view!.status.running);
 		expect(view!.tasks.total).toBe(0);
 		expect(readLog().find((r) => r.type === "extension_ui_response")).toEqual({ type: "extension_ui_response", id, confirmed: true });
-		await desk.send({ type: "submit", mode: "steer", message: "busy" });
+		await desk.send({ type: "submit", message: "busy" });
 		await until(() => view!.status.running);
-		await desk.send({ type: "submit", mode: "steer", message: "redirect" });
-		await desk.send({ type: "submit", mode: "followUp", message: "later" });
+		await desk.send({ type: "submit", message: "redirect" });
+		await desk.send({ type: "submit", message: "later" });
 		await desk.send({ type: "abort" });
 		await until(() => !view!.status.running);
-		expect(readLog().filter((r) => ["steer", "follow_up", "clear_queue", "abort"].includes(r.type)).map((r) => r.type)).toEqual(["steer", "follow_up", "clear_queue", "abort"]);
+		expect(readLog().filter((r) => ["steer", "follow_up", "clear_queue", "abort"].includes(r.type)).map((r) => r.type)).toEqual(["steer", "steer", "clear_queue", "abort"]);
 		await expect(desk.send({ type: "set_model", provider: "anthropic" })).rejects.toThrow("Invalid desktop intent");
-		await desk.send({ type: "submit", mode: "steer", message: "dialogs" });
+		await desk.send({ type: "submit", message: "dialogs" });
 		await until(() => readLog().filter((r) => r.cancelled === true).length === 3);
 		expect(readLog().filter((r) => r.cancelled === true).map((r) => r.id)).toEqual(["select", "input", "editor"]);
-		await desk.send({ type: "submit", mode: "steer", message: "expiry" });
+		await desk.send({ type: "submit", message: "expiry" });
 		await until(() => view!.confirm?.id === "expiry-id");
 		await until(() => !view!.confirm);
 		expect(readLog().some((r) => r.type === "extension_ui_response" && r.id === "expiry-id")).toBe(false);
 		const launches = readLog().filter((r) => r.type === "launch");
 		expect(launches[0].args).toEqual(["--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--model", config().model, "-e", config().extension]);
 		expect(launches[0].cwd).toBe(app);
-		await desk.send({ type: "submit", mode: "steer", message: "markup" });
+		await desk.send({ type: "submit", message: "markup" });
 		await until(() => view!.conversation.length > 0);
 		await desk.send({ type: "newSession" });
 		await until(() => view!.connection === "ready");
@@ -132,7 +132,7 @@ test("Desk coalesces streamed records and stays quiet while idle", async () => {
 	desk.start();
 	try {
 		await until(() => last?.connection === "ready");
-		await desk.send({ type: "submit", mode: "steer", message: "replay" });
+		await desk.send({ type: "submit", message: "replay" });
 		await until(() => Boolean(last?.confirm));
 		// The replay bursts ~150 records before the confirm; a view per record would publish that many.
 		expect(views).toBeLessThan(20);

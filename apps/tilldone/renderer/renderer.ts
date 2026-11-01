@@ -13,7 +13,8 @@ interface View {
 	status: { model: string; thinking: string; running: boolean; cwd: string; tilldone: string };
 	input: { enabled: boolean; running: boolean; newSession: boolean; images: boolean };
 	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number;
-		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean }[] };
+		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean; splitting: boolean }[] };
+	queued: string[];
 	conversation: { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string }[];
 	confirm: { id: string; title: string; message: string; remainingSeconds: number | null } | null;
 }
@@ -130,13 +131,12 @@ function render(view: View) {
 	if (document.title !== ui.productName) document.title = ui.productName;
 	for (const [id, key] of Object.entries({ "product-name": "productName", "brand-slogan": "slogan", "brand-logo-title": "logo", workspace: "workspace", "settings-label": "settings", "settings-title": "settings", "theme-label": "theme", "language-label": "language",
 		"message-label": "message", "keyboard-hint": "keyboard",
-		"mode-steer": "steer", "mode-followUp": "followUp", stop: "stop", send: "send", restart: "restart", "task-list-label": "taskList",
+		stop: "stop", send: "send", restart: "restart", "task-list-label": "taskList",
 		"diagnostics-label": "diagnostics", deny: "deny", allow: "allow", "new-session-label": "newSession", "new-session-title": "newSessionTitle",
 		"new-session-message": "newSessionMessage", "new-session-cancel": "cancel", "new-session-confirm": "newSessionConfirm" })) setText(id, ui[key]);
 	$<HTMLTextAreaElement>("prompt").placeholder = ui.placeholder;
 	$("chat").setAttribute("aria-label", ui.chat);
 	$("tasks").setAttribute("aria-label", ui.taskPanel);
-	$("mode").setAttribute("aria-label", ui.delivery);
 	setText("model", view.status.model);
 	setText("thinking", `${ui.thinking}: ${view.status.thinking}`);
 	setText("running", view.status.running ? ui.running : ui.idle);
@@ -153,7 +153,13 @@ function render(view: View) {
 	const newSessionDialog = $<HTMLDialogElement>("new-session-dialog");
 	if (!view.input.newSession && newSessionDialog.open) newSessionDialog.close();
 	$<HTMLButtonElement>("stop").disabled = !view.input.enabled || !view.input.running;
-	$("mode").hidden = !view.input.running;
+	const queued = $("queued");
+	queued.hidden = view.queued.length === 0;
+	const queuedSignature = JSON.stringify([view.queued, ui.queued]);
+	if (queued.dataset.signature !== queuedSignature) {
+		queued.dataset.signature = queuedSignature;
+		queued.replaceChildren(...view.queued.map((message) => node("li", `⏳ ${ui.queued} · ${message}`)));
+	}
 	setText("input-hint", !view.input.enabled ? view.connection === "exited" ? ui.restartHint : ui.connecting : view.input.running ? ui.busy : ui.ready);
 
 	const conversation = $("conversation");
@@ -192,7 +198,7 @@ function render(view: View) {
 	const progress = $<HTMLProgressElement>("progress"); progress.max = Math.max(1, view.tasks.total); progress.value = view.tasks.done;
 	// Rebuild the list only when its content changes, not on every streamed view.
 	const taskList = $("task-list");
-	const taskSignature = JSON.stringify([view.tasks.items, ui.split]);
+	const taskSignature = JSON.stringify([view.tasks.items, ui.split, ui.splitting]);
 	if (taskList.dataset.signature !== taskSignature) {
 		taskList.dataset.signature = taskSignature;
 		taskList.replaceChildren(...view.tasks.items.map((task) => {
@@ -201,8 +207,8 @@ function render(view: View) {
 			li.setAttribute("aria-label", `${task.statusLabel}: ${task.text}`);
 			li.append(node("span", `${task.icon}  ${task.label}  ${task.text}`));
 			if (task.splittable) {
-				const split = node("button", ui.split);
-				split.type = "button"; split.className = "split"; split.title = ui.splitTitle;
+				const split = node("button", task.splitting ? ui.splitting : ui.split);
+				split.type = "button"; split.className = "split"; split.title = ui.splitTitle; split.disabled = task.splitting;
 				split.setAttribute("aria-label", `${ui.split} #${task.id}`);
 				split.onclick = () => { void send({ type: "splitTask", id: task.id }); };
 				li.append(split);
@@ -234,7 +240,7 @@ $("composer").addEventListener("submit", (event) => {
 	if (!message.trim() && !sent.length) return;
 	// The model may have changed since the images were pasted.
 	if (sent.length && !latest?.input.images) { notice(latest?.ui.imagesUnsupported ?? ""); return; }
-	void send({ type: "submit", message, mode: $<HTMLSelectElement>("mode").value, images: sent.map(({ mimeType, data }) => ({ mimeType, data })) }).then((ok) => {
+	void send({ type: "submit", message, images: sent.map(({ mimeType, data }) => ({ mimeType, data })) }).then((ok) => {
 		if (!ok) return;
 		if (input.value === message) input.value = "";
 		for (const attachment of sent) URL.revokeObjectURL(attachment.url);

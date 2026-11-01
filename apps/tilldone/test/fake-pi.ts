@@ -10,6 +10,9 @@ const emit = (record: object) => process.stdout.write(JSON.stringify(record) + "
 const log = (record: object) => { if (process.env.FAKE_PI_LOG) appendFileSync(process.env.FAKE_PI_LOG, JSON.stringify(record) + "\n"); };
 log({ type: "launch", args: process.argv.slice(2), cwd: process.cwd(), pid: process.pid });
 const waits = new Map<string, () => void>();
+// Steering messages wait here until the run ends, like Pi's queue during a long tool batch.
+let steering: string[] = [];
+const queueUpdate = () => emit({ type: "queue_update", steering, followUp: [] });
 async function handle(r: any) {
 	log(r);
 	if (r.type === "extension_ui_response") { waits.get(r.id)?.(); return; }
@@ -26,6 +29,8 @@ async function handle(r: any) {
 	if (r.type === "crash") { process.stderr.write("fake crash diagnostic\n"); process.exit(7); }
 	if (r.type === "slow") await Bun.sleep(60);
 	emit({ type: "response", command: r.type, id: r.id, success: true });
+	if (r.type === "steer") { steering = [...steering, r.message]; queueUpdate(); return; }
+	if (r.type === "clear_queue") { steering = []; queueUpdate(); return; }
 	if (r.type === "abort") { emit({ type: "agent_settled", aborted: true }); return; }
 	if (r.type !== "prompt") return;
 	if (r.message === "busy") { emit({ type: "agent_start" }); return; }
