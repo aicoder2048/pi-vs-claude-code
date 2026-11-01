@@ -90,7 +90,8 @@ li.current { color: var(--active-ink); background: var(--active); border: 1px so
 li { display: flex; align-items: flex-start; gap: 8px; } li > span { flex: 1; }
 li .split { flex: none; padding: 2px 8px; font: 11px var(--sans); opacity: 0; transition: opacity .15s; }
 li:hover .split, li:focus-within .split, li.current .split { opacity: 1; }
-li .tool-calls { flex: none; padding-top: 2px; font: 11px var(--sans); color: var(--muted); white-space: nowrap; } li .tool-calls.heavy { color: var(--accent); font-weight: 600; }
+li > .counts { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; padding-top: 2px; }
+li .counts small { font: 11px var(--sans); color: var(--muted); white-space: nowrap; } li .tool-calls.heavy { color: var(--accent); font-weight: 600; }
 footer { padding: 10px 20px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 6px 20px; font: 11px/1.5 var(--sans); color: var(--muted); }
 #cwd { margin-left: auto; overflow-wrap: anywhere; } #running { color: var(--accent); }
 #alert { background: var(--danger-bg); padding: 12px 28px; border-bottom: 1px solid var(--danger); } #alert p { margin: 4px 0; }

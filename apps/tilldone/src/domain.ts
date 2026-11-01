@@ -51,6 +51,8 @@ export interface State {
 	readonly pendingSplits: readonly number[];
 	/** Non-tilldone tools started while each task was in progress, the same calls the extension's split hint counts. */
 	readonly toolCalls: Readonly<Record<number, number>>;
+	/** Turns, one model request each, started while each task was in progress. */
+	readonly modelCalls: Readonly<Record<number, number>>;
 	readonly statuses: Readonly<Record<string, string>>;
 	readonly now: number;
 	readonly runActive: boolean;
@@ -71,7 +73,7 @@ export interface State {
 export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false): State {
 	return { list: EMPTY_LIST, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
 		confirms: [], statuses: {}, now: 0, runActive: false, streaming: false, compacting: false,
-		queued: [], pendingSplits: [], toolCalls: {}, model, imageInput: false, thinking: "unknown", cwd, connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
+		queued: [], pendingSplits: [], toolCalls: {}, modelCalls: {}, model, imageInput: false, thinking: "unknown", cwd, connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
 }
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 function contentBlocks(content: any): Record<number, string> {
@@ -100,11 +102,17 @@ export function viewChanged(previous: State, next: State): boolean {
 	return false;
 }
 
+type Counts = Readonly<Record<number, number>>;
+/** Adds one to the task in progress, if any. */
+function countActive(counts: Counts, list: ListState): Counts {
+	const active = current(list);
+	return active ? { ...counts, [active.id]: (counts[active.id] ?? 0) + 1 } : counts;
+}
 /** Ids only restart when a list is replaced (new-list, clear), so a lower nextId means the old counts belong to other tasks. */
-function keepCounts(state: State, list: ListState): State["toolCalls"] {
-	if (list.nextId < state.list.nextId) return {};
-	const kept = Object.entries(state.toolCalls).filter(([id]) => list.tasks.some((t) => t.id === Number(id)));
-	return kept.length === Object.keys(state.toolCalls).length ? state.toolCalls : Object.fromEntries(kept);
+function keepCounts(counts: Counts, previous: ListState, list: ListState): Counts {
+	if (list.nextId < previous.nextId) return {};
+	const kept = Object.entries(counts).filter(([id]) => list.tasks.some((t) => t.id === Number(id)));
+	return kept.length === Object.keys(counts).length ? counts : Object.fromEntries(kept);
 }
 export function reduce(state: State, record: RecordValue): State {
 	switch (record.type) {
@@ -146,6 +154,8 @@ export function reduce(state: State, record: RecordValue): State {
 			return { ...state, connection: "ready", model, imageInput, thinking, streaming, compacting };
 		}
 		case "agent_start": return { ...state, runActive: true, error: "" };
+		// One turn is one model request; it belongs to the task in progress when it starts.
+		case "turn_start": return { ...state, modelCalls: countActive(state.modelCalls, state.list) };
 		// agent_end is intentionally not an idle transition: a nudge may start another run.
 		case "agent_settled": return { ...state, runActive: false, streaming: false, compacting: false, queued: [], pendingSplits: [] };
 		case "thinking_level_changed": return { ...state, thinking: text(record.level) };
@@ -171,8 +181,7 @@ export function reduce(state: State, record: RecordValue): State {
 		}
 		case "tool_execution_start": {
 			const tool: Tool = { id: record.toolCallId, name: record.toolName, args: record.args ?? null, result: null, phase: "running" };
-			const active = record.toolName === TOOL.name ? undefined : current(state.list);
-			const toolCalls = active ? { ...state.toolCalls, [active.id]: (state.toolCalls[active.id] ?? 0) + 1 } : state.toolCalls;
+			const toolCalls = record.toolName === TOOL.name ? state.toolCalls : countActive(state.toolCalls, state.list);
 			return { ...state, toolCalls, tools: [...state.tools, tool], timeline: [...state.timeline, { kind: "tool", id: tool.id }] };
 		}
 		case "tool_execution_update":
@@ -181,7 +190,8 @@ export function reduce(state: State, record: RecordValue): State {
 			const list = record.toolName === "tilldone" ? parseDetails(record.result?.details) ?? state.list : state.list;
 			// A pending split is resolved once its task is gone from the list (split replaces it) or done.
 			const pendingSplits = list === state.list ? state.pendingSplits : state.pendingSplits.filter((id) => list.tasks.some((t) => t.id === id && t.status !== "done"));
-			return { ...state, list, pendingSplits, toolCalls: list === state.list ? state.toolCalls : keepCounts(state, list), tools: state.tools.map((t) => t.id === record.toolCallId
+			const counts = list === state.list ? state : { toolCalls: keepCounts(state.toolCalls, state.list, list), modelCalls: keepCounts(state.modelCalls, state.list, list) };
+			return { ...state, list, pendingSplits, toolCalls: counts.toolCalls, modelCalls: counts.modelCalls, tools: state.tools.map((t) => t.id === record.toolCallId
 				? { ...t, result: record.result, phase: record.isError ? "error" : "done" } : t) };
 		}
 		case "extension_ui_request": {
@@ -303,6 +313,10 @@ function toolCallsView(count: number, ui: ReturnType<typeof copyFor>) {
 	const label = count === 0 ? "" : count === 1 ? ui.toolCallOne : ui.toolCalls.replace("{n}", String(count));
 	return { toolCalls: count, toolCallsLabel: label, toolCallsTitle: ui.toolCallsTitle.replace("{every}", String(SPLIT_HINT_EVERY)), heavy: count >= SPLIT_HINT_EVERY };
 }
+function modelCallsView(count: number, ui: ReturnType<typeof copyFor>) {
+	const label = count === 0 ? "" : count === 1 ? ui.modelCallOne : ui.modelCalls.replace("{n}", String(count));
+	return { modelCalls: count, modelCallsLabel: label, modelCallsTitle: ui.modelCallsTitle };
+}
 const isSilentAssistant = (m: Message) => m.kind === "assistant" && !m.error && Object.values(m.blocks).every((value) => !value.trim());
 export function toViewModel(state: State) {
 	const ui = copyFor(state.preferences.language);
@@ -322,7 +336,7 @@ export function toViewModel(state: State) {
 			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus,
 			items: state.list.tasks.map((t) => ({ ...t, label: t.from === undefined ? `#${t.id}` : `#${t.id} ← #${t.from}`, icon: STATUS_ICON[t.status], statusLabel: { idle: ui.taskIdle, inprogress: ui.taskInprogress, done: ui.taskDone }[t.status], current: t.id === active?.id,
 				splittable: state.connection === "ready" && t.status !== "done", splitting: state.pendingSplits.includes(t.id),
-				...toolCallsView(state.toolCalls[t.id] ?? 0, ui) })) },
+				...toolCallsView(state.toolCalls[t.id] ?? 0, ui), ...modelCallsView(state.modelCalls[t.id] ?? 0, ui) })) },
 		queued: state.queued,
 		// A tool-only assistant turn carries no text, only the call the next tool card already shows.
 		conversation: state.timeline.filter((entry) => entry.kind === "tool" || !isSilentAssistant(messages.get(entry.id)!)).map((entry) => {

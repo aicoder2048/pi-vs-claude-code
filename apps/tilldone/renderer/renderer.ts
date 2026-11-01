@@ -14,7 +14,7 @@ interface View {
 	input: { enabled: boolean; running: boolean; newSession: boolean; images: boolean };
 	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number;
 		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean; splitting: boolean;
-			toolCallsLabel: string; toolCallsTitle: string; heavy: boolean }[] };
+			toolCallsLabel: string; toolCallsTitle: string; heavy: boolean; modelCallsLabel: string; modelCallsTitle: string }[] };
 	queued: string[];
 	conversation: { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string }[];
 	confirm: { id: string; title: string; message: string; remainingSeconds: number | null } | null;
@@ -207,10 +207,19 @@ function render(view: View) {
 			li.className = task.current ? "current" : task.status;
 			li.setAttribute("aria-label", `${task.statusLabel}: ${task.text}`);
 			li.append(node("span", `${task.icon}  ${task.label}  ${task.text}`));
-			if (task.toolCallsLabel) {
-				const calls = node("small", task.toolCallsLabel);
-				calls.className = task.heavy ? "tool-calls heavy" : "tool-calls"; calls.title = task.toolCallsTitle;
-				li.append(calls);
+			if (task.modelCallsLabel || task.toolCallsLabel) {
+				const counts = node("span"); counts.className = "counts";
+				if (task.modelCallsLabel) {
+					const calls = node("small", task.modelCallsLabel);
+					calls.className = "model-calls"; calls.title = task.modelCallsTitle;
+					counts.append(calls);
+				}
+				if (task.toolCallsLabel) {
+					const calls = node("small", task.toolCallsLabel);
+					calls.className = task.heavy ? "tool-calls heavy" : "tool-calls"; calls.title = task.toolCallsTitle;
+					counts.append(calls);
+				}
+				li.append(counts);
 			}
 			if (task.splittable) {
 				const split = node("button", task.splitting ? ui.splitting : ui.split);

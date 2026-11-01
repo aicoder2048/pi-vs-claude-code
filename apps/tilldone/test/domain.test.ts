@@ -283,13 +283,44 @@ describe("tool calls per task", () => {
 	test("the view labels the count and flags a task once it reaches the split hint threshold", () => {
 		const items = (s: ReturnType<typeof initial>) => toViewModel(s).tasks.items.map((t) => [t.toolCallsLabel, t.heavy]);
 		expect(items(working(1))[0]).toEqual(["", false]);
-		expect(items(reduce(working(1), tool("bash")))[0]).toEqual(["1 次工具调用", false]);
+		expect(items(reduce(working(1), tool("bash")))[0]).toEqual(["1 tool", false]);
 		const heavy = Array.from({ length: 15 }, (_, i) => tool("bash", `b${i}`)).reduce(reduce, working(1));
-		expect(items(heavy)[0]).toEqual(["15 次工具调用", true]);
+		expect(items(heavy)[0]).toEqual(["15 tools", true]);
 		const en = reduce(heavy, { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
-		expect(toViewModel(en).tasks.items[0].toolCallsLabel).toBe("15 tool calls");
+		expect(toViewModel(en).tasks.items[0].toolCallsLabel).toBe("15 tools");
 		const enOne = reduce(reduce(working(1), tool("bash")), { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
-		expect(toViewModel(enOne).tasks.items[0].toolCallsLabel).toBe("1 tool call");
+		expect(toViewModel(enOne).tasks.items[0].toolCallsLabel).toBe("1 tool");
 		expect(toViewModel(heavy).tasks.items[0].toolCallsTitle).toBe("这个任务进行期间边牧调用其他工具的次数（不含管理清单的 tilldone 调用）；每满 15 次会提醒边牧考虑细分");
+	});
+});
+describe("model calls per task", () => {
+	const list = (nextId: number, tasks: object[]) => ({ type: "tool_execution_end", toolCallId: `l${nextId}`, toolName: "tilldone", isError: false,
+		result: { details: { action: "add", nextId, listTitle: "T", listDescription: undefined, tasks } } });
+	const turn = { type: "turn_start" };
+	const active = (id: number) => list(3, [{ id: 1, text: "a", status: id === 1 ? "inprogress" : "idle" }, { id: 2, text: "b", status: id === 2 ? "inprogress" : "idle" }]);
+	const counts = (s: ReturnType<typeof initial>) => toViewModel(s).tasks.items.map((t) => [t.id, t.modelCalls]);
+	test("each turn started while a task is in progress counts against it", () => {
+		const s = [active(1), turn, turn, active(2), turn].reduce(reduce, initial());
+		expect(counts(s)).toEqual([[1, 2], [2, 1]]);
+	});
+	test("the turn that starts the first task is not counted against it", () => {
+		const s = [list(3, [{ id: 1, text: "a", status: "idle" }, { id: 2, text: "b", status: "idle" }]), turn, active(1)].reduce(reduce, initial());
+		expect(counts(s)).toEqual([[1, 0], [2, 0]]);
+	});
+	test("a new list starts from zero and split subtasks start at zero", () => {
+		expect(counts([active(1), turn, list(2, [{ id: 1, text: "fresh", status: "idle" }])].reduce(reduce, initial()))).toEqual([[1, 0]]);
+		const split = [active(1), turn, list(5, [{ id: 3, text: "a1", status: "inprogress", from: 1 }, { id: 4, text: "a2", status: "idle", from: 1 }, { id: 2, text: "b", status: "idle" }])].reduce(reduce, initial());
+		expect(counts(split)).toEqual([[3, 0], [4, 0], [2, 0]]);
+	});
+	test("the view labels model calls in both languages", () => {
+		const one = [active(1), turn].reduce(reduce, initial());
+		const three = [turn, turn].reduce(reduce, one);
+		expect(toViewModel(one).tasks.items[0].modelCallsLabel).toBe("1 llm");
+		expect(toViewModel(three).tasks.items[0].modelCallsLabel).toBe("3 llms");
+		expect(toViewModel(reduce(initial(), active(1))).tasks.items[0].modelCallsLabel).toBe("");
+		const en = (s: ReturnType<typeof initial>) => reduce(s, { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
+		expect(toViewModel(en(one)).tasks.items[0].modelCallsLabel).toBe("1 llm");
+		expect(toViewModel(en(three)).tasks.items[0].modelCallsLabel).toBe("3 llms");
+		expect(toViewModel(one).tasks.items[0].modelCallsTitle).toContain("大模型");
 	});
 });
