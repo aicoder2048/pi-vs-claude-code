@@ -283,9 +283,9 @@ describe("tool calls per task", () => {
 	test("the view labels the count and flags a task once it reaches the split hint threshold", () => {
 		const items = (s: ReturnType<typeof initial>) => toViewModel(s).tasks.items.map((t) => [t.toolCallsLabel, t.heavy]);
 		expect(items(working(1))[0]).toEqual(["", false]);
-		expect(items(reduce(working(1), tool("bash")))[0]).toEqual(["1 tool", false]);
+		expect(items(reduce(working(1), tool("bash")))[0]).toEqual(["1 工具", false]);
 		const heavy = Array.from({ length: 15 }, (_, i) => tool("bash", `b${i}`)).reduce(reduce, working(1));
-		expect(items(heavy)[0]).toEqual(["15 tools", true]);
+		expect(items(heavy)[0]).toEqual(["15 工具", true]);
 		const en = reduce(heavy, { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
 		expect(toViewModel(en).tasks.items[0].toolCallsLabel).toBe("15 tools");
 		const enOne = reduce(reduce(working(1), tool("bash")), { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
@@ -315,8 +315,8 @@ describe("model calls per task", () => {
 	test("the view labels model calls in both languages", () => {
 		const one = [active(1), turn].reduce(reduce, initial());
 		const three = [turn, turn].reduce(reduce, one);
-		expect(toViewModel(one).tasks.items[0].modelCallsLabel).toBe("1 llm");
-		expect(toViewModel(three).tasks.items[0].modelCallsLabel).toBe("3 llms");
+		expect(toViewModel(one).tasks.items[0].modelCallsLabel).toBe("1 模型");
+		expect(toViewModel(three).tasks.items[0].modelCallsLabel).toBe("3 模型");
 		expect(toViewModel(reduce(initial(), active(1))).tasks.items[0].modelCallsLabel).toBe("");
 		const en = (s: ReturnType<typeof initial>) => reduce(s, { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
 		expect(toViewModel(en(one)).tasks.items[0].modelCallsLabel).toBe("1 llm");
