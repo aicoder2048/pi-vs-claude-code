@@ -5,5 +5,5 @@ export function loadConfig(appDirectory: string, env: NodeJS.ProcessEnv = proces
 	const model = (env.TILLDONE_MODEL ?? "openai-codex/gpt-6.1-sol").trim();
 	if (/^anthropic\//i.test(model)) throw new Error(`Refusing model "${model}": anthropic/* uses a metered API without funded credit. Use openai-codex/gpt-6.1-sol instead.`);
 	if (!model) throw new Error("TILLDONE_MODEL must not be empty.");
-	return { piBin: env.TILLDONE_PI_BIN || "pi", model, cwd: resolve(launchCwd, env.TILLDONE_CWD || "."), extension: resolve(appDirectory, "../../extensions/tilldone") };
+	return { piBin: env.TILLDONE_PI_BIN || "pi", model, cwd: resolve(launchCwd, env.TILLDONE_CWD || "."), extension: resolve(appDirectory, "extensions/tilldone") };
 }

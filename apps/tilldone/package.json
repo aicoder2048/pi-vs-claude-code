@@ -7,7 +7,7 @@
   "scripts": {
     "build": "bun build src/main.ts --target node --format cjs --external electron --outfile dist/main.cjs && bun build src/preload.ts --target node --format cjs --external electron --outfile dist/preload.cjs && bun build renderer/renderer.ts --target browser --outfile dist/renderer.js",
     "start": "bun run build && electron .",
-    "test": "bun test test/*.test.ts",
+    "test": "bun test test/*.test.ts extensions/tilldone/state.test.ts",
     "typecheck": "tsc --noEmit",
     "test:smoke": "bun run build && bun test/smoke.ts && bun test/api-smoke.ts"
   },

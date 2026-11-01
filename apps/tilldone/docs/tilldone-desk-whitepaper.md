@@ -12,7 +12,7 @@
 
 和楚河、弈境相比，这个应用有三点不同：
 
-1. **Harness Engineering：两套四层结构叠在一起。** 扩展自己是四层（L2 胶水 `index.ts`、L3 领域 `state.ts`、L4 渲染 `ui.ts`，L1 是 Pi），桌面端又是一套四层（L1 平台 = Pi 子进程 + Electron，L2 主进程胶水，L3 纯函数投影，L4 渲染页面）。两套结构只在一个地方相接：桌面端的 L3 直接 import 扩展 L3 的零依赖选择器 `parseDetails`、 `countByStatus`、 `current`、 `STATUS_ICON`。**扩展一行没改**，同一份扩展既能在 Pi TUI 里跑，也能被桌面端驱动。
+1. **Harness Engineering：两套四层结构叠在一起。** 扩展自己是四层（L2 胶水 `index.ts`、L3 领域 `state.ts`、L4 渲染 `ui.ts`，L1 是 Pi），桌面端又是一套四层（L1 平台 = Pi 子进程 + Electron，L2 主进程胶水，L3 纯函数投影，L4 渲染页面）。两套结构只在一个地方相接：桌面端的 L3 直接 import 扩展 L3 的零依赖选择器 `parseDetails`、 `countByStatus`、 `current`、 `STATUS_ICON`。桌面端加载的是自己的一份扩展副本（`apps/tilldone/extensions/tilldone/`），与 TUI 扩展只差门禁一处：只拦 `bash`、`edit`、`write`、`subagent`，其他工具（含 pstack 的 `pstack_todo` 等）都放行。
 2. **Loop Engineering：桌面端不进 Pi 进程，只在 RPC 线上观察双循环。** 楚河用 Pi SDK 在进程内装配 session；边牧桌面则以 `pi --mode rpc --no-extensions -e extensions/tilldone` 启动子进程，用 JSONL 收发。扩展在 run 内循环挂 `tool_call`（门禁 + 计数）、`tool_result`（细分提示），在 run 结束时挂 `agent_end`（督促），督促消息通过 steer 队列让 settle 外循环**在同一次 settle 里再起一个 run**。桌面端因此只把 `agent_settled` 当作“空闲”，`agent_end` 不算。
 3. **Prompt / Context Engineering：规矩写成模型读得懂的字符串。** 门禁拒绝理由、工具说明、认领任务时的“先想想要不要细分”、每 15 次工具调用一次的细分提示、督促消息，全部定义在扩展 L3 的常量里，是模型每一步都能看到的“护栏文本”。桌面端额外加了两条人对模型说话的通道：运行中发出的消息一律走 **steer**（下一步就送达），任务面板上的“细分”按钮把“请把 #N 拆小”作为一条普通消息发给模型，由模型决定怎么拆。
 
@@ -158,7 +158,7 @@ Pi TUI 能跑 TillDone，但有两处不够：
 
 | 规则 | 实现 |
 |---|---|
-| L1 不修改，`extensions/tilldone/` 一行都不改 | 桌面端以 `-e <repo>/extensions/tilldone` 加载扩展；扩展路径从 `app.getAppPath()` 解析（`desk/src/config.ts:8`） |
+| L1 不修改；TUI 扩展 `extensions/tilldone/` 不改，桌面端用自己的副本 | 桌面端以 `-e <app>/extensions/tilldone` 加载副本；扩展路径从 `app.getAppPath()` 解析（`desk/src/config.ts`） |
 | L2 是唯一持有可变状态的地方，不写业务规则 | `Desk` 类持有 `state`，每次只做 `this.state = reduce(this.state, record)`（`desk/src/desk.ts:26-36`） |
 | L3 不 import Electron、Node 或 L2/L4，`bun test` 不启动 Electron 就能跑 | `desk/src/domain.ts:6-10` 只 import 扩展的 `state.ts` 和同层的 `appearance.ts`、 `api-domain.ts` |
 | L4 只画视图模型、只发意图，不解析 RPC，不存业务状态 | `desk/renderer/renderer.ts:1-4` 的文件头注释；renderer 不 import 任何领域代码 |

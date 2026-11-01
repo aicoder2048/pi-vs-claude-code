@@ -1,6 +1,6 @@
 # 边牧任务桌面 · TillDone Desk
 
-A standalone Electron UI driving Pi as a child process over RPC. Pi is not embedded, and `extensions/tilldone/` is unchanged.
+A standalone Electron UI driving Pi as a child process over RPC. Pi is not embedded. The desk loads its **own copy** of the TillDone extension under `apps/tilldone/extensions/tilldone/` (plus the `themeMap.ts` helper), copied from the repository's `extensions/tilldone/`; the TUI extension stays untouched. The copy differs in one place, the gate (see below).
 
 Chinese name **边牧** (Border Collie); slogan *Don't stop until it's done* / **羊不进圈，边牧不歇**. Tasks are the sheep, the TillDone-equipped AI is the collie, the user is the shepherd. See `discussions/2026-10-29-tilldone-naming-border-collie.md` for the agreed metaphor.
 
@@ -76,17 +76,21 @@ The just recipe changes into `apps/tilldone`, matching the stock app's recipes. 
 TILLDONE_CWD="$PWD" just tilldone-desk
 ```
 
-The working directory is displayed in the status bar. The extension path is resolved from `app.getAppPath()` to `../../extensions/tilldone`, never from the working directory or a baked-in absolute path. This is a source-tree app, not a packaged distribution.
+The working directory is displayed in the status bar. The extension path is resolved from `app.getAppPath()` to `extensions/tilldone`, never from the working directory or a baked-in absolute path. This is a source-tree app, not a packaged distribution.
 
 The subprocess command is:
 
 ```text
-pi --mode rpc --no-extensions --model <model> -e <repo>/extensions/tilldone
+pi --mode rpc --no-extensions --model <model> -e <app>/extensions/tilldone
 ```
 
 Closing the app shuts down the child (stdin EOF, then bounded signal escalation if needed). A crash or exit shows an explicit warning and Restart button. Restart creates a **fresh Pi session**: the model starts with an empty context and an empty task list; appearance preferences are retained. The old conversation is not lost: Pi saves every session under `~/.pi/agent/sessions/`, so it can be read or resumed later in the Pi TUI (`pi --resume`). The desk itself does not resume sessions. The app does not submit a prompt automatically. The header's **New session (新会话)** button does the same restart on demand: it is enabled only while Pi is connected and idle (Stop a run first), asks for confirmation, and then replaces the child with a fresh Pi on a new session file.
 
 `--no-extensions` stays so that global extensions in `~/.pi/agent/extensions` cannot add their own gates, footers or prefills next to tilldone. Skills are loaded normally: Pi lists the user's and the project's skills in the system prompt and the model reads one only when needed.
+
+#### The desk's gate
+
+The TUI extension blocks every tool except `tilldone` and the read-only built-ins (`read`, `grep`, `find`, `ls`) until a task is in progress. That allowlist does not know about tools that other extensions add: with pstack on, `pstack_todo` was blocked at the start of every Poteto-mode session (5 times in the 2026-11-01 Blackjack run), costing a round-trip each time. The gate is work discipline, not a security boundary, so the desk's copy inverts it: only `bash`, `edit`, `write` and `subagent` need an active task, and every other tool passes. Dangerous commands still go through their own confirmation (pstack's bash check and the desk's confirm dialog).
 
 ## Four layers
 
@@ -97,12 +101,12 @@ Closing the app shuts down the child (stdin EOF, then bounded signal escalation 
 | L3 domain | `src/domain.ts`, `appearance.ts`, `api-domain.ts` | Pure `reduce(state, record)`, intent planning, task selection, localization, and `toViewModel(state)` |
 | L4 render | `renderer/` | Paint JSON views and send intents; no RPC parsing, domain imports, business state, or local storage |
 
-L3 imports no Node/Electron or L2/L4 code. Task snapshots use the existing extension's zero-dependency `parseDetails`; counts, current task and icons directly reuse **`countByStatus`, `current`, `STATUS_ICON`** from `extensions/tilldone/state.ts`. No duplicate task selectors are needed. Immutable domain values live only in L2's cell; local `desk_*` records supply transport and time facts. Appearance changes use the same pure transitions. The renderer has only DOM presentation state (draft, scroll position, open tool details), not a cached model.
+L3 imports no Node/Electron or L2/L4 code. Task snapshots use the existing extension's zero-dependency `parseDetails`; counts, current task and icons directly reuse **`countByStatus`, `current`, `STATUS_ICON`** from the desk's copy `extensions/tilldone/state.ts`. No duplicate task selectors are needed. Immutable domain values live only in L2's cell; local `desk_*` records supply transport and time facts. Appearance changes use the same pure transitions. The renderer has only DOM presentation state (draft, scroll position, open tool details), not a cached model.
 
 ## RPC details and limitations
 
 - Task data comes **only** from `tool_execution_end` for `toolName === "tilldone"`, using its complete `result.details` snapshot, including empty lists. Execution-start arguments are retained by tool-call ID; execution-end arguments are not used.
-- Each task shows how many tools started while it was in progress, counted in L3 from `tool_execution_start` (tilldone's own calls excluded), so the extension stays unchanged. These are the calls the extension's split hint counts, so the count is emphasized once it reaches that hint's threshold (`SPLIT_HINT_EVERY`, 15). Unlike the extension's counter, it accumulates across switches back to a task; a new list or clear resets it, and split subtasks start at zero.
+- Each task shows how many tools started while it was in progress, counted in L3 from `tool_execution_start` (tilldone's own calls excluded), so the extension needs no counter of its own. These are the calls the extension's split hint counts, so the count is emphasized once it reaches that hint's threshold (`SPLIT_HINT_EVERY`, 15). Unlike the extension's counter, it accumulates across switches back to a task; a new list or clear resets it, and split subtasks start at zero.
 - Each task also shows how many model requests Pi made while it was in progress: every `turn_start` (one turn is one request, whose reply can carry several tool calls) counts against the task in progress when it arrives. The turn that starts a task is not counted against it, the turn that marks it done is, and a closing reply after every task is done belongs to none. A new list, clear, and split reset it like the tool-call count.
 - Assistant `text_delta` values accumulate by `contentIndex`; `text_end` and `message_end` replace partial content with authoritative content. Tool results and user/custom message lifecycles do not duplicate transcript entries.
 - `agent_end` is not idle. The active-run latch clears at **`agent_settled`**, so automatic nudge continuations remain visibly running. `get_state` is queried initially, on lifecycle boundaries, and every two seconds for model, thinking level, streaming/compaction status. `tilldone-nudge` messages have a distinct style and label.

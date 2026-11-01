@@ -36,7 +36,7 @@ test("configuration defaults, overrides, extension resolution, and billing refus
 	expect(defaults.model).toBe("openai-codex/gpt-6.1-sol");
 	expect(defaults.piBin).toBe("pi");
 	expect(defaults.cwd).toBe("/tmp");
-	expect(defaults.extension).toBe(resolve(app, "../../extensions/tilldone"));
+	expect(defaults.extension).toBe(resolve(app, "extensions/tilldone"));
 	expect(loadConfig(app, { TILLDONE_MODEL: "openai-codex/custom", TILLDONE_CWD: "/work", TILLDONE_PI_BIN: fake }).piBin).toBe(fake);
 	for (const model of ["anthropic/claude", " ANTHROPIC/anything "]) expect(() => loadConfig(app, { TILLDONE_MODEL: model })).toThrow("metered API");
 });

@@ -3,7 +3,7 @@
  * Imports only pure domain modules, including the extension's zero-dependency task domain.
  * Local desk_* records carry clock and transport facts supplied by L2.
  */
-import { EMPTY_LIST, countByStatus, current, parseDetails, SPLIT_HINT_EVERY, STATUS_ICON, TOOL, type ListState } from "../../../extensions/tilldone/state.ts";
+import { EMPTY_LIST, countByStatus, current, parseDetails, SPLIT_HINT_EVERY, STATUS_ICON, TOOL, type ListState } from "../extensions/tilldone/state.ts";
 
 import { marked } from "marked";
 
