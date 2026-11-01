@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Option trading agent</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./renderer.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Options desk / Stage 0</p>
+      <h1>Option trading agent</h1>
+      <p class="advice-label">Advice only. No orders. No brokerage connection.</p>
+    </div>
+    <div class="session">
+      <p id="connection" role="status">Connecting to desktop…</p>
+      <p id="model" class="muted"></p>
+      <div class="actions">
+        <button id="stop" type="button" disabled>Stop</button>
+        <button id="restart" type="button" disabled>Restart Pi</button>
+      </div>
+    </div>
+  </header>
+  <p id="error" class="error" role="alert" hidden></p>
+  <main class="workspace">
+    <section class="panel conversation" aria-labelledby="conversation-title">
+      <div class="panel-heading">
+        <h2 id="conversation-title">Ask the agent</h2>
+        <p id="operation" class="muted" role="status">Waiting for Pi</p>
+      </div>
+      <div id="transcript" class="transcript" role="log" aria-label="Conversation" aria-live="polite">
+        <p class="empty">Ask a question to start. Nothing is sent automatically.</p>
+      </div>
+      <form id="question-form" class="composer">
+        <label for="question">Your question</label>
+        <textarea id="question" name="question" maxlength="16000" rows="3" placeholder="Ask about an options concept or check the hello tool…"></textarea>
+        <div class="composer-footer">
+          <p class="muted">Stage 0 verifies the Pi connection. Market data is not available yet.</p>
+          <button id="send" type="submit" class="primary" disabled>Send</button>
+        </div>
+      </form>
+    </section>
+    <aside class="side-column">
+      <section class="panel tool-panel" aria-labelledby="tools-title">
+        <div class="panel-heading"><h2 id="tools-title">Actual tool calls</h2></div>
+        <div id="tools" class="tool-list" role="log" aria-label="Tool log" aria-live="polite">
+          <p class="empty">No tools have run.</p>
+        </div>
+      </section>
+      <section class="panel market-space" aria-labelledby="market-title">
+        <p class="eyebrow">Next / Stage 1</p>
+        <h2 id="market-title">Market data</h2>
+        <p class="muted">Daily bars and an option chain will appear here once the market data connection is implemented.</p>
+        <p class="muted">No quotes or prices are loaded in Stage 0.</p>
+      </section>
+    </aside>
+  </main>
+</body>
+</html>

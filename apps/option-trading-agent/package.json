@@ -1,0 +1,27 @@
+{
+  "name": "option-trading-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Options trading advice desktop over external Pi RPC",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "bun scripts/build.ts",
+    "start": "bun scripts/build.ts --require-app && electron .",
+    "check": "bun run typecheck && bun run test && bun run build",
+    "test:smoke": "bun scripts/build.ts --require-app && bun tests/smoke.ts",
+    "verify:pi": "bun scripts/probe-pi.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/bun": "^1.3.0",
+    "electron": "^45.1.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.41"
+  },
+  "trustedDependencies": ["electron"]
+}

@@ -140,6 +140,23 @@ chinese-chess-check:
 chinese-chess-smoke:
     cd apps/chinese-chess && bun run test:smoke
 
+option-trading-agent-install:
+    cd apps/option-trading-agent && bun install
+
+alias option-trading-agent := option-trading-agent-start
+
+option-trading-agent-start:
+    cd apps/option-trading-agent && bun run start
+
+option-trading-agent-test:
+    cd apps/option-trading-agent && bun run test
+
+option-trading-agent-check:
+    cd apps/option-trading-agent && bun run check
+
+option-trading-agent-smoke:
+    cd apps/option-trading-agent && bun run test:smoke
+
 # utils
 
 # Open pi with one or more stacked extensions in a new terminal: just open minimal tool-counter

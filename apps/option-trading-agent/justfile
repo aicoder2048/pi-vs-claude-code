@@ -1,0 +1,17 @@
+default:
+    @just --list
+
+install:
+    bun install
+
+start:
+    bun run start
+
+test:
+    bun run test
+
+check:
+    bun run check
+
+smoke:
+    bun run test:smoke
