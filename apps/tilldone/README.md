@@ -42,7 +42,7 @@ The visible product name, native window title, and slogan follow the selected la
 
 | Language | Product name | Slogan |
 | --- | --- | --- |
-| 中文 | 边牧任务桌面 | 交给边牧(AI牧羊犬)，安心放牧(任务必达) |
+| 中文 | 边牧任务桌面 | 羊不进圈，边牧不歇 |
 | English | TillDone Desk | Don't stop until it's done |
 
 The header includes an original inline SVG AI border-collie logo: black-and-white collie markings, a circuit detail, and a check-mark collar chip. Its accents follow the theme, and its accessible label follows the language. It requires no external asset, image permission, network request, or additional dependency. Narrow windows allow the slogan to wrap without hiding it or crowding the theme shortcuts. Internal package/user-data names are unchanged so existing preferences remain available.

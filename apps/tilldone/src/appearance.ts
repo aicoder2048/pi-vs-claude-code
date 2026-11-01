@@ -17,7 +17,7 @@ export function parsePreferences(raw: unknown): Preferences | undefined {
 	return { theme: r.theme as Preferences["theme"], language: r.language as Preferences["language"] };
 }
 const zh = {
-	productName: "边牧任务桌面", slogan: "交给边牧(AI牧羊犬)，安心放牧(任务必达)", logo: "AI 边牧标志",
+	productName: "边牧任务桌面", slogan: "羊不进圈，边牧不歇", logo: "AI 边牧标志",
 	workspace: "PI · 任务工作台", settings: "设置", theme: "主题", themeShortcuts: "快捷切换主题", system: "系统", light: "浅色", dark: "深色", language: "语言",
 	chat: "对话", taskPanel: "TillDone 任务面板", taskList: "任务列表", empty: "让 Pi 制定计划，并逐项完成任务。",
 	message: "发送消息给 Pi", keyboard: "Enter 发送 · Shift+Enter 换行 · Ctrl/⌘+V 粘贴图片", placeholder: "你想完成什么任务？",
