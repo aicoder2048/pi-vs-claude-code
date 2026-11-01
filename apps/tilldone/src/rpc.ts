@@ -3,7 +3,7 @@
  * All stdout records are delivered to the domain; stderr is diagnostic only.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { Config } from "./config.ts";
+import { piArgs, type Config } from "./config.ts";
 import { JsonlDecoder } from "./jsonl.ts";
 import type { RecordValue } from "./domain.ts";
 interface Pending {
@@ -22,7 +22,7 @@ export class PiProcess {
 	constructor(private readonly config: Config, private readonly receive: (record: RecordValue) => void, private readonly session?: string) {}
 	start(): void {
 		if (this.child) throw new Error("PiProcess can only be started once.");
-		const c = this.child = spawn(this.config.piBin, ["--mode", "rpc", "--no-extensions", "--model", this.config.model, "-e", this.config.extension, ...(this.session ? ["--session", this.session] : [])], {
+		const c = this.child = spawn(this.config.piBin, piArgs(this.config, this.session), {
 			cwd: this.config.cwd, stdio: ["pipe", "pipe", "pipe"], shell: false,
 		});
 		const decoder = new JsonlDecoder((record) => {

@@ -12,6 +12,7 @@ interface View {
 		shortcuts: { id: string; label: string; icon: string; selected: boolean }[] };
 	connection: string; error: string; diagnostics: string;
 	status: { model: string; thinking: string; running: boolean; cwd: string; tilldone: string };
+	poteto: { available: boolean; active: boolean };
 	input: { enabled: boolean; running: boolean; newSession: boolean; images: boolean };
 	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number;
 		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean; splitting: boolean;
@@ -187,6 +188,7 @@ function render(view: View) {
 	$("diagnostics").hidden = !view.diagnostics;
 	setText("stderr", view.diagnostics);
 	$<HTMLButtonElement>("send").disabled = !view.input.enabled;
+	renderPoteto(view.poteto, ui);
 	$<HTMLButtonElement>("new-session").disabled = !view.input.newSession;
 	const newSessionDialog = $<HTMLDialogElement>("new-session-dialog");
 	if (!view.input.newSession && newSessionDialog.open) newSessionDialog.close();
@@ -285,6 +287,14 @@ function render(view: View) {
 	}
 	renderConfirm(view.dialog?.kind === "confirm" ? view.dialog : null, ui);
 	renderAsk(view.dialog && view.dialog.kind !== "confirm" ? view.dialog : null, ui);
+}
+// Read-only: Poteto Mode follows how the desk was started (TILLDONE_PSTACK=1), there is no switch.
+function renderPoteto(poteto: View["poteto"], ui: View["ui"]) {
+	const badge = $("poteto");
+	badge.hidden = !poteto.available;
+	badge.dataset.state = poteto.active ? "on" : "pending";
+	setText("poteto", poteto.active ? ui.potetoOn : ui.potetoPending);
+	badge.title = ui.potetoTitle;
 }
 const countdown = (seconds: number | null, ui: View["ui"]) => seconds === null ? "" : `${ui.closesIn} ${seconds} ${ui.seconds}`;
 function renderConfirm(confirm: View["dialog"], ui: View["ui"]) {

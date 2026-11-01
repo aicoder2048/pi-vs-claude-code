@@ -32,6 +32,7 @@ try {
 	assert.equal(await page.locator("#send").innerText(), "发送");
 	assert.equal(await page.locator("#theme").inputValue(), "system");
 	assert.equal(await page.locator("header select, #focus-tasks").count(), 0);
+	assert.equal(await page.locator("#poteto").isVisible(), false, "Poteto switch stays hidden without pstack");
 	assert.equal(await page.locator("#settings-panel").isVisible(), false);
 	await page.locator("#settings-toggle").click();
 	assert.equal(await page.locator("#settings-panel").isVisible(), true);

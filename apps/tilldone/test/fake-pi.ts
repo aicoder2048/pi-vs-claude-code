@@ -37,6 +37,13 @@ async function handle(r: any) {
 	if (r.type === "abort") { emit({ type: "agent_settled", aborted: true }); return; }
 	if (r.type !== "prompt") return;
 	if (r.message === "crash") process.exit(9);
+	// Slash commands: echo the user message Pi would record; /skill:name expands like Pi does.
+	if (r.message.startsWith("/")) {
+		const skill = /^\/skill:([\w-]+)\s?([\s\S]*)$/.exec(r.message);
+		const text = skill ? `<skill name="${skill[1]}" location="/fake/${skill[1]}/SKILL.md">\n(fake skill body)\n</skill>\n\n${skill[2]}` : r.message;
+		emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text }] } });
+		return;
+	}
 	if (r.message === "busy") { emit({ type: "agent_start" }); return; }
 	if (r.message === "markdown") {
 		const text = "## 周度小结\n\n第一行\n第二行，**加粗** 和 `inline`\n\n- 一\n- [x] 二\n\n| 指标 | 数值 |\n|:--|--:|\n| 收盘 | 135.2 |\n\n```ts\nconst a = 1 < 2;\n```\n\n> 引用\n\n见 [文档](https://example.com/docs)。<img src=x onerror=\"alert(1)\"> [脚本](javascript:alert(1))";

@@ -1,10 +1,10 @@
 /** TillDone Desk L2 tests: real pipes to an injected fake Pi, never a real model. */
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { JsonlDecoder } from "../src/jsonl.ts";
-import { loadConfig } from "../src/config.ts";
+import { loadConfig, piArgs } from "../src/config.ts";
 import { PiProcess } from "../src/rpc.ts";
 import { Desk } from "../src/desk.ts";
 const app = resolve(import.meta.dir, "..");
@@ -39,6 +39,31 @@ test("configuration defaults, overrides, extension resolution, and billing refus
 	expect(defaults.extension).toBe(resolve(app, "extensions/tilldone"));
 	expect(loadConfig(app, { TILLDONE_MODEL: "openai-codex/custom", TILLDONE_CWD: "/work", TILLDONE_PI_BIN: fake }).piBin).toBe(fake);
 	for (const model of ["anthropic/claude", " ANTHROPIC/anything "]) expect(() => loadConfig(app, { TILLDONE_MODEL: model })).toThrow("metered API");
+});
+test("pstack is off by default: launch args keep Pi isolated to the TillDone extension", () => {
+	for (const flag of [undefined, "", "0"]) {
+		const c = loadConfig(app, flag === undefined ? {} : { TILLDONE_PSTACK: flag }, "/tmp");
+		expect(c.pstackExtension).toBeUndefined();
+		expect(piArgs(c)).toEqual(["--mode", "rpc", "--no-extensions", "--model", c.model, "-e", c.extension]);
+	}
+});
+test("TILLDONE_PSTACK=1 trusts project files and allowlists only the project-local pstack extension", () => {
+	const work = mkdtempSync(join(tmpdir(), "tilldone-pstack-"));
+	try {
+		const extension = join(work, ".pi/npm/node_modules/pi-pstack/extensions/pstack");
+		mkdirSync(extension, { recursive: true });
+		const c = loadConfig(app, { TILLDONE_PSTACK: "1", TILLDONE_CWD: work }, "/tmp");
+		expect(c.pstackExtension).toBe(extension);
+		expect(piArgs(c)).toEqual(["--mode", "rpc", "--no-extensions", "--model", c.model, "-e", c.extension, "-e", extension, "-a"]);
+		expect(piArgs(c, "/s.jsonl").slice(-3)).toEqual(["-a", "--session", "/s.jsonl"]);
+	} finally { rmSync(work, { recursive: true, force: true }); }
+});
+test("TILLDONE_PSTACK fails fast when pstack is missing or the value is unrecognized", () => {
+	const work = mkdtempSync(join(tmpdir(), "tilldone-nopstack-"));
+	try {
+		expect(() => loadConfig(app, { TILLDONE_PSTACK: "1", TILLDONE_CWD: work })).toThrow("pi install npm:pi-pstack -l");
+		for (const flag of ["yes", "true", "2"]) expect(() => loadConfig(app, { TILLDONE_PSTACK: flag, TILLDONE_CWD: work })).toThrow("TILLDONE_PSTACK");
+	} finally { rmSync(work, { recursive: true, force: true }); }
 });
 test("command responses correlate by ID, not order; failures, timeouts and crashes reject", async () => {
 	const records: any[] = [];
@@ -234,4 +259,35 @@ test("Desk reports a copy it cannot perform instead of pretending it worked", as
 		await until(() => Boolean(last?.conversation.some((e) => e.copyable && e.text.includes("<img"))));
 		await expect(desk.send({ type: "copyMessage", id: last!.conversation.find((e) => e.copyable)!.id })).rejects.toThrow("Cannot copy");
 	} finally { await desk.stop(); }
+});
+test("with pstack each session's first prompt reaches Pi with the skill prefix, later ones do not", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tilldone-poteto-"));
+	const log = join(dir, "stdin.jsonl");
+	const old = process.env.FAKE_PI_LOG;
+	process.env.FAKE_PI_LOG = log;
+	let view: ReturnType<Desk["view"]>;
+	// Any existing directory stands in for the pstack extension; fake Pi ignores -e.
+	const desk = new Desk({ ...config(), pstackExtension: app }, (next) => { view = next; });
+	const prompts = () => readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => r.type === "prompt").map((r) => r.message);
+	desk.start();
+	try {
+		await until(() => view?.connection === "ready");
+		expect(view!.poteto).toEqual({ available: true, active: false });
+		await desk.send({ type: "submit", message: "/do it" });
+		await desk.send({ type: "submit", message: "plan the work" });
+		await desk.send({ type: "submit", message: "/next" });
+		await until(() => view!.conversation.length === 3);
+		expect(view!.conversation.map((m) => m.text)).toEqual(["/do it", "/skill:poteto-mode plan the work", "/next"]);
+		expect(view!.poteto.active).toBe(true);
+		await desk.send({ type: "newSession" });
+		await until(() => view?.connection === "ready" && view.conversation.length === 0);
+		expect(view!.poteto).toEqual({ available: true, active: false });
+		await desk.send({ type: "submit", message: "again" });
+		await until(() => prompts().length === 4);
+		expect(prompts()).toEqual(["/do it", "/skill:poteto-mode plan the work", "/next", "/skill:poteto-mode again"]);
+	} finally {
+		await desk.stop();
+		if (old === undefined) delete process.env.FAKE_PI_LOG; else process.env.FAKE_PI_LOG = old;
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

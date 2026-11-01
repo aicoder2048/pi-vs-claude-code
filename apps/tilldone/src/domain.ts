@@ -65,6 +65,11 @@ export interface State {
 	readonly sequence: number;
 	/** Waiting extension dialogs, shown one at a time in arrival order. */
 	readonly dialogs: readonly Dialog[];
+	/**
+	 * pstack Poteto Mode. With pstack loaded (TILLDONE_PSTACK=1) every session runs in it: the session's first idle prompt
+	 * carries the skill prefix, and pstack keeps the mode for the rest of the session. `on` means this session has been switched on.
+	 */
+	readonly poteto: { readonly available: boolean; readonly on: boolean };
 	/** Pi's steering and follow-up queues: messages accepted but not yet delivered to the model. */
 	readonly queued: readonly string[];
 	/** Tasks whose split button was pressed and whose split has not landed yet. */
@@ -92,9 +97,9 @@ export interface State {
 	readonly systemDark: boolean;
 	readonly api: ApiState;
 }
-export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false): State {
+export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false, pstack = false): State {
 	return { list: EMPTY_LIST, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
-		dialogs: [], statuses: {}, now: 0, runActive: false, streaming: false, compacting: false,
+		poteto: { available: pstack, on: false }, dialogs: [], statuses: {}, now: 0, runActive: false, streaming: false, compacting: false,
 		queued: [], pendingSplits: [], toolCalls: {}, modelCalls: {}, model, imageInput: false, thinking: "unknown", cwd, sessionFile: "", connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
 }
 const text = (value: unknown): string => typeof value === "string" ? value : "";
@@ -154,6 +159,7 @@ export function reduce(state: State, record: RecordValue): State {
 		}
 		case "desk_system_theme": return { ...state, systemDark: record.dark === true };
 		case "desk_focus_tasks": return { ...state, taskFocus: state.taskFocus + 1 };
+		case "desk_poteto_on": return { ...state, poteto: { ...state.poteto, on: true } };
 		case "desk_dialog_closed": return { ...state, dialogs: state.dialogs.filter((d) => d.id !== record.id) };
 		case "desk_error": return { ...state, error: text(record.error) };
 		case "desk_stderr": return { ...state, diagnostics: (state.diagnostics + text(record.text)).slice(-8000) };
@@ -342,8 +348,19 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 		if (!intent.message.trim() && !images.length) return empty;
 		if (images.length && !state.imageInput) return empty;
 		// While running, a message always steers: the user is redirecting the work in progress.
-		const command: RecordValue = { type: isRunning(state) ? "steer" : "prompt", message: intent.message.trim() };
+		const message = intent.message.trim();
+		const command: RecordValue = { type: isRunning(state) ? "steer" : "prompt", message };
 		if (images.length) command.images = images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }));
+		// With pstack, the session's first idle prompt turns Poteto Mode on through pstack's own skill command.
+		// Steers and other slash commands go through unchanged; a hand-typed /skill:poteto-mode counts as switching on.
+		const { available, on } = state.poteto;
+		if (available && !on && command.type === "prompt") {
+			if (POTETO_SKILL.test(message)) return { commands: [command], events: [{ type: "desk_poteto_on" }] };
+			if (!message.startsWith("/")) {
+				command.message = message ? `/skill:poteto-mode ${message}` : "/skill:poteto-mode";
+				return { commands: [command], events: [{ type: "desk_poteto_on" }] };
+			}
+		}
 		return { commands: [command], events: [] };
 	}
 	return empty;
@@ -392,6 +409,16 @@ function linksIn(source: string): string[] {
 	return hrefs;
 }
 const messageText = (m: Message) => Object.entries(m.blocks).sort(([a], [b]) => Number(a) - Number(b)).map(([, value]) => value).join("\n");
+const POTETO_SKILL = /^\/skill:poteto-mode(?:\s|$)/;
+// Pi expands `/skill:name args` into the whole skill file plus args; show what the user typed instead.
+const EXPANDED_SKILL = /^<skill name="([^"]+)"[^>]*>[\s\S]*?<\/skill>(?:\n\n)?/;
+export function collapseSkill(text: string): string {
+	const match = EXPANDED_SKILL.exec(text);
+	if (!match) return text;
+	const rest = text.slice(match[0].length);
+	return rest ? `/skill:${match[1]} ${rest}` : `/skill:${match[1]}`;
+}
+const shownText = (m: Message) => m.kind === "user" ? collapseSkill(messageText(m)) : messageText(m);
 const copyable = (m: Message) => m.kind === "assistant" && messageText(m).trim() !== "";
 const isSilentAssistant = (m: Message) => m.kind === "assistant" && !m.error && Object.values(m.blocks).every((value) => !value.trim());
 export function toViewModel(state: State) {
@@ -406,6 +433,7 @@ export function toViewModel(state: State) {
 		appearance: appearanceView(state.preferences, state.systemDark),
 		connection: state.connection, error: state.error, diagnostics: state.diagnostics,
 		status: { model: state.model, thinking: state.thinking, running: isRunning(state), cwd: state.cwd, tilldone: state.statuses.tilldone ?? "" },
+		poteto: { available: state.poteto.available, active: state.poteto.on },
 		input: { enabled: state.connection === "ready", running: isRunning(state), newSession: state.connection === "ready" && !isRunning(state), images: state.connection === "ready" && state.imageInput },
 		tasks: { title: state.list.title ?? "TillDone", description: state.list.description ?? "", done: counts.done,
 			total: state.list.tasks.length, progress: `${counts.done} / ${state.list.tasks.length} ${ui.done}`,
@@ -422,7 +450,7 @@ export function toViewModel(state: State) {
 			}
 			const m = messages.get(entry.id)!;
 			return entryFor(m, ui, () => ({ id: m.id, kind: m.kind, label: { assistant: ui.assistant, user: ui.user, nudge: ui.nudge, notice: ui.notice }[m.kind],
-				text: messageText(m), images: m.images, error: m.error, args: "", result: "", copyable: copyable(m) }));
+				text: shownText(m), images: m.images, error: m.error, args: "", result: "", copyable: copyable(m) }));
 		}),
 		dialog: state.dialogs.length ? dialogView(state.dialogs[0], state.now) : null,
 	};

@@ -20,7 +20,7 @@ export class Desk {
 		private readonly options: { preferences?: Preferences; systemDark?: boolean; savePreferences?: (preferences: Preferences) => void;
 			credentials?: PiCredentials; openExternal?: (url: string) => Promise<void>; writeClipboard?: (text: string) => void;
 			sessionExists?: (path: string) => boolean } = {}) {
-		this.state = initialState(config.model, config.cwd, options.preferences, options.systemDark);
+		this.state = initialState(config.model, config.cwd, options.preferences, options.systemDark, Boolean(config.pstackExtension));
 		if (options.credentials) this.state = reduce(this.state, { type: "desk_api_summary", summary: options.credentials.summary() });
 	}
 	view() { return toViewModel(this.state); }
@@ -52,7 +52,9 @@ export class Desk {
 	/** Starts Pi; with a session path it resumes that session file. */
 	start(session?: string): void {
 		const generation = ++this.generation;
-		this.state = { ...initialState(this.config.model, this.config.cwd, this.state.preferences, this.state.systemDark), api: { ...this.state.api, open: false, saving: false } };
+		// A resumed session keeps Poteto Mode (pstack restores it from the session file); a fresh one switches on again.
+		const poteto = { ...this.state.poteto, on: Boolean(session) && this.state.poteto.on };
+		this.state = { ...initialState(this.config.model, this.config.cwd, this.state.preferences, this.state.systemDark, Boolean(this.config.pstackExtension)), poteto, api: { ...this.state.api, open: false, saving: false } };
 		this.dispatch({ type: "desk_tick", now: Date.now() });
 		const pi = this.pi = new PiProcess(this.config, (record) => {
 			if (generation !== this.generation) return;

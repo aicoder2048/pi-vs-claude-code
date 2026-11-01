@@ -2,5 +2,8 @@
   "theme": "synthwave",
   "prompts": [
     "../.claude/commands"
+  ],
+  "packages": [
+    "npm:pi-pstack"
   ]
 }

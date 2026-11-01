@@ -122,6 +122,10 @@ tilldone-desk-install:
 tilldone-desk:
     cd apps/tilldone && bun run start
 
+# Launch the TillDone desktop app with pstack; works in the repo root (where pstack is installed) unless TILLDONE_CWD is set
+tilldone-with-pstack:
+    cd apps/tilldone && TILLDONE_CWD="${TILLDONE_CWD:-{{justfile_directory()}}}" TILLDONE_PSTACK=1 bun run start
+
 # Run offline TillDone desktop tests
 tilldone-desk-test:
     cd apps/tilldone && bun run test

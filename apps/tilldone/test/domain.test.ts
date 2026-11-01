@@ -1,7 +1,7 @@
 /** TillDone Desk L3 tests: recorded protocol projection, pure transitions, and intent rules. */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { initialState, reduce, toViewModel, planIntent, parseIntent, immediateUIResponse, viewChanged } from "../src/domain.ts";
+import { initialState, reduce, toViewModel, planIntent, parseIntent, immediateUIResponse, viewChanged, collapseSkill } from "../src/domain.ts";
 const records = readFileSync(new URL("fixtures/rpc-probe.jsonl", import.meta.url), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.dir === "out").map((r) => r.rec);
 const initial = () => initialState("openai-codex/gpt-6.1-sol", "/work");
 
@@ -444,5 +444,40 @@ describe("opening a link in a reply", () => {
 	test("links in the reply that are not plain http(s) addresses are not opened", () => {
 		const s = reply(), id = idOf(s, "assistant");
 		for (const url of ["javascript:alert(1)", "https://user:pw@evil.example.com/", "/docs"]) expect(open(s, id, url).externalUrl).toBeUndefined();
+	});
+});
+describe("pstack Poteto Mode", () => {
+	const ready = (pstack = true) => reduce(initialState("openai-codex/gpt-6.1-sol", "/w", undefined, false, pstack), { type: "response", command: "get_state", success: true, data: { model: { provider: "openai-codex", id: "gpt-6.1-sol" }, thinkingLevel: "low", isStreaming: false } });
+	const apply = (state: ReturnType<typeof ready>, plan: { events: any[] }) => plan.events.reduce(reduce, state);
+	test("without pstack nothing is prefixed and no badge shows", () => {
+		const s = ready(false);
+		expect(toViewModel(s).poteto).toEqual({ available: false, active: false });
+		expect(planIntent(s, { type: "submit", message: "分析 GOOG" })).toEqual({ commands: [{ type: "prompt", message: "分析 GOOG" }], events: [] });
+	});
+	test("with pstack only the session's first idle prompt carries the skill prefix", () => {
+		let s = ready();
+		expect(toViewModel(s).poteto).toEqual({ available: true, active: false });
+		const first = planIntent(s, { type: "submit", message: " 分析 GOOG " });
+		expect(first.commands).toEqual([{ type: "prompt", message: "/skill:poteto-mode 分析 GOOG" }]);
+		s = apply(s, first);
+		expect(toViewModel(s).poteto.active).toBe(true);
+		expect(planIntent(s, { type: "submit", message: "继续" }).commands).toEqual([{ type: "prompt", message: "继续" }]);
+	});
+	test("steers and other slash commands pass unchanged and leave it pending", () => {
+		const s = ready();
+		expect(planIntent(reduce(s, { type: "agent_start" }), { type: "submit", message: "redirect" })).toEqual({ commands: [{ type: "steer", message: "redirect" }], events: [] });
+		expect(planIntent(s, { type: "submit", message: "/setup-pstack" })).toEqual({ commands: [{ type: "prompt", message: "/setup-pstack" }], events: [] });
+	});
+	test("a hand-typed /skill:poteto-mode is sent as is and counts as switching on", () => {
+		const plan = planIntent(ready(), { type: "submit", message: "/skill:poteto-mode go" });
+		expect(plan.commands).toEqual([{ type: "prompt", message: "/skill:poteto-mode go" }]);
+		expect(apply(ready(), plan).poteto.on).toBe(true);
+	});
+	test("an expanded skill shows as the command the user typed", () => {
+		const skill = '<skill name="poteto-mode" location="/x/SKILL.md">\nReferences...\n# Poteto\n</skill>\n\n分析 GOOG';
+		const s = reduce(ready(), { type: "message_start", message: { role: "user", content: [{ type: "text", text: skill }] } });
+		expect(toViewModel(s).conversation.at(-1)?.text).toBe("/skill:poteto-mode 分析 GOOG");
+		expect(collapseSkill('<skill name="a" location="b">x</skill>')).toBe("/skill:a");
+		expect(collapseSkill("plain <skill> text")).toBe("plain <skill> text");
 	});
 });

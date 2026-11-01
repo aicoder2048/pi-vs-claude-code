@@ -14,6 +14,10 @@ start:
 # 安装依赖并启动，应用退出后（连同 pi 子进程）返回命令行
 tilldone: install start
 
+# 开启 pstack 启动：工作目录默认是仓库根目录（pstack 装在那里），可用 TILLDONE_CWD 覆盖
+tilldone-with-pstack: install
+    TILLDONE_CWD="${TILLDONE_CWD:-{{justfile_directory()}}/../..}" TILLDONE_PSTACK=1 bun run start
+
 # 离线测试（不调用真实模型）
 test:
     bun run test

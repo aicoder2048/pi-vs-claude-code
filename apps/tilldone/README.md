@@ -67,6 +67,7 @@ Skin changes use a 320ms fade plus paint-property transitions, without recreatin
 | `TILLDONE_MODEL` | `openai-codex/gpt-6.1-sol` |
 | `TILLDONE_PI_BIN` | `pi` from PATH |
 | `TILLDONE_CWD` | Electron's startup `process.cwd()` |
+| `TILLDONE_PSTACK` | unset (off); `1` loads pstack and runs every session in Poteto Mode, see below |
 
 **All `anthropic/*` models are rejected before window creation or child spawn**, with a billing explanation and nonzero exit. That API is metered and has no funded credit. The renderer cannot change models or submit arbitrary RPC commands.
 
@@ -91,6 +92,26 @@ Closing the app shuts down the child (stdin EOF, then bounded signal escalation 
 #### The desk's gate
 
 The TUI extension blocks every tool except `tilldone` and the read-only built-ins (`read`, `grep`, `find`, `ls`) until a task is in progress. That allowlist does not know about tools that other extensions add: with pstack on, `pstack_todo` was blocked at the start of every Poteto-mode session (5 times in the 2026-11-01 Blackjack run), costing a round-trip each time. The gate is work discipline, not a security boundary, so the desk's copy inverts it: only `bash`, `edit`, `write` and `subagent` need an active task, and every other tool passes. Dangerous commands still go through their own confirmation (pstack's bash check and the desk's confirm dialog).
+
+#### pstack (opt-in)
+
+`TILLDONE_PSTACK=1` loads [pi-pstack](https://www.npmjs.com/package/pi-pstack) from the **working directory's** project-local install (`pi install npm:pi-pstack -l` there). The command becomes:
+
+```text
+pi --mode rpc --no-extensions --model <model> -e <app>/extensions/tilldone -e <cwd>/.pi/npm/node_modules/pi-pstack/extensions/pstack -a
+```
+
+`--no-extensions` stays on, so only these two extensions load. The pstack extension adds the `subagent` tool, `/poteto-mode`, and `/setup-pstack`. Role-to-model mapping is read from `~/.pi/agent/pstack/models.json`. **`-a` trusts every project-local Pi file in the working directory**, which is what lets pstack's skills load in non-interactive RPC mode; enable it only for projects you trust. If pstack is not installed in the working directory, or the value is anything other than `1`, `0`, or empty, the app refuses to start with an explanation.
+
+```sh
+just tilldone-with-pstack   # same recipe name in the repo root and in apps/tilldone
+```
+
+Both work in the repository root, where pstack is installed (`pi install npm:pi-pstack -l` there); set `TILLDONE_CWD` to point them at another project that has its own pstack install.
+
+**`TILLDONE_PSTACK=1` means Poteto Mode; there is no separate switch.** The session's first prompt sent while idle goes out as `/skill:poteto-mode <your message>`, and pstack keeps the mode for the rest of the session, so later prompts are sent as typed. Steers and other `/` commands are not prefixed; a hand-typed `/skill:poteto-mode …` is sent as is and counts as switching on. A new session switches on again with its first prompt; a resumed session stays on, since pstack restores the mode from the session file. The header shows a read-only **Poteto Mode** badge ("starts with the first message" until then). To run without pstack, start with `just tilldone`. The `/poteto-mode <task>` command itself fails over RPC (`ctx.sendUserMessage is not a function`, a pstack bug), which is why the desk uses `/skill:poteto-mode`. Pi expands that into the whole skill file; the conversation shows it collapsed back to `/skill:poteto-mode <your message>`.
+
+In Poteto Mode the model keeps two lists: `pstack_todo` for pstack's process steps (read the principles, the matched playbook's steps copied verbatim) and `tilldone` for the work items shown in the task panel. Only `tilldone` drives the panel, the gate, and the nudge.
 
 ## Four layers
 

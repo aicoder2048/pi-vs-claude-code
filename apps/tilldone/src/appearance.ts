@@ -33,7 +33,7 @@ const zh = {
 	copy: "复制 Markdown", copied: "已复制",
 	toolCallOne: "1 工具", toolCalls: "{n} 工具", toolCallsTitle: "这个任务进行期间边牧调用其他工具的次数（不含管理清单的 tilldone 调用）；每满 {every} 次会提醒边牧考虑细分",
 	modelCallOne: "1 模型", modelCalls: "{n} 模型", modelCallsTitle: "这个任务进行期间边牧请求大模型的次数：每次请求是一个 turn，一次回复里可能带若干个工具调用",
-	newSession: "新会话", newSessionTitle: "开始新会话？", newSessionMessage: "将重启 Pi：当前对话和任务清单都会清空，模型不再记得之前的内容。", cancel: "取消", newSessionConfirm: "开始新会话",
+	potetoOn: "Poteto 模式", potetoPending: "Poteto 模式 · 首条消息开启", potetoTitle: "用 TILLDONE_PSTACK=1（just tilldone-with-pstack）启动：每个会话的第一条消息会开启 pstack 的 Poteto 模式（规划、按 playbook 做事、必要时分派 subagent）。不想用就用 just tilldone 启动。", newSession: "新会话", newSessionTitle: "开始新会话？", newSessionMessage: "将重启 Pi：当前对话和任务清单都会清空，模型不再记得之前的内容。", cancel: "取消", newSessionConfirm: "开始新会话",
 };
 export type Copy = typeof zh;
 const en: Copy = {
@@ -53,7 +53,7 @@ const en: Copy = {
 	copy: "Copy Markdown", copied: "Copied",
 	toolCallOne: "1 tool", toolCalls: "{n} tools", toolCallsTitle: "Other tools Pi called while this task was in progress (tilldone's own list calls not included); every {every} calls it is reminded to consider splitting",
 	modelCallOne: "1 llm", modelCalls: "{n} llms", modelCallsTitle: "Model requests Pi made while this task was in progress: each request is one turn, and one reply can carry several tool calls",
-	newSession: "New session", newSessionTitle: "Start a new session?", newSessionMessage: "Pi restarts: the conversation and task list are cleared, and the model forgets everything before.", cancel: "Cancel", newSessionConfirm: "Start new session",
+	potetoOn: "Poteto Mode", potetoPending: "Poteto Mode · starts with the first message", potetoTitle: "Started with TILLDONE_PSTACK=1 (just tilldone-with-pstack): each session's first message turns on pstack Poteto Mode (plan, follow a playbook, delegate to subagents when useful). Start with just tilldone to run without it.", newSession: "New session", newSessionTitle: "Start a new session?", newSessionMessage: "Pi restarts: the conversation and task list are cleared, and the model forgets everything before.", cancel: "Cancel", newSessionConfirm: "Start new session",
 };
 export function copyFor(language: Preferences["language"]): Copy { return language === "en" ? en : zh; }
 export function appearanceView(preferences: Preferences, systemDark: boolean) {
