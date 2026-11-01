@@ -13,7 +13,8 @@ interface View {
 	status: { model: string; thinking: string; running: boolean; cwd: string; tilldone: string };
 	input: { enabled: boolean; running: boolean; newSession: boolean; images: boolean };
 	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number;
-		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean; splitting: boolean }[] };
+		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean; splitting: boolean;
+			toolCallsLabel: string; toolCallsTitle: string; heavy: boolean }[] };
 	queued: string[];
 	conversation: { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string }[];
 	confirm: { id: string; title: string; message: string; remainingSeconds: number | null } | null;
@@ -206,6 +207,11 @@ function render(view: View) {
 			li.className = task.current ? "current" : task.status;
 			li.setAttribute("aria-label", `${task.statusLabel}: ${task.text}`);
 			li.append(node("span", `${task.icon}  ${task.label}  ${task.text}`));
+			if (task.toolCallsLabel) {
+				const calls = node("small", task.toolCallsLabel);
+				calls.className = task.heavy ? "tool-calls heavy" : "tool-calls"; calls.title = task.toolCallsTitle;
+				li.append(calls);
+			}
 			if (task.splittable) {
 				const split = node("button", task.splitting ? ui.splitting : ui.split);
 				split.type = "button"; split.className = "split"; split.title = ui.splitTitle; split.disabled = task.splitting;

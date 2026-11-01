@@ -30,6 +30,7 @@ const zh = {
 	deny: "拒绝", allow: "允许", closesIn: "自动关闭倒计时", seconds: "秒",
 	image: "图片", removeImage: "移除图片", imagesUnsupported: "当前模型不支持图片输入，图片未添加。", imageRejected: "只能粘贴 PNG、JPEG、GIF 或 WebP，单张不超过 20 MB，最多 10 张。",
 	split: "细分", splitting: "细分中…", splitTitle: "让边牧把这个任务拆成更小的子任务", splitRequest: "请把任务 #{id}「{text}」细分成更小的子任务：用 tilldone split（id={id}）原位替换，然后继续。",
+	toolCallOne: "1 次工具调用", toolCalls: "{n} 次工具调用", toolCallsTitle: "这个任务进行期间边牧调用其他工具的次数（不含管理清单的 tilldone 调用）；每满 {every} 次会提醒边牧考虑细分",
 	newSession: "新会话", newSessionTitle: "开始新会话？", newSessionMessage: "将重启 Pi：当前对话和任务清单都会清空，模型不再记得之前的内容。", cancel: "取消", newSessionConfirm: "开始新会话",
 };
 export type Copy = typeof zh;
@@ -47,6 +48,7 @@ const en: Copy = {
 	deny: "Deny", allow: "Allow", closesIn: "Closes in", seconds: "s",
 	image: "image", removeImage: "Remove image", imagesUnsupported: "The current model does not accept images; the image was not added.", imageRejected: "Paste PNG, JPEG, GIF or WebP, up to 20 MB each and 10 in total.",
 	split: "Split", splitting: "Splitting…", splitTitle: "Ask Pi to break this task into smaller subtasks", splitRequest: "Split task #{id} \"{text}\" into smaller subtasks with tilldone split (id={id}), then continue.",
+	toolCallOne: "1 tool call", toolCalls: "{n} tool calls", toolCallsTitle: "Other tools Pi called while this task was in progress (tilldone's own list calls not included); every {every} calls it is reminded to consider splitting",
 	newSession: "New session", newSessionTitle: "Start a new session?", newSessionMessage: "Pi restarts: the conversation and task list are cleared, and the model forgets everything before.", cancel: "Cancel", newSessionConfirm: "Start new session",
 };
 export function copyFor(language: Preferences["language"]): Copy { return language === "en" ? en : zh; }

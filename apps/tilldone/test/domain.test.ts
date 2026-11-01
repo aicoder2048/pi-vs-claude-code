@@ -250,3 +250,46 @@ describe("split requests", () => {
 		expect(reduce(state, { type: "agent_settled" }).pendingSplits).toEqual([]);
 	});
 });
+describe("tool calls per task", () => {
+	const list = (nextId: number, tasks: object[]) => ({ type: "tool_execution_end", toolCallId: `l${nextId}`, toolName: "tilldone", isError: false,
+		result: { details: { action: "add", nextId, listTitle: "T", listDescription: undefined, tasks } } });
+	const tool = (name: string, id = name) => ({ type: "tool_execution_start", toolCallId: id, toolName: name, args: {} });
+	const working = (active: number) => reduce(initial(), list(3, [{ id: 1, text: "a", status: active === 1 ? "inprogress" : "idle" }, { id: 2, text: "b", status: active === 2 ? "inprogress" : "idle" }]));
+	const counts = (s: ReturnType<typeof initial>) => toViewModel(s).tasks.items.map((t) => [t.id, t.toolCalls]);
+	test("tools started while a task is in progress count against that task", () => {
+		const s = [tool("bash", "x"), tool("read", "y"), tool("tilldone", "z")].reduce(reduce, working(1));
+		expect(counts(s)).toEqual([[1, 2], [2, 0]]);
+	});
+	test("nothing is counted while no task is in progress", () => {
+		expect(counts(reduce(working(0), tool("read")))).toEqual([[1, 0], [2, 0]]);
+	});
+	test("each task keeps its own count across switches", () => {
+		let s = reduce(working(1), tool("bash", "x"));
+		s = reduce(s, list(3, [{ id: 1, text: "a", status: "idle" }, { id: 2, text: "b", status: "inprogress" }]));
+		s = reduce(s, tool("edit", "y"));
+		s = reduce(s, list(3, [{ id: 1, text: "a", status: "inprogress" }, { id: 2, text: "b", status: "idle" }]));
+		s = reduce(s, tool("bash", "z"));
+		expect(counts(s)).toEqual([[1, 2], [2, 1]]);
+	});
+	test("a new list starts from zero even when it reuses task ids", () => {
+		const s = reduce(reduce(working(1), tool("bash")), list(2, [{ id: 1, text: "fresh", status: "idle" }]));
+		expect(counts(s)).toEqual([[1, 0]]);
+	});
+	test("a task that is split away drops its count; its subtasks start at zero", () => {
+		const s = reduce(reduce(working(1), tool("bash")), list(5, [{ id: 3, text: "a1", status: "inprogress", from: 1 }, { id: 4, text: "a2", status: "idle", from: 1 }, { id: 2, text: "b", status: "idle" }]));
+		expect(s.toolCalls).toEqual({});
+		expect(counts(s)).toEqual([[3, 0], [4, 0], [2, 0]]);
+	});
+	test("the view labels the count and flags a task once it reaches the split hint threshold", () => {
+		const items = (s: ReturnType<typeof initial>) => toViewModel(s).tasks.items.map((t) => [t.toolCallsLabel, t.heavy]);
+		expect(items(working(1))[0]).toEqual(["", false]);
+		expect(items(reduce(working(1), tool("bash")))[0]).toEqual(["1 次工具调用", false]);
+		const heavy = Array.from({ length: 15 }, (_, i) => tool("bash", `b${i}`)).reduce(reduce, working(1));
+		expect(items(heavy)[0]).toEqual(["15 次工具调用", true]);
+		const en = reduce(heavy, { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
+		expect(toViewModel(en).tasks.items[0].toolCallsLabel).toBe("15 tool calls");
+		const enOne = reduce(reduce(working(1), tool("bash")), { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
+		expect(toViewModel(enOne).tasks.items[0].toolCallsLabel).toBe("1 tool call");
+		expect(toViewModel(heavy).tasks.items[0].toolCallsTitle).toBe("这个任务进行期间边牧调用其他工具的次数（不含管理清单的 tilldone 调用）；每满 15 次会提醒边牧考虑细分");
+	});
+});

@@ -43,6 +43,11 @@ async function handle(r: any) {
 	if (r.message === "tasks") {
 		const details = { action: "add", tasks: [{ id: 1, text: "write the guide", status: "inprogress" }, { id: 2, text: "old", status: "done" }], nextId: 3, listTitle: "Split", listDescription: undefined };
 		emit({ type: "tool_execution_end", toolCallId: "tasks", toolName: "tilldone", result: { content: [], details }, isError: false });
+		// Past the split hint threshold, so the panel shows an emphasized count on the active task.
+		for (let i = 0; i < 16; i++) {
+			emit({ type: "tool_execution_start", toolCallId: `bash-${i}`, toolName: "bash", args: { command: "true" } });
+			emit({ type: "tool_execution_end", toolCallId: `bash-${i}`, toolName: "bash", result: { content: [] }, isError: false });
+		}
 		return;
 	}
 	if (r.message.startsWith("Split task")) return;

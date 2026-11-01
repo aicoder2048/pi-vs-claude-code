@@ -3,7 +3,7 @@
  * Imports only pure domain modules, including the extension's zero-dependency task domain.
  * Local desk_* records carry clock and transport facts supplied by L2.
  */
-import { EMPTY_LIST, countByStatus, current, parseDetails, STATUS_ICON, type ListState } from "../../../extensions/tilldone/state.ts";
+import { EMPTY_LIST, countByStatus, current, parseDetails, SPLIT_HINT_EVERY, STATUS_ICON, TOOL, type ListState } from "../../../extensions/tilldone/state.ts";
 
 import { DEFAULT_PREFERENCES, parsePreferences, copyFor, appearanceView, type Preferences } from "./appearance.ts";
 
@@ -49,6 +49,8 @@ export interface State {
 	readonly queued: readonly string[];
 	/** Tasks whose split button was pressed and whose split has not landed yet. */
 	readonly pendingSplits: readonly number[];
+	/** Non-tilldone tools started while each task was in progress, the same calls the extension's split hint counts. */
+	readonly toolCalls: Readonly<Record<number, number>>;
 	readonly statuses: Readonly<Record<string, string>>;
 	readonly now: number;
 	readonly runActive: boolean;
@@ -69,7 +71,7 @@ export interface State {
 export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false): State {
 	return { list: EMPTY_LIST, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
 		confirms: [], statuses: {}, now: 0, runActive: false, streaming: false, compacting: false,
-		queued: [], pendingSplits: [], model, imageInput: false, thinking: "unknown", cwd, connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
+		queued: [], pendingSplits: [], toolCalls: {}, model, imageInput: false, thinking: "unknown", cwd, connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
 }
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 function contentBlocks(content: any): Record<number, string> {
@@ -98,6 +100,12 @@ export function viewChanged(previous: State, next: State): boolean {
 	return false;
 }
 
+/** Ids only restart when a list is replaced (new-list, clear), so a lower nextId means the old counts belong to other tasks. */
+function keepCounts(state: State, list: ListState): State["toolCalls"] {
+	if (list.nextId < state.list.nextId) return {};
+	const kept = Object.entries(state.toolCalls).filter(([id]) => list.tasks.some((t) => t.id === Number(id)));
+	return kept.length === Object.keys(state.toolCalls).length ? state.toolCalls : Object.fromEntries(kept);
+}
 export function reduce(state: State, record: RecordValue): State {
 	switch (record.type) {
 		case "desk_api_summary": return { ...state, api: { ...state.api, summary: record.summary } };
@@ -163,7 +171,9 @@ export function reduce(state: State, record: RecordValue): State {
 		}
 		case "tool_execution_start": {
 			const tool: Tool = { id: record.toolCallId, name: record.toolName, args: record.args ?? null, result: null, phase: "running" };
-			return { ...state, tools: [...state.tools, tool], timeline: [...state.timeline, { kind: "tool", id: tool.id }] };
+			const active = record.toolName === TOOL.name ? undefined : current(state.list);
+			const toolCalls = active ? { ...state.toolCalls, [active.id]: (state.toolCalls[active.id] ?? 0) + 1 } : state.toolCalls;
+			return { ...state, toolCalls, tools: [...state.tools, tool], timeline: [...state.timeline, { kind: "tool", id: tool.id }] };
 		}
 		case "tool_execution_update":
 			return { ...state, tools: state.tools.map((t) => t.id === record.toolCallId ? { ...t, result: record.partialResult } : t) };
@@ -171,7 +181,7 @@ export function reduce(state: State, record: RecordValue): State {
 			const list = record.toolName === "tilldone" ? parseDetails(record.result?.details) ?? state.list : state.list;
 			// A pending split is resolved once its task is gone from the list (split replaces it) or done.
 			const pendingSplits = list === state.list ? state.pendingSplits : state.pendingSplits.filter((id) => list.tasks.some((t) => t.id === id && t.status !== "done"));
-			return { ...state, list, pendingSplits, tools: state.tools.map((t) => t.id === record.toolCallId
+			return { ...state, list, pendingSplits, toolCalls: list === state.list ? state.toolCalls : keepCounts(state, list), tools: state.tools.map((t) => t.id === record.toolCallId
 				? { ...t, result: record.result, phase: record.isError ? "error" : "done" } : t) };
 		}
 		case "extension_ui_request": {
@@ -289,6 +299,10 @@ function entryFor(source: Message | Tool, ui: ReturnType<typeof copyFor>, build:
 	entries.set(source, { ui, entry });
 	return entry;
 }
+function toolCallsView(count: number, ui: ReturnType<typeof copyFor>) {
+	const label = count === 0 ? "" : count === 1 ? ui.toolCallOne : ui.toolCalls.replace("{n}", String(count));
+	return { toolCalls: count, toolCallsLabel: label, toolCallsTitle: ui.toolCallsTitle.replace("{every}", String(SPLIT_HINT_EVERY)), heavy: count >= SPLIT_HINT_EVERY };
+}
 const isSilentAssistant = (m: Message) => m.kind === "assistant" && !m.error && Object.values(m.blocks).every((value) => !value.trim());
 export function toViewModel(state: State) {
 	const ui = copyFor(state.preferences.language);
@@ -307,7 +321,8 @@ export function toViewModel(state: State) {
 			total: state.list.tasks.length, progress: `${counts.done} / ${state.list.tasks.length} ${ui.done}`,
 			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus,
 			items: state.list.tasks.map((t) => ({ ...t, label: t.from === undefined ? `#${t.id}` : `#${t.id} ← #${t.from}`, icon: STATUS_ICON[t.status], statusLabel: { idle: ui.taskIdle, inprogress: ui.taskInprogress, done: ui.taskDone }[t.status], current: t.id === active?.id,
-				splittable: state.connection === "ready" && t.status !== "done", splitting: state.pendingSplits.includes(t.id) })) },
+				splittable: state.connection === "ready" && t.status !== "done", splitting: state.pendingSplits.includes(t.id),
+				...toolCallsView(state.toolCalls[t.id] ?? 0, ui) })) },
 		queued: state.queued,
 		// A tool-only assistant turn carries no text, only the call the next tool card already shows.
 		conversation: state.timeline.filter((entry) => entry.kind === "tool" || !isSilentAssistant(messages.get(entry.id)!)).map((entry) => {

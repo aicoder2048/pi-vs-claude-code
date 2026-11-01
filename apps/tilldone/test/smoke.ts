@@ -191,6 +191,9 @@ try {
 	await page.locator("#prompt").fill("tasks"); await page.locator("#send").click();
 	await page.waitForFunction(() => document.querySelectorAll("#task-list li").length === 2);
 	assert.equal(await page.locator("#task-list li button.split").count(), 1, "Only the unfinished task offers a split button");
+	await page.waitForFunction(() => document.querySelector("#task-list li .tool-calls")?.textContent?.startsWith("16 "));
+	assert.equal(await page.locator("#task-list li .tool-calls").count(), 1, "Only the task that was in progress shows a tool-call count");
+	assert.equal(await page.locator("#task-list li .tool-calls.heavy").count(), 1, "A count past the split hint threshold is emphasized");
 	await page.locator("aside").screenshot({ path: join(tmpdir(), "tilldone-desk-split.png") });
 	await page.locator("#prompt").fill("busy"); await page.locator("#send").click();
 	await page.waitForFunction(() => !(document.querySelector("#stop") as HTMLButtonElement).disabled);
