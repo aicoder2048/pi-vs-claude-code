@@ -1,7 +1,7 @@
 # 楚河 · Chinese Chess LLM 技术白皮书：四层 Agent Harness、双循环接入点、Pi 原生技能组与上下文工程
 
-> 设计更正：5.4 节已更新为 `xiangqi-skills/v3`；其余章节及行号、测量数字保留 v2 历史快照，不代表当前实现。当前完整说明见 [原生 Skill 与内置工具](../native-skills.md)。现有 PDF 尚未重生成。
-> 版本：v1.0 · 2026-10-31
+> 设计更正（2026-10-31）：5.4 节已更新为 `xiangqi-skills/v3`。全文的请求预算已改为当前值：**10 次，前 8 次分析，后 2 次只可落子或认输**。4.7、5.7、7.5、9.2 节补充了收尾阶段、调用审计和第 33 手事故。其余章节及行号、测量数字保留 v2 历史快照，不代表当前实现。当前说明见 [原生 Skill 与内置工具](../native-skills.md)、[调用证据](../call-audit.md)、[第 33 手请求预算复盘](../2026-10-31-request-budget-review.md)。
+> 版本：v1.2 · 2026-10-31
 > 对象：`apps/chinese-chess`（工作区快照，含尚未提交的 L3 技能组重构 `xiangqi-skills/v2` 与回合耗时诊断）
 > 依赖：`@earendil-works/pi-coding-agent` 1.4.0、`@earendil-works/pi-ai` 1.4.0、Electron 45
 > 验证：撰写时在工作区运行 `bun test tests/*.test.ts`，15 个文件 136 项测试全部通过（1599 个断言）
@@ -13,7 +13,7 @@
 楚河是一个 Electron 人机中国象棋桌面应用。机器棋手是一个模型，它只能通过 Pi 的工具调用走子。楚河沿用弈境的骨架，在三个方向上更进一步：
 
 1. **Harness**：四层结构不变（L1–L4，端口与适配器）。L3 体量约为弈境的 3 倍；`TurnPort` 从 4 个成员增到 9 个。
-2. **Loop**：每个回合用一个新的内存 Session，只做一次 settle。L2 只挂 `tool_call`，注册 8 个工具。宿主取消 90 秒技术超时，只用棋钟计时，并在 run 前做预搜索。
+2. **Loop**：每个回合用一个新的内存 Session，只做一次 settle。L2 只挂 `tool_call`，注册 8 个工具。每回合最多 10 次请求：前 8 次分析，后 2 次只能落子或认输。宿主取消 90 秒技术超时，只用棋钟计时，并在 run 前做预搜索。
 3. **Prompt / Context**：流程知识迁入 19 项 Pi 原生技能。用户消息改为 `signals` 投影，首次请求字符数下降 65%–67%。宿主关闭自动压缩，每手从棋谱重建。
 
 自我改进有两条线：
@@ -194,7 +194,7 @@ flowchart LR
 | 净水器（改写流过的东西） | `context` / `tool_result` 等 | 未使用 |
 | 新装插座 | `registerTool` | 8 个象棋工具 |
 | 墙上开关 | `registerCommand` | 仅 TUI 的 `/skill:xiangqi-review` |
-| 定时器、限流阀 | 预算 | 8 次请求；16 次工具调用；搜索 2600 ms / 70000 节点 |
+| 定时器、限流阀 | 预算 | 10 次请求（8 + 2）；16 次工具调用；搜索 2600 ms / 70000 节点 |
 | 燃气计费阀 | 棋钟 | 网络、思考、工具都扣钟，超时判负 |
 
 **L3 家电。**
@@ -310,7 +310,7 @@ flowchart LR
 
 | 层 | 拥有的权威 | 不做什么 |
 |---|---|---|
-| L1 `PiDriver` | 本回合 Pi session：模型解析、技能目录与隔离校验、请求预算 8、预搜索、遥测与审计订阅、取消转发 | 不判断内容好坏或着法是否合法，不碰棋钟 |
+| L1 `PiDriver` | 本回合 Pi session：模型解析、技能目录配置与资源校验、请求预算 10（8 + 2）、预搜索、遥测与审计订阅、取消转发 | 不判断内容好坏或着法是否合法，不碰棋钟 |
 | L2 `xiangqiExtension` | 本回合工具面：8 个工具、调用预算 16、`active()` 守卫、revision 预检、把 `MoveRiskError` 转成可纠错结果 | 不放业务规则，不直接改棋谱（只走 `port.commit`） |
 | L3 `GameService` 等 | 决定什么信息进上下文、进多少、以什么形式进；棋谱、revision、轮次、棋钟、比分、胜负、计划、证据链、耗时；唯一写入入口；独立复查 | 不碰渲染，不 import Pi 或 Electron |
 | L4 main / renderer | 进程组合、200ms 权威心跳、白名单 IPC、原子保存、学习调度、可视化 | 不占上下文；渲染器不提交模型走子，不改权威状态 |
@@ -427,11 +427,12 @@ flowchart TB
     direction LR
     B1["turn_start ⑤<br/>请求 +1"] --> B2["LLM 流 ⑥<br/>文本 + toolCall"] --> B3["schema 校验<br/>→ tool_call ②"] --> B4["start ⑦ → execute ③<br/>→ end ⑦"]
     B4 -- "未提交" --> B1
+    B4 -- "第 8 次 turn_end" --> B5["只留 move_piece /<br/>resign_game"] --> B1
   end
   subgraph R3["结束：三条出口"]
     direction LR
     C1["move_piece 接受<br/>terminate ④"]
-    C2["第 9 次 turn_start<br/>abort()"]
+    C2["第 11 次 turn_start<br/>abort()"]
     C3["port.signal ⑧<br/>abort()"]
     C1 --> Z["agent_settled<br/>→ dispose()<br/>（run 出错先重试 1 次）"]
     C2 --> Z
@@ -451,7 +452,7 @@ flowchart TB
 
 - **一手棋 = 一个 Session = 一次 settle。** 驱动用 `SessionManager.inMemory()`（`pi-driver.ts:66`），在 `finally` 里 `session.dispose()`（`:119`）。回合之间不留对话。
 - **settle 外循环几乎只转一圈。** 压缩关闭（`:44`），没有 `agent_before_settle` 处理函数，也没有排队消息。只有 `retry: { maxRetries: 1, baseDelayMs: 800 }` 会再起一个 run，所以 `N ∈ {1, 2}`。
-- **run 内循环是主战场。** `M ≤ 8`，`K ≤ 16`，工具全部 `sequential`。
+- **run 内循环是主战场。** `M ≤ 10`，`K ≤ 16`，工具全部 `sequential`。第 8 次请求结束后，只留终局工具（4.7 节）。
 - **预搜索在循环外。** 它在 `session.prompt()` 之前运行（`:97-106`），结果写回快照。模型的首个请求即可看到搜索摘要。
 - **没有技术超时。** 弈境有 90 秒回合超时，楚河删掉了它（`:35-36`）。唯一的截止是棋钟，到时由 `GameService` 中止 `port.signal`（`:38-39`）。测试 `tests/pi-integration.test.ts:194`、`:220` 验证超过 90 秒的长考合法。
 
@@ -467,13 +468,13 @@ flowchart TB
 | ② | `pi.on('tool_call')` | L2 → Pi `_beforeToolCall` | run 内，schema 校验后、执行前 | K（含拦截的） | 16 次工具预算、回合结束守卫、日志 |
 | ③ | 8 个工具的 `execute()` | L2 → Pi 工具执行阶段 | run 内，工具执行 | 每个工具 0..K | 读技能、观察、比较、计划、提交 |
 | ④ | `move_piece` 返回 `terminate: true` | L2 → Pi `shouldTerminateToolBatch` | run 内，批次收尾 | ≤ 1 | 告诉 Pi 本批之后不再请求模型 |
-| ⑤ | 订阅 `turn_start` | L1 `session.subscribe` | run 内，turn 开头 | M | 请求计数，第 9 次 `abort()`；开启 model 区间 |
+| ⑤ | 订阅 `turn_start` / `turn_end` | L1 `session.subscribe` | run 内，turn 开头和结尾 | M | 请求计数，第 11 次 `abort()`；第 8 次 `turn_end` 后切到提交阶段；开启 model 区间与请求审计 |
 | ⑥ | 订阅 `message_update` / `message_end` | L1 `session.subscribe` | run 内，LLM 流 | update 多次；end M | 记首个增量 `firstDeltaMs` 并结束 model 区间 |
 | ⑦ | 订阅 `tool_execution_start` / `_end` | L1 `session.subscribe` | run 内，工具前后 | 各 K（不含拦截的） | 工具耗时区间；审计；暂存决策 |
 | ⑧ | `port.signal` 的 `abort` 监听 | L1 注册，L3 触发 | 任意时刻 | 0..1 | 棋钟耗尽或取消时中止 |
 | ⑨ | `TurnPort` 的 9 个成员 | L3 提供，L1/L2 调用 | 预搜索，以及 ③ 之内 | 提交可多次，成功 ≤ 1 | 跨层读写的唯一通道（3.4 节） |
 
-⑤⑥⑦ 是宿主订阅的 Pi 事件。L2 只挂一个扩展事件：②。⑦ 的两个处理函数：`recordDecisionTool` 追加证据链，`setDecision` 暂存决策。
+⑤⑥⑦ 是宿主订阅的 Pi 事件。L2 只挂一个扩展事件：②。⑦ 的处理函数：`recordDecisionTool` 追加证据链，`CallAuditRecorder` 记调用审计，`setDecision` 暂存决策。
 
 ### 4.4 接入点的关键细节
 
@@ -580,12 +581,23 @@ flowchart LR
 
 | 闸门 | 位置 | 触发后 |
 |---|---|---|
-| 请求预算 8 | L1 `turn_start` 计数 | `abort()`，回合失败，棋钟继续 |
+| 请求预算 10（8 + 2） | L1 `turn_start` 计数；第 8 次 `turn_end` 后切换工具集（`turn-budget.ts:3-5`、`pi-driver.ts:85-98`） | 第 9–10 次只能落子或认输，第 10 次可纠错一次；第 11 次 `turn_start` 即 `abort()`，回合失败，棋钟继续 |
 | 工具预算 16 | L2 `tool_call` | 返回 `block`，模型收到「预算耗尽」 |
 | 搜索总预算 | L3：每次尝试 2600 ms / 70000 节点，为最终复查预留 700 ms / 20000 节点（`live-search.ts:6-8`、`game-service.ts:241-244`） | 单次 ≤ 余时 1/12 且 ≤ 1000 ms；截断时只留最后完整迭代，标为未知 |
 | 搜索 / 提交互斥 | L3 `searching / submitting` | 拒绝并发请求，反馈给模型 |
 | 棋钟 | L3 `charge()`，主进程 200 ms 心跳 | 到时判负；`port.signal` 中止网络与 Worker |
 | 取消 / 悔棋 / 换模型 / 新局 | L3 `invalidate()` | 见图 4-2 |
+
+**收尾阶段的来历。** 一局 33 手的实战中，黑方第 34 手用完 8 次请求，全部用于读取、分析、搜索和计划，没有落子。第 9 次请求在发送前被中止。回合停在 `error`，棋钟继续走，约 25 分钟后黑方超时判负。原因：原生 `read` 也消耗请求次数，旧预算没有为提交留出请求。
+
+修复要点：
+
+- 预算常量在 `turn-budget.ts`。驱动、日志和用户提示词（`turn-prompt.ts:12`）共用。
+- 在第 8 次 `turn_end` 切换工具集，不在 `turn_start`。Pi 在 turn 开始前已固定工具快照，晚切会错过一轮。真实 Pi 测试确认第 9、10 次请求只声明终局工具。
+- 失败回合的错误文本、决策审计和日志写入 `attempts[]`。驱动出错后撤销本回合信号，拒绝迟到的落子。界面持续提示「请求已停止，尚未落子，棋钟仍在运行」。
+- 不加 90 秒判负，不自动认输，不无限重试。工具预算 16 不变。
+
+详见 [第 33 手请求预算复盘](../2026-10-31-request-budget-review.md)。
 
 
 ## 5. L3 业务层：知识怎样变成信号
@@ -687,7 +699,7 @@ flowchart LR
 - Pi 自动生成19项技能索引与真实路径。宿主不格式化索引，不改写 location，也不拼接全文。
 - 用 `session.prompt('/skill:xiangqi-coach ' + turnPrompt(state))`，由 Pi 展开入口到用户消息，不是系统提示词。
 - 宿主只给建议剧本和依据；模型按索引用 read 加载剧本及 references。七个剧本不再隐藏于自动索引。
-- 规则、棋钟、revision、搜索和独立提交复查不变；8次模型请求、16次工具调用预算包含内置工具。
+- 规则、棋钟、revision、搜索和独立提交复查不变；10 次模型请求（8 + 2）、16 次工具调用预算包含内置工具。
 
 开发版工作目录是 `apps/chinese-chess`；安装版是可写的 `userData/chinese-chess`，复制自带技能且不覆盖已有编辑。提示词要求只操作项目目录，但 **cwd 不是安全沙箱**，不能阻止绝对路径、../、软链或 shell 越界。需要硬隔离时另接成熟 OS 沙箱或容器，不自写命令过滤器。
 
@@ -790,6 +802,22 @@ flowchart LR
 配套记录有两项。`notes[].timing` 记总耗时和按墙钟互斥归属的五项分解。`attempts[]` 记失败、取消、超时、被替换的回合，保留最近 80 条。
 
 弈境白皮书列出四个证据粒度问题，楚河解决了三个。「试算证据与最终候选的绑定」仍未做。
+
+**调用审计 `xiangqi-call-audit/v1`。** 旧记录只有耗时和工具名，不能判断两次 `read` 是否读了同一份材料。v3 在 `decision.audit` 中加一个可选字段，由 L1 的 `CallAuditRecorder`（`src/agent/call-audit.ts`）记录：
+
+| 层级 | 记录什么 | 用途 |
+|---|---|---|
+| 请求 `requests[]` | 编号、阶段（analysis / submit）、状态、`stopReason`、token 数、文本字符数、工具意图数 | 看预算花在哪一阶段 |
+| 调用 `calls[]` | 所属请求、白名单输入摘要、输入 / 结果 / 证据指纹、有界结果摘要 | 区分重读、重算和计划推进 |
+| 关联 | `sameInputAs` / `sameResultAs` / `sameEvidenceAs` | 指向同输入的前一次调用 |
+
+边界：
+
+- 它是证据，不是判定器。相同指纹只表示「可能重复」。宿主不据此阻断调用。
+- 不保存助手文本、thinking、提示词、文件内容或 shell 命令。技能目录外的路径记为 `[redacted]`。
+- 成功提交或认输时，`settleCallAudit()`（`src/business/call-audit.ts`）在业务事务内结算，不伪造结果指纹。每回合最多 32 个请求、64 个调用。
+
+旧棋谱没有该字段时，界面显示「未记录」，不推测。详见 [调用证据](../call-audit.md)。
 
 ### 5.8 为什么现在不发 Pi Package
 
@@ -1032,14 +1060,15 @@ flowchart LR
 | 棋盘、合法落点、将军标记、吃子动画 | `position`、`analysis` | 主棋盘 |
 | 状态与实时阶段（预搜索、第 N 次模型响应、提交复查等）、本回合用时 | `status`、`progress` | 状态卡（`turn-feedback.ts:8-13`） |
 | 棋钟、比分、赛制 | `clock`、`match` | 侧栏 |
-| 公开理由、耗时分解、最近未落子尝试 | `notes[]`、`attempts[]` | 手记 |
+| 公开理由、耗时分解、最近未落子尝试（含错误原因） | `notes[]`、`attempts[]` | 手记 |
+| 调用证据：每次请求的阶段与 token，每次调用的摘要与重复关联 | `decision.audit` | 专家参谋（`app.ts:233-236`） |
 | 定式、案例、评价、搜索、计划、原则全文、独立复查 | `analysis.expert`、`plan`、`notes[].review` | 专家对话框（`app.ts:140-215`） |
 | 复盘进度与历史 | `LearningOverview`、`PostGameReview` | 复盘面板 |
 | 四层链路日志 | `logs` | 页脚 |
 
 L4 与模型读同一份 Markdown，详略不同。`skill-text.ts` 在构建时把 `principles.md`、`conditional-principles.md`、`motifs.md` 打进渲染器 bundle，按 `## id` 切节（`skill-text.ts:1-14`）。专家面板显示全文；模型在 `signals` 里只看到 `id/evidence`。这样做不新增 IPC，也不给渲染器文件系统权限。
 
-缺口：渲染器不显示 `DecisionTrace`。`grep decision src/renderer` 无结果，`notes[].decision` 只出现在导出的 JSON 里。用户看得到用时，看不到「按哪个剧本、读了哪些技能、走了哪几步」。
+缺口（已部分补上）：专家参谋显示调用证据。`DecisionTrace` 的剧本和四步进度仍只在导出的 JSON 里，手记卡片不显示。
 
 ### 7.6 持久化
 
@@ -1153,7 +1182,7 @@ flowchart LR
 | 装配时摘要 | `evaluationSummaries()` | 见 8.3 节 |
 | 渐进披露 | 入口 + 索引 + 1 份剧本 | 其余 17 项技能和 7 份 references 按需读 |
 | 错误瘦身 | `MoveRiskError` 四字段 | 完整 review 进 `details`，不进上下文 |
-| 硬上限 | 8 次请求 / 16 次工具调用 | 单回合上下文有界 |
+| 硬上限 | 10 次请求（8 + 2）/ 16 次工具调用 | 单回合上下文有界；最后 2 次只开放终局工具 |
 
 首次请求（system + user，不含工具 schema）改用 `signals` 投影后，字符数下降（`docs/l3-skills-refactor.md`）：
 
@@ -1187,7 +1216,7 @@ flowchart LR
 | 层 | 对提示词与上下文的贡献 |
 |---|---|
 | L0 | 模型先验；`thinkingLevel: 'low'` |
-| L1 | 系统提示词装配与屏蔽；索引格式化；用户消息模板；请求预算；注入预搜索结果 |
+| L1 | 系统提示词装配与屏蔽；技能目录配置（索引由 Pi 生成）；用户消息模板；请求预算与提交阶段切换；注入预搜索结果 |
 | L2 | 工具 schema（含技能枚举）；结果 JSON；拦截、错误与风险反驳文本；`terminate` |
 | L3 | 技能文本；剧本路由；`signals` 契约；原则证据；定式与案例；`DecisionTrace` |
 | L4 | 不参与提示词；与模型共享 references 但显示全文；不索取思维链 |
@@ -1212,7 +1241,7 @@ flowchart LR
 
 | # | 风险 | 层 | 建议 |
 |--|------|--|------|
-| 1 | 渲染器不显示 `DecisionTrace` | L4 | 手记卡片显示剧本、技能、工具序列 |
+| 1 | 已显示调用证据；剧本和四步进度仍不显示 | L4 | 手记卡片显示剧本和四步进度 |
 | 2 | `move_piece` 成功后不 `abort()`；同批有其他工具时多一次请求，占用棋钟（源码推断） | L1 | 在 `tool_execution_end` 见到落子即 `void session.abort()`；补混合批次测试 |
 | 3 | 路由阈值靠经验；开局即路由到 `under-attack` | L3 | 统计剧本分布；改为「受攻且无法保护」才触发 |
 | 4 | 缺少真实模型的技能读取统计（弈境 40 手读取为 0） | L3 | 实战统计 `skillsRead`；必要时在 `signals` 中提示 |
@@ -1223,6 +1252,8 @@ flowchart LR
 | 9 | 知识文本的改进环未闭合，无法证明 v1 → v2 有提升 | L3 | 见图 10-1 |
 | 10 | 案例只覆盖局部战术 | L3 | 先做准局部动机，再考虑计划类案例 |
 | 11 | 规则是简化竞赛规则（无长捉） | L3 | `rules-summary.md` 同步声明，避免模型按正式规则推理 |
+| 12 | **已修复**：8 次请求全部用于分析时回合失败，棋钟走完判负（第 33 手事故） | L1/L4 | 已改为 8 + 2 收尾阶段、失败原因落盘、持续警告、调用审计（4.7、5.7 节） |
+| 13 | 调用审计只比较摘要指纹，不是语义等价 | L1 | 先积累实战审计，再决定是否需要更强的重复检测 |
 
 ## 10. 结论
 
@@ -1258,7 +1289,9 @@ flowchart LR
 | SYSTEM、压缩与预热开关 | `src/agent/pi-driver.ts:12-46` |
 | ResourceLoader、隔离校验 | `src/agent/pi-driver.ts:47-72` |
 | 宿主订阅、预搜索、发送提示词 | `src/agent/pi-driver.ts:73-113` |
-| 技能目录、索引、系统提示词 | `src/agent/skill-loader.ts:6-59` |
+| ~~技能目录、索引、系统提示词~~ | ~~`src/agent/skill-loader.ts`~~（v3 已删除） |
+| 请求预算（10 = 8 + 2）、提交阶段切换 | `src/agent/turn-budget.ts:3-5`、`src/agent/pi-driver.ts:85-98` |
+| 调用审计 | `src/agent/call-audit.ts`、`src/business/call-audit.ts`、`src/renderer/call-audit.ts` |
 | 用户提示词模板 | `src/agent/turn-prompt.ts:5-15` |
 | 预算闸门、`read_skill`、`move_piece` | `src/extensions/xiangqi.ts:17-35`、`:90-106` |
 | `DecisionTrace`、路由 | `src/business/decision.ts:10-49` |
