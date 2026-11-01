@@ -64,6 +64,8 @@ export interface State {
 	readonly imageInput: boolean;
 	readonly thinking: string;
 	readonly cwd: string;
+	/** The file Pi saves this session to, as get_state reports it; Restart resumes it after a crash. */
+	readonly sessionFile: string;
 	readonly connection: "starting" | "ready" | "exited";
 	readonly error: string;
 	readonly diagnostics: string;
@@ -75,7 +77,7 @@ export interface State {
 export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false): State {
 	return { list: EMPTY_LIST, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
 		confirms: [], statuses: {}, now: 0, runActive: false, streaming: false, compacting: false,
-		queued: [], pendingSplits: [], toolCalls: {}, modelCalls: {}, model, imageInput: false, thinking: "unknown", cwd, connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
+		queued: [], pendingSplits: [], toolCalls: {}, modelCalls: {}, model, imageInput: false, thinking: "unknown", cwd, sessionFile: "", connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
 }
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 function contentBlocks(content: any): Record<number, string> {
@@ -138,6 +140,7 @@ export function reduce(state: State, record: RecordValue): State {
 		case "desk_error": return { ...state, error: text(record.error) };
 		case "desk_stderr": return { ...state, diagnostics: (state.diagnostics + text(record.text)).slice(-8000) };
 		case "desk_exit": return { ...state, connection: "exited", error: text(record.error), runActive: false, streaming: false, compacting: false, confirms: [], queued: [], pendingSplits: [] };
+		case "desk_resume_unavailable": return addMessage(state, "notice", { 0: copyFor(state.preferences.language).resumeUnavailable });
 		case "desk_split_requested": return { ...state, pendingSplits: [...state.pendingSplits, record.id] };
 		case "queue_update": {
 			const strings = (value: unknown) => Array.isArray(value) && value.every((v) => typeof v === "string");
@@ -151,9 +154,10 @@ export function reduce(state: State, record: RecordValue): State {
 			const model = data.model ? `${data.model.provider}/${data.model.id}` : state.model;
 			const thinking = text(data.thinkingLevel) || "unknown", streaming = data.isStreaming === true, compacting = data.isCompacting === true;
 			const imageInput = data.model ? Array.isArray(data.model.input) && data.model.input.includes("image") : state.imageInput;
+			const sessionFile = text(data.sessionFile);
 			// The 2 s state poll usually reports nothing new; keep identity so L2 can skip publishing.
-			if (state.connection === "ready" && state.model === model && state.imageInput === imageInput && state.thinking === thinking && state.streaming === streaming && state.compacting === compacting) return state;
-			return { ...state, connection: "ready", model, imageInput, thinking, streaming, compacting };
+			if (state.connection === "ready" && state.model === model && state.imageInput === imageInput && state.thinking === thinking && state.streaming === streaming && state.compacting === compacting && state.sessionFile === sessionFile) return state;
+			return { ...state, connection: "ready", model, imageInput, thinking, streaming, compacting, sessionFile };
 		}
 		case "agent_start": return { ...state, runActive: true, error: "" };
 		// One turn is one model request; it belongs to the task in progress when it starts.
@@ -257,7 +261,7 @@ export function parseIntent(raw: unknown): Intent | undefined {
 	}
 	if (r.type === "confirm" && typeof r.id === "string" && typeof r.confirmed === "boolean") return { type: "confirm", id: r.id, confirmed: r.confirmed };
 }
-export function planIntent(state: State, intent: Intent): { commands: RecordValue[]; events: RecordValue[]; restart?: boolean; saveApi?: CredentialChanges; externalUrl?: string; clipboard?: string } {
+export function planIntent(state: State, intent: Intent): { commands: RecordValue[]; events: RecordValue[]; restart?: "resume" | "fresh"; saveApi?: CredentialChanges; externalUrl?: string; clipboard?: string } {
 	const empty = { commands: [], events: [] };
 	if (intent.type === "apiOpen") return { commands: [], events: [{ type: "desk_api_open" }] };
 	if (intent.type === "apiClose") return state.api.saving ? empty : { commands: [], events: [{ type: "desk_api_close" }] };
@@ -273,7 +277,8 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 		return { commands: [], events: [{ type: "desk_focus_tasks" }] };
 	}
 	if (intent.type === "preferences") return { commands: [], events: [{ type: "desk_preferences", preferences: intent.preferences }] };
-	if (intent.type === "restart") return { ...empty, restart: state.connection === "exited" };
+	// Restart follows a crash or exit, so it resumes the session Pi was saving.
+	if (intent.type === "restart") return state.connection === "exited" ? { ...empty, restart: "resume" } : empty;
 	// The renderer names a message; the text comes from state, so it is the reply's Markdown source as Pi sent it.
 	if (intent.type === "copyMessage") {
 		const message = state.messages.find((m) => m.id === intent.id);
@@ -284,8 +289,8 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 		const message = state.messages.find((m) => m.id === intent.id && m.kind === "assistant");
 		return message && openableUrl(intent.url) && linksIn(messageText(message)).includes(intent.url) ? { ...empty, externalUrl: intent.url } : empty;
 	}
-	// A new session is a fresh --no-session Pi process; mid-run, Stop first.
-	if (intent.type === "newSession") return { ...empty, restart: state.connection === "ready" && !isRunning(state) };
+	// A new session is a fresh Pi process with a new session file; mid-run, Stop first.
+	if (intent.type === "newSession") return state.connection === "ready" && !isRunning(state) ? { ...empty, restart: "fresh" } : empty;
 	if (state.connection !== "ready") return empty;
 	if (intent.type === "confirm") {
 		if (!state.confirms.some((c) => c.id === intent.id && (c.deadline === null || c.deadline > state.now))) return empty;

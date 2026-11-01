@@ -18,10 +18,11 @@ export class PiProcess {
 	private writes: Promise<void> = Promise.resolve();
 	private closed: Promise<void> = Promise.resolve();
 	private finished = false;
-	constructor(private readonly config: Config, private readonly receive: (record: RecordValue) => void) {}
+	/** With a session path, Pi resumes that session file instead of starting a new one. */
+	constructor(private readonly config: Config, private readonly receive: (record: RecordValue) => void, private readonly session?: string) {}
 	start(): void {
 		if (this.child) throw new Error("PiProcess can only be started once.");
-		const c = this.child = spawn(this.config.piBin, ["--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--model", this.config.model, "-e", this.config.extension], {
+		const c = this.child = spawn(this.config.piBin, ["--mode", "rpc", "--no-extensions", "--model", this.config.model, "-e", this.config.extension, ...(this.session ? ["--session", this.session] : [])], {
 			cwd: this.config.cwd, stdio: ["pipe", "pipe", "pipe"], shell: false,
 		});
 		const decoder = new JsonlDecoder((record) => {
@@ -46,7 +47,7 @@ export class PiProcess {
 		c.stdin.on("error", (error) => this.finish(`Pi stdin failed: ${error.message}`));
 		c.on("error", (error) => this.finish(`Cannot start Pi: ${error.message}`));
 		this.closed = new Promise((resolve) => c.once("close", (code, signal) => {
-			this.finish(`Pi exited (${signal ? `signal ${signal}` : `code ${code}`}). Restart to begin a fresh session.`);
+			this.finish(`Pi exited (${signal ? `signal ${signal}` : `code ${code}`}). Restart to continue.`);
 			resolve();
 		}));
 	}

@@ -2,6 +2,7 @@
 import { initialState, reduce, toViewModel, parseIntent, planIntent, immediateUIResponse, viewChanged, type RecordValue } from "./domain.ts";
 import type { Config } from "./config.ts";
 import type { Preferences } from "./appearance.ts";
+import { existsSync } from "node:fs";
 import { PiProcess } from "./rpc.ts";
 import { CredentialError, type PiCredentials } from "./credentials.ts";
 // Streamed records arrive per token; publishing a full view for each one floods IPC and the renderer.
@@ -17,7 +18,8 @@ export class Desk {
 	private restarting = false;
 	constructor(private readonly config: Config, private readonly publish: (view: ReturnType<typeof toViewModel>) => void,
 		private readonly options: { preferences?: Preferences; systemDark?: boolean; savePreferences?: (preferences: Preferences) => void;
-			credentials?: PiCredentials; openExternal?: (url: string) => Promise<void>; writeClipboard?: (text: string) => void } = {}) {
+			credentials?: PiCredentials; openExternal?: (url: string) => Promise<void>; writeClipboard?: (text: string) => void;
+			sessionExists?: (path: string) => boolean } = {}) {
 		this.state = initialState(config.model, config.cwd, options.preferences, options.systemDark);
 		if (options.credentials) this.state = reduce(this.state, { type: "desk_api_summary", summary: options.credentials.summary() });
 	}
@@ -47,7 +49,8 @@ export class Desk {
 		if (!this.options.credentials) return record;
 		return JSON.parse(JSON.stringify(record, (_key, value) => typeof value === "string" ? this.options.credentials!.redact(value) : value));
 	}
-	start(): void {
+	/** Starts Pi; with a session path it resumes that session file. */
+	start(session?: string): void {
 		const generation = ++this.generation;
 		this.state = { ...initialState(this.config.model, this.config.cwd, this.state.preferences, this.state.systemDark), api: { ...this.state.api, open: false, saving: false } };
 		this.dispatch({ type: "desk_tick", now: Date.now() });
@@ -58,7 +61,7 @@ export class Desk {
 			const response = immediateUIResponse(record);
 			if (response) void pi.respond(response).catch(this.error);
 			if (["agent_start", "agent_settled", "thinking_level_changed"].includes(record.type)) void this.refresh();
-		});
+		}, session);
 		pi.start();
 		void this.refresh();
 		let ticks = 0;
@@ -106,7 +109,14 @@ export class Desk {
 		}
 		if (plan.restart && !this.restarting) {
 			this.restarting = true;
-			try { await this.stop(); this.start(); } finally { this.restarting = false; }
+			// A crash before the first message reached disk leaves no file; then there is nothing to resume.
+			const session = plan.restart === "resume" ? this.state.sessionFile : "";
+			const resumable = Boolean(session) && (this.options.sessionExists ?? existsSync)(session);
+			try {
+				await this.stop();
+				this.start(resumable ? session : undefined);
+				if (plan.restart === "resume" && !resumable) this.dispatch({ type: "desk_resume_unavailable" });
+			} finally { this.restarting = false; }
 			return;
 		}
 		try {

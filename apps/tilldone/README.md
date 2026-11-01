@@ -81,10 +81,12 @@ The working directory is displayed in the status bar. The extension path is reso
 The subprocess command is:
 
 ```text
-pi --mode rpc --no-session --no-extensions --no-skills --model <model> -e <repo>/extensions/tilldone
+pi --mode rpc --no-extensions --model <model> -e <repo>/extensions/tilldone
 ```
 
-Closing the app shuts down the child (stdin EOF, then bounded signal escalation if needed). A crash or exit shows an explicit warning and Restart button. Restart creates a **fresh, non-persisted Pi session**, losing the old conversation/task state; appearance preferences are retained. The app does not submit a prompt automatically. The header's **New session (新会话)** button does the same restart on demand: it is enabled only while Pi is connected and idle (Stop a run first), asks for confirmation, and then replaces the child with a fresh `--no-session` Pi, so the model starts with an empty context and an empty task list.
+Closing the app shuts down the child (stdin EOF, then bounded signal escalation if needed). A crash or exit shows an explicit warning and Restart button. Restart creates a **fresh Pi session**: the model starts with an empty context and an empty task list; appearance preferences are retained. The old conversation is not lost: Pi saves every session under `~/.pi/agent/sessions/`, so it can be read or resumed later in the Pi TUI (`pi --resume`). The desk itself does not resume sessions. The app does not submit a prompt automatically. The header's **New session (新会话)** button does the same restart on demand: it is enabled only while Pi is connected and idle (Stop a run first), asks for confirmation, and then replaces the child with a fresh Pi on a new session file.
+
+`--no-extensions` stays so that global extensions in `~/.pi/agent/extensions` cannot add their own gates, footers or prefills next to tilldone. Skills are loaded normally: Pi lists the user's and the project's skills in the system prompt and the model reads one only when needed.
 
 ## Four layers
 

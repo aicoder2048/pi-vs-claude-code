@@ -278,7 +278,9 @@ try {
 	assert.match(await page.locator("#error").innerText(), /Pi exited/);
 	await page.locator("#restart").click();
 	await page.waitForFunction(() => !(document.querySelector("#send") as HTMLButtonElement).disabled);
-	assert.equal(await page.locator(".message").count(), 0);
+	// The fake reports no session file, so Restart starts fresh and says why.
+	assert.equal(await page.locator(".message").count(), 1);
+	assert.match(await page.locator(".message").innerText(), /No saved record of the last session/);
 	assert.equal(await page.locator("#theme").inputValue(), "night");
 	assert.equal(await page.locator("#shortcut-night").getAttribute("aria-pressed"), "true");
 	assert.equal(await page.locator("html").getAttribute("lang"), "en");

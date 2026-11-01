@@ -1,6 +1,6 @@
 /** TillDone Desk L2 tests: real pipes to an injected fake Pi, never a real model. */
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { JsonlDecoder } from "../src/jsonl.ts";
@@ -106,7 +106,7 @@ test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, cancels unsupp
 		await until(() => !view!.confirm);
 		expect(readLog().some((r) => r.type === "extension_ui_response" && r.id === "expiry-id")).toBe(false);
 		const launches = readLog().filter((r) => r.type === "launch");
-		expect(launches[0].args).toEqual(["--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--model", config().model, "-e", config().extension]);
+		expect(launches[0].args).toEqual(["--mode", "rpc", "--no-extensions", "--model", config().model, "-e", config().extension]);
 		expect(launches[0].cwd).toBe(app);
 		await desk.send({ type: "submit", message: "markup" });
 		await until(() => view!.conversation.length > 0);
@@ -118,11 +118,54 @@ test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, cancels unsupp
 		expect(view!.connection).toBe("exited");
 		await desk.send({ type: "restart" });
 		await until(() => view!.connection === "ready");
-		expect(view!.conversation).toHaveLength(0);
+		// The fake reports no session file, so there is nothing to resume: a fresh session and one notice.
+		expect(view!.conversation.map((m) => m.kind)).toEqual(["notice"]);
 		expect(readLog().filter((r) => r.type === "launch")).toHaveLength(3);
 	} finally {
 		await desk.stop();
 		if (old === undefined) delete process.env.FAKE_PI_LOG; else process.env.FAKE_PI_LOG = old;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+test("Restart after a crash resumes the crashed session file; New session and a missing file start fresh", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tilldone-resume-"));
+	const log = join(dir, "stdin.jsonl");
+	const session = join(dir, "session.jsonl");
+	writeFileSync(session, "");
+	const old = { log: process.env.FAKE_PI_LOG, session: process.env.FAKE_PI_SESSION };
+	process.env.FAKE_PI_LOG = log;
+	process.env.FAKE_PI_SESSION = session;
+	let view: ReturnType<Desk["view"]>;
+	const desk = new Desk(config(), (next) => { view = next; });
+	const launches = () => readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => r.type === "launch").map((r) => r.args as string[]);
+	const crash = async () => {
+		await desk.send({ type: "submit", message: "crash" });
+		await until(() => view!.connection === "exited");
+	};
+	desk.start();
+	try {
+		await until(() => view?.connection === "ready");
+		await crash();
+		await desk.send({ type: "restart" });
+		await until(() => view!.connection === "ready");
+		expect(launches()[1].slice(-2)).toEqual(["--session", session]);
+		expect(view!.conversation).toHaveLength(0);
+		// New session never resumes, even though Pi reported a session file.
+		process.env.FAKE_PI_SESSION = join(dir, "never-written.jsonl");
+		await desk.send({ type: "newSession" });
+		await until(() => view!.connection === "ready");
+		expect(launches()[2]).not.toContain("--session");
+		// A crash before the first message reached disk leaves no file to resume.
+		await crash();
+		await desk.send({ type: "restart" });
+		await until(() => view!.connection === "ready");
+		expect(launches()[3]).not.toContain("--session");
+		expect(view!.conversation.map((m) => m.kind)).toEqual(["notice"]);
+	} finally {
+		await desk.stop();
+		for (const [key, value] of [["FAKE_PI_LOG", old.log], ["FAKE_PI_SESSION", old.session]] as const) {
+			if (value === undefined) delete process.env[key]; else process.env[key] = value;
+		}
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

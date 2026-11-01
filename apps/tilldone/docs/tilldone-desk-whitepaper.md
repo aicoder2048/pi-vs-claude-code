@@ -13,7 +13,7 @@
 和楚河、弈境相比，这个应用有三点不同：
 
 1. **Harness Engineering：两套四层结构叠在一起。** 扩展自己是四层（L2 胶水 `index.ts`、L3 领域 `state.ts`、L4 渲染 `ui.ts`，L1 是 Pi），桌面端又是一套四层（L1 平台 = Pi 子进程 + Electron，L2 主进程胶水，L3 纯函数投影，L4 渲染页面）。两套结构只在一个地方相接：桌面端的 L3 直接 import 扩展 L3 的零依赖选择器 `parseDetails`、 `countByStatus`、 `current`、 `STATUS_ICON`。**扩展一行没改**，同一份扩展既能在 Pi TUI 里跑，也能被桌面端驱动。
-2. **Loop Engineering：桌面端不进 Pi 进程，只在 RPC 线上观察双循环。** 楚河用 Pi SDK 在进程内装配 session；边牧桌面则以 `pi --mode rpc --no-session --no-extensions --no-skills -e extensions/tilldone` 启动子进程，用 JSONL 收发。扩展在 run 内循环挂 `tool_call`（门禁 + 计数）、`tool_result`（细分提示），在 run 结束时挂 `agent_end`（督促），督促消息通过 steer 队列让 settle 外循环**在同一次 settle 里再起一个 run**。桌面端因此只把 `agent_settled` 当作“空闲”，`agent_end` 不算。
+2. **Loop Engineering：桌面端不进 Pi 进程，只在 RPC 线上观察双循环。** 楚河用 Pi SDK 在进程内装配 session；边牧桌面则以 `pi --mode rpc --no-extensions -e extensions/tilldone` 启动子进程，用 JSONL 收发。扩展在 run 内循环挂 `tool_call`（门禁 + 计数）、`tool_result`（细分提示），在 run 结束时挂 `agent_end`（督促），督促消息通过 steer 队列让 settle 外循环**在同一次 settle 里再起一个 run**。桌面端因此只把 `agent_settled` 当作“空闲”，`agent_end` 不算。
 3. **Prompt / Context Engineering：规矩写成模型读得懂的字符串。** 门禁拒绝理由、工具说明、认领任务时的“先想想要不要细分”、每 15 次工具调用一次的细分提示、督促消息，全部定义在扩展 L3 的常量里，是模型每一步都能看到的“护栏文本”。桌面端额外加了两条人对模型说话的通道：运行中发出的消息一律走 **steer**（下一步就送达），任务面板上的“细分”按钮把“请把 #N 拆小”作为一条普通消息发给模型，由模型决定怎么拆。
 
 本文按 5W1H 逐层走读：第 2 章先用边牧放羊的比喻建立直觉，第 3 章讲两套四层，第 4 章讲双循环和接入点，第 5 章讲任务领域与桌面领域，第 7 章讲 Electron 层，第 8 章跨层看提示词与上下文，第 9 章给出评审意见。
@@ -146,7 +146,7 @@ Pi TUI 能跑 TillDone，但有两处不够：
 
 - **边牧不会真的“不歇”。** 督促每条用户输入只触发一次（`nudged` 闩锁），边牧被推一次之后如果还是停了，就真停了，等牧羊人再吹哨。这是有意的：防止模型和督促消息互相推着无限续跑。
 - **牧羊人说“分开赶”，边牧可以不听。** “细分”按钮只是一条消息，模型可能认为任务已经够小而不拆；按钮会在这次 settle 结束时恢复可点。
-- **瞭望台只看得到“本次放牧”。** 桌面端用 `--no-session` 启动 Pi，重启或开新会话，羊群和对话都清空。TUI 下扩展能从会话分支恢复清单（`restore`），桌面端用不到这条路。
+- **瞭望台只看得到“本次放牧”。** 重启或开新会话，桌面上的羊群和对话都清空。旧会话由 Pi 存在 `~/.pi/agent/sessions/` 下，可以在 Pi TUI 里 `pi --resume` 续上，扩展会从会话分支恢复清单（`restore`）；桌面端自己还不做会话恢复。
 
 ---
 
@@ -317,7 +317,7 @@ sequenceDiagram
 
 | # | 接入点 | Where | When：每次 settle 几次 | Why |
 |--|------------|--------|--------|------------|
-| ① | `session_start` / `session_tree` | `ext/index.ts:48-52` | 会话开始 / 分支切换各 1 次 | 从会话分支里最后一个有效 `details` 恢复清单。`--no-session` 下恢复为空 |
+| ① | `session_start` / `session_tree` | `ext/index.ts:48-52` | 会话开始 / 分支切换各 1 次 | 从会话分支里最后一个有效 `details` 恢复清单。桌面端每次启动都是新会话文件，恢复为空 |
 | ② | `pi.on("tool_call")` | `ext/index.ts:54-61` | 每个工具调用 1 次（`K` 次） | 门禁 `gate`；非 tilldone 工具计入 `spent`，到 15 的倍数时记下提示 |
 | ③ | `pi.on("tool_result")` | `ext/index.ts:63-68` | 有提示的那次调用 1 次 | 把细分提示追加到这次工具结果的 `content` 末尾 |
 | ④ | `pi.on("agent_end")` | `ext/index.ts:70-74` | 每个 run 结束 1 次（`N` 次） | 督促：有未完成任务且本条输入没督促过 → `sendMessage(nudge)`，带 `triggerTurn: true` |
@@ -426,7 +426,7 @@ RPC 下确认变成 `extension_ui_request`：`{id, method:"confirm", title, mess
 | `setWidget` / `setFooter` / `ui.custom()` | RPC 下拿不到 TUI 组件；当前任务从 `details` 现算，`/tilldone` 本地拦截 |
 | `select` / `input` / `editor` | MVP 不做；立即回 `cancelled: true`，避免 Pi 卡住（`desk/src/domain.ts:275-279`） |
 | `agent_before_settle` 续跑 | 督促用排队消息续跑，不需要 before-settle 处理器 |
-| 会话持久化 | `--no-session`；重启即新会话 |
+| 会话持久化 | Pi 默认保存会话文件；重启即新会话，桌面端不恢复旧会话 |
 | 模型切换命令 | 渲染端不能改模型；只能启动时用 `TILLDONE_MODEL` 指定 |
 
 ---
@@ -503,7 +503,7 @@ D-L3 的核心是 `reduce(state, record)`（`desk/src/domain.ts:101-194`）。�
 | `copyMessage` | 消息 id；只认有文字的助手回复 | 把这条回复的 Markdown 原文交给 D-L2 写剪贴板，不发 RPC |
 | `openLink` | 消息 id + 网址（≤ 2048 字符）；网址须是这条助手回复自己的 Markdown 链接，`http`/`https`，不含 `用户名:密码@` | 交给 D-L2 用系统浏览器打开，不发 RPC |
 | `restart` | 仅在 Pi 已退出时 | 重启子进程 |
-| `newSession` | 仅在已连接且空闲时 | 重启子进程（新的 `--no-session` 会话） |
+| `newSession` | 仅在已连接且空闲时 | 重启子进程（新的会话文件） |
 | `preferences` | 主题 7 选 1、语言 2 选 1 | `desk_preferences` |
 | `apiOpen` / `apiClose` / `apiLink` / `apiSave` | 提供商白名单、key 格式 | 本地凭据操作，不发 RPC |
 
@@ -633,7 +633,7 @@ README 说得很清楚：这些措施保护的是**渲染端边界**，不保护
 |---|---|---|
 | 外观偏好 | Electron userData 下 `appearance.json`（0600） | 跨重启 |
 | API 凭据 | Pi 的 `auth.json`（默认 `~/.pi/agent/auth.json`） | 与 Pi 共用 |
-| 对话与任务清单 | Pi 进程内存（`--no-session`） | 重启或新会话即丢失 |
+| 对话与任务清单 | Pi 会话文件（`~/.pi/agent/sessions/`） | 桌面上重启或新会话即清空；文件保留，可在 Pi TUI 续上 |
 | 渲染端草稿、滚动位置、展开状态 | DOM | 页面内 |
 
 ### 7.8 凭据适配器：前端，不是第二个保险箱
@@ -655,7 +655,7 @@ API Key 设置写的是 Pi 自己的 `auth.json`，不另建存储（`desk/src/c
 
 | 角色 | 内容 |
 |---|---|
-| system | Pi 默认系统提示词（`--no-skills`：无技能索引；`--no-extensions`：只加载 tilldone） |
+| system | Pi 默认系统提示词，加上用户级和项目级技能的索引（`--no-extensions`：只加载 tilldone） |
 | tools | Pi 内置工具 + `tilldone`（`TOOL.description` 约 1000 字符，含九个动作和拆小原则） |
 | user | 用户的第一句话（可带图片） |
 | assistant / toolResult | tilldone 结果文本：清单变化，加上可能的 `SPLIT_CUE` 和细分提示；被拦工具的错误：`GATE_REASON.*` |
@@ -712,7 +712,7 @@ TUI 下，用户在运行中也能输入，但桌面端把它做成了明确的�
 | R2 | **两个中文 slogan 并存**：讨论稿定的是“羊不进圈，边牧不歇”，界面上曾是另一句 | 文案不统一 | **已修复**：界面、README、测试统一为“羊不进圈，边牧不歇” |
 | R3 | **每条 RPC 记录都做一次 JSON 往返脱敏**（`desk/src/desk.ts:46-49`），包括每个流式 token | 长回复、大工具结果时主进程 CPU 开销上升 | 只对可能带凭据的记录类型（如 stderr、错误、工具结果）脱敏，或先做子串检查再序列化 |
 | R4 | **对话和工具结果无上限增长**：`state.messages`、 `state.tools` 只追加 | 一个会话跑很久后内存和渲染变慢 | 设一个保留窗口，或把旧工具结果截断为摘要 |
-| R5 | **重启即丢清单**：`--no-session`，扩展的 `restore` 用不上 | 崩溃或误点新会话后，进行中的清单没了 | 可选持久化会话，或至少在重启前把最后一份 `details` 存下来，供新会话以 `new-list` + `add` 重建 |
+| R5 | **桌面端不恢复会话**：会话文件已保存，但桌面端每次启动都开新会话 | 崩溃或误点新会话后，桌面上进行中的清单没了（可在 Pi TUI 里 `pi --resume` 找回） | 桌面端加“继续上次会话”，启动时带 `--continue`，并从 RPC 取回历史消息重建视图 |
 | R6 | **细分请求的语言随界面变化**（8.5 节） | 模型输入受界面设置影响，回归测试多一个变量 | 模型可见文本固定一种语言，或在 README 里明确这个例外 |
 | R7 | **只显示第一个确认弹窗**：`confirms` 是数组，视图只取 `[0]` | 目前扩展同时最多一个确认，暂无问题 | 保持现状，但在注释里写明假设 |
 | R8 | **细分按钮在“模型决定不拆”时要等 settle 结束才恢复** | 长 settle 里按钮一直是“细分中…” | 可接受；或者在下一次 tilldone 结果到达、任务仍未被拆时就提示“边牧认为不需要拆” |

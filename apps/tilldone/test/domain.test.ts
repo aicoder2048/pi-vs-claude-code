@@ -99,13 +99,25 @@ test("intent planning handles local /tilldone, steers every message sent while r
 });
 test("new session restarts Pi only while connected and idle", () => {
 	const ready = reduce(initial(), { type: "response", command: "get_state", success: true, data: {} });
-	expect(planIntent(ready, { type: "newSession" }).restart).toBe(true);
+	expect(planIntent(ready, { type: "newSession" }).restart).toBe("fresh");
 	expect(toViewModel(ready).input.newSession).toBe(true);
 	const running = reduce(ready, { type: "agent_start" });
 	expect(planIntent(running, { type: "newSession" }).restart).toBeFalsy();
 	expect(toViewModel(running).input.newSession).toBe(false);
 	expect(planIntent(initial(), { type: "newSession" }).restart).toBeFalsy();
 	expect(planIntent(reduce(ready, { type: "desk_exit", error: "gone" }), { type: "newSession" }).restart).toBeFalsy();
+});
+test("Restart after an exit resumes the session file get_state reported", () => {
+	const ready = reduce(initial(), { type: "response", command: "get_state", success: true, data: { sessionFile: "/s/a.jsonl" } });
+	expect(ready.sessionFile).toBe("/s/a.jsonl");
+	expect(planIntent(ready, { type: "restart" }).restart).toBeUndefined();
+	const exited = reduce(ready, { type: "desk_exit", error: "gone" });
+	expect(exited.sessionFile).toBe("/s/a.jsonl");
+	expect(planIntent(exited, { type: "restart" }).restart).toBe("resume");
+});
+test("a missing session record leaves one notice in the user's language", () => {
+	const s = reduce(initial(), { type: "desk_resume_unavailable" });
+	expect(toViewModel(s).conversation.map((m) => [m.kind, m.text])).toEqual([["notice", "没有找到上次会话的记录，已开始新会话。"]]);
 });
 test("views stay put when only the clock or an unchanged state poll moves", () => {
 	const polled = { type: "response", command: "get_state", success: true, data: { model: { provider: "openai-codex", id: "gpt-6.1-sol" }, thinkingLevel: "low", isStreaming: false } };

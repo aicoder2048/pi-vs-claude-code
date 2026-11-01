@@ -9,6 +9,9 @@ const state = records.find((r) => r.command === "get_state").data;
 const emit = (record: object) => process.stdout.write(JSON.stringify(record) + "\n");
 const log = (record: object) => { if (process.env.FAKE_PI_LOG) appendFileSync(process.env.FAKE_PI_LOG, JSON.stringify(record) + "\n"); };
 log({ type: "launch", args: process.argv.slice(2), cwd: process.cwd(), pid: process.pid });
+// Like Pi: a resumed process reports the file it was given; otherwise the file a fresh session would use.
+const sessionArg = process.argv.indexOf("--session");
+const sessionFile = sessionArg >= 0 ? process.argv[sessionArg + 1] : process.env.FAKE_PI_SESSION;
 const waits = new Map<string, () => void>();
 // Steering messages wait here until the run ends, like Pi's queue during a long tool batch.
 let steering: string[] = [];
@@ -16,7 +19,7 @@ const queueUpdate = () => emit({ type: "queue_update", steering, followUp: [] })
 async function handle(r: any) {
 	log(r);
 	if (r.type === "extension_ui_response") { waits.get(r.id)?.(); return; }
-	if (r.type === "get_state") { emit({ type: "response", command: r.type, id: r.id, success: true, data: state }); return; }
+	if (r.type === "get_state") { emit({ type: "response", command: r.type, id: r.id, success: true, data: sessionFile ? { ...state, sessionFile } : state }); return; }
 	if (r.type === "auth_probe") {
 		if (!process.env.PI_CODING_AGENT_DIR) throw new Error("Auth probes require an isolated agent directory");
 		const auth = JSON.parse(readFileSync(join(process.env.PI_CODING_AGENT_DIR, "auth.json"), "utf8"));
@@ -33,6 +36,7 @@ async function handle(r: any) {
 	if (r.type === "clear_queue") { steering = []; queueUpdate(); return; }
 	if (r.type === "abort") { emit({ type: "agent_settled", aborted: true }); return; }
 	if (r.type !== "prompt") return;
+	if (r.message === "crash") process.exit(9);
 	if (r.message === "busy") { emit({ type: "agent_start" }); return; }
 	if (r.message === "markdown") {
 		const text = "## 周度小结\n\n第一行\n第二行，**加粗** 和 `inline`\n\n- 一\n- [x] 二\n\n| 指标 | 数值 |\n|:--|--:|\n| 收盘 | 135.2 |\n\n```ts\nconst a = 1 < 2;\n```\n\n> 引用\n\n见 [文档](https://example.com/docs)。<img src=x onerror=\"alert(1)\"> [脚本](javascript:alert(1))";
