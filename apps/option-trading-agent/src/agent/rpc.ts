@@ -118,7 +118,7 @@ export class PiProcess {
     }
     if (typeof command.type !== 'string' || !command.type) return Promise.reject(new Error('RPC command requires a type.'));
     const timeout = timeoutMs ?? connection.config.requestTimeoutMs;
-    if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 60000) return Promise.reject(new Error('Invalid RPC timeout.'));
+    if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 600000) return Promise.reject(new Error('Invalid RPC timeout.'));
     const type = command.type;
     const id = `option-agent-${++this.sequence}`;
     return new Promise((resolve, reject) => {

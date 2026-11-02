@@ -1,0 +1,4 @@
+[
+  { "date": "2026-11-26", "exchange": "NYSE", "status": "closed", "open": null, "close": null, "name": "Fictional full closure" },
+  { "date": "2026-11-27", "exchange": "NASDAQ", "status": "early-close", "open": "2026-11-27T14:30:00.000Z", "close": "2026-11-27T18:00:00.000Z", "name": "Fictional shortened session" }
+]

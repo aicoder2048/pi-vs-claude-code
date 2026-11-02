@@ -1,0 +1,8 @@
+{
+  "status": "OK",
+  "results": [
+    { "date": "2026-10-28", "yield_1_month": 4.15, "yield_3_month": 4.18 },
+    { "date": "2026-10-30", "yield_1_month": 4.25, "yield_3_month": 4.28 },
+    { "date": "2026-10-29", "yield_1_month": 4.2, "yield_3_month": 4.22 }
+  ]
+}

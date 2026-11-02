@@ -3,10 +3,12 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertModel, loadConfig } from '../src/agent/config.ts';
 import { PiProcess } from '../src/agent/rpc.ts';
-import { REQUIRED_SKILLS, object, parseMarketResult, type MarketResult } from '../src/business/types.ts';
+import { REQUIRED_SKILLS, object, type MarketResult } from '../src/business/types.ts';
+import { parseMarketResult } from '../src/business/market-data/protocol.ts';
 
 const app = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const config = loadConfig(app);
+if (/fake-pi/i.test(config.piBin)) throw new Error('The loader probe requires the real Pi CLI, not fake-pi.');
 const request = { requestId: 'manual-pi-probe', action: 'echo', text: 'Stage 0 echo 中文\nNo market data.' };
 let turns = 0;
 let accept!: (result: MarketResult) => void;
@@ -43,7 +45,8 @@ try {
   assert.equal(object(ack.data).disposition, 'handled');
   const result = await entry;
   assert.equal(result.status, 'ok');
-  if (result.status === 'ok') assert.equal(result.text, request.text);
+  assert(result.status === 'ok' && result.action === 'echo');
+  assert.equal(result.text, request.text);
   assert.equal(object((await child.request({ type: 'get_state' })).data).isStreaming, false);
   assert.equal(turns, 0, 'Probe made zero model turns');
   process.stdout.write(`Pi verified. Model ${resolved}. Five resources loaded. Correlated echo handled. turn_start=${turns}.\n`);

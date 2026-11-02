@@ -83,7 +83,7 @@ describe('bounded LF JSONL decoder', () => {
 });
 
 describe('isolated launch config', () => {
-  test('uses Codex, explicit resources and only read plus hello', () => {
+  test('uses Codex, explicit resources and only the centralized read-only tools', () => {
     const c = loadConfig(app, {});
     expect(c.model).toBe('openai-codex/gpt-6.1-sol'); expect(c.piBin).toBe('pi');
     const args = piArgs(c);
@@ -91,8 +91,8 @@ describe('isolated launch config', () => {
     expect(args[args.indexOf('--mode') + 1]).toBe('rpc');
     expect(args[args.indexOf('-e') + 1]).toBe(join(app, 'extensions/option-agent'));
     expect(args[args.indexOf('--skill') + 1]).toBe(join(app, 'skills'));
-    expect(OPTION_AGENT_TOOLS).toEqual(['read', 'hello']);
-    expect(args[args.indexOf('--tools') + 1]).toBe('read,hello');
+    expect(OPTION_AGENT_TOOLS).toEqual(['read', 'hello', 'get_daily_bars', 'get_option_chain', 'get_contract']);
+    expect(args[args.indexOf('--tools') + 1]).toBe('read,hello,get_daily_bars,get_option_chain,get_contract');
     expect(args[args.indexOf('--system-prompt') + 1]).toContain('advice only');
     expect(args[args.indexOf('--append-system-prompt') + 1]).toBe('');
     expect(args).not.toContain('--session');

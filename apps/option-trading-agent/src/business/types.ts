@@ -1,3 +1,70 @@
+export interface MarketDataMetadata {
+  fetchedAt: string;
+  source: 'network' | 'cache';
+  asOf?: string | null;
+}
+
+export type DataResult<T> = {
+  provider: 'massive';
+  asOf: string | null;
+  fetchedAt: string;
+  source: 'network' | 'cache';
+  issues: string[];
+} & (
+  | { status: 'ok' | 'partial'; rows: T[] }
+  | { status: 'empty' | 'unavailable' | 'error'; rows: [] }
+);
+
+export interface DailyBar {
+  symbol: string;
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number | null;
+  startedAt: string;
+  provisional: boolean;
+}
+
+export interface OptionSnapshot {
+  occ: string;
+  symbol: string;
+  expiry: string;
+  side: 'put' | 'call';
+  strike: number;
+  bid: number | null;
+  ask: number | null;
+  iv: number | null;
+  greeks: { delta: number | null; gamma: number | null; theta: number | null; vega: number | null };
+  openInterest: number | null;
+  volume: number | null;
+  quotedAt: string | null;
+}
+
+export interface MarketHoliday {
+  date: string;
+  exchange: string;
+  status: 'closed' | 'early-close';
+  open: string | null;
+  close: string | null;
+}
+
+export interface TreasuryRate {
+  date: string;
+  annualRate: number;
+}
+
+export interface DailyBarsQuery { symbol: string; days: number }
+export interface OptionChainQuery {
+  symbol: string;
+  expiry?: string;
+  side?: 'put' | 'call';
+  strikeRange?: { min: number; max: number };
+}
+export interface ContractQuery { occ: string }
+export type OccContract = Pick<OptionSnapshot, 'occ' | 'symbol' | 'expiry' | 'side' | 'strike'>;
+
 export const AGENT_LIMITS = Object.freeze({ maxTurns: 12, maxTools: 24 });
 export const REQUIRED_SKILLS = Object.freeze([
   'option-coach', 'principle-facts-over-heuristics', 'principle-advice-not-orders',
@@ -10,15 +77,31 @@ export interface Hello {
   adviceOnly: true;
 }
 
-export interface MarketRequest {
-  requestId: string;
-  action: 'echo';
-  text: string;
+export type MarketQuery = DailyBarsQuery & OptionChainQuery;
+
+export interface MarketPanel {
+  symbol: string;
+  query: MarketQuery;
+  bars: DataResult<DailyBar>;
+  chain: DataResult<OptionSnapshot>;
 }
+
+export type MarketCommand =
+  | { action: 'echo'; text: string }
+  | { action: 'market'; query: MarketQuery }
+  | { action: 'contract'; occ: string };
+export type MarketRequest = MarketCommand & { requestId: string };
 
 export type MarketResult =
   | { requestId: string; status: 'ok'; action: 'echo'; text: string; marker: 'option-agent'; stage: 0 }
+  | { requestId: string; status: 'ok'; action: 'market'; panel: MarketPanel }
+  | { requestId: string; status: 'ok'; action: 'contract'; occ: string; result: DataResult<OptionSnapshot> }
   | { requestId: string; status: 'error'; error: string };
+
+export type MarketToolResult =
+  | { kind: 'dailyBars'; query: DailyBarsQuery; result: DataResult<DailyBar> }
+  | { kind: 'optionChain'; query: OptionChainQuery; result: DataResult<OptionSnapshot> }
+  | { kind: 'contract'; query: ContractQuery; result: DataResult<OptionSnapshot> };
 
 export type AgentConnection =
   | { kind: 'new' }
@@ -31,7 +114,7 @@ export type AgentConnection =
 export type AgentOperation =
   | { kind: 'idle' }
   | { kind: 'advice'; id: string; turns: number; tools: number }
-  | { kind: 'command'; id: string; action: 'echo' }
+  | { kind: 'command'; id: string; action: MarketRequest['action'] }
   | { kind: 'failed'; error: string };
 
 export interface TranscriptMessage {
@@ -43,7 +126,7 @@ export interface TranscriptMessage {
 
 export type ToolLog = { id: string; name: string; input: unknown } & (
   | { kind: 'running' }
-  | { kind: 'succeeded'; text: string; hello: Hello | null }
+  | { kind: 'succeeded'; text: string; hello: Hello | null; market: MarketToolResult | null }
   | { kind: 'failed'; error: string }
 );
 
@@ -52,6 +135,7 @@ export interface AgentView {
   operation: AgentOperation;
   messages: TranscriptMessage[];
   tools: ToolLog[];
+  market: MarketPanel | null;
 }
 
 export function object(value: unknown): Record<string, unknown> {
@@ -62,22 +146,6 @@ export function object(value: unknown): Record<string, unknown> {
 export function boundedText(value: unknown, max = 16000): string {
   if (typeof value !== 'string' || value.length > max || value.includes('\0')) throw new Error('Invalid text.');
   return value;
-}
-
-export function parseMarketRequest(value: unknown): MarketRequest {
-  const data = object(value);
-  const requestId = boundedText(data.requestId, 128);
-  if (!/^[a-zA-Z0-9_-]+$/.test(requestId) || data.action !== 'echo') throw new Error('Invalid Stage 0 echo request.');
-  return { requestId, action: 'echo', text: boundedText(data.text) };
-}
-
-export function parseMarketResult(value: unknown): MarketResult {
-  const data = object(value);
-  const requestId = boundedText(data.requestId, 128);
-  if (!requestId) throw new Error('Missing command correlation.');
-  if (data.status === 'error') return { requestId, status: 'error', error: boundedText(data.error) };
-  if (data.status !== 'ok' || data.action !== 'echo' || data.marker !== 'option-agent' || data.stage !== 0) throw new Error('Invalid Stage 0 echo result.');
-  return { requestId, status: 'ok', action: 'echo', text: boundedText(data.text), marker: 'option-agent', stage: 0 };
 }
 
 export function parseHello(value: unknown): Hello {

@@ -1,14 +1,19 @@
 import {
-  AGENT_LIMITS, REQUIRED_SKILLS, boundedText, object, parseHello, parseMarketRequest, parseMarketResult,
-  type AgentView, type MarketResult,
+  AGENT_LIMITS, REQUIRED_SKILLS, boundedText, object, parseHello,
+  type AgentView, type DataResult, type MarketCommand, type MarketPanel, type MarketQuery,
+  type MarketRequest, type MarketResult, type MarketToolResult, type OptionSnapshot,
 } from '../business/types.ts';
-import { assertModel, type Config } from './config.ts';
+import {
+  MARKET_RESULT_ENTRY, parseContractInput, parseDailyBarsInput, parseMarketRequest, parseMarketResult,
+  parseMarketToolResult, parseOptionChainInput, sameQuery,
+} from '../business/market-data/protocol.ts';
+import { assertModel, OPTION_AGENT_TOOL_NAMES as names, OPTION_AGENT_TOOLS, type Config } from './config.ts';
 import type { RpcRecord } from './jsonl.ts';
 import { PiProcess } from './rpc.ts';
 
 type Active = { id: string; ack: boolean; timer: ReturnType<typeof setTimeout>; reject(error: Error): void } & (
   | { kind: 'advice'; settled: boolean; resolve(): void; turns: number; tools: number }
-  | { kind: 'command'; text: string; result: MarketResult | null; resolve(result: MarketResult): void }
+  | { kind: 'command'; request: MarketRequest; result: MarketResult | null; resolve(result: MarketResult): void }
 );
 
 function textContent(value: unknown): string {
@@ -23,7 +28,7 @@ function textContent(value: unknown): string {
 }
 
 export class PiDriver {
-  private state: AgentView = { connection: { kind: 'new' }, operation: { kind: 'idle' }, messages: [], tools: [] };
+  private state: AgentView = { connection: { kind: 'new' }, operation: { kind: 'idle' }, messages: [], tools: [], market: null };
   private child: PiProcess | null = null;
   private active: Active | null = null;
   private sequence = 0;
@@ -101,7 +106,11 @@ export class PiDriver {
       this.state.messages.push({ id, role: 'user', text, status: 'complete' });
       this.state.operation = { kind: 'advice', id, turns: 0, tools: 0 };
       this.publish();
-      void child.request({ type: 'prompt', message: `/skill:option-coach ${text}` }).then(ack => {
+      const currentDate = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(Date.now());
+      const context = { currentDate, timeZone: 'America/New_York', selectedSymbol: this.state.market?.symbol ?? null, question: text };
+      void child.request({ type: 'prompt', message: `/skill:option-coach ${JSON.stringify(context)}` }).then(ack => {
         if (this.active?.id !== id) return;
         if (object(ack.data).disposition !== 'started') throw new Error('Pi advice prompt did not start a run.');
         this.active.ack = true;
@@ -111,19 +120,31 @@ export class PiDriver {
     } catch (error) { return Promise.reject(error); }
   }
 
-  command(input: { action: 'echo'; text: string }): Promise<MarketResult> {
+  async loadMarket(query: MarketQuery): Promise<MarketPanel> {
+    const result = await this.command({ action: 'market', query });
+    if (result.status !== 'ok' || result.action !== 'market') throw new Error('Missing market panel.');
+    return result.panel;
+  }
+
+  async loadContract(occ: string): Promise<DataResult<OptionSnapshot>> {
+    const result = await this.command({ action: 'contract', occ });
+    if (result.status !== 'ok' || result.action !== 'contract') throw new Error('Missing market contract.');
+    return result.result;
+  }
+
+  command(input: MarketCommand): Promise<MarketResult> {
     try {
       const child = this.available();
-      const request = parseMarketRequest({ ...object(input), requestId: `echo-${++this.sequence}` });
+      const request = parseMarketRequest({ ...object(input), requestId: `${input.action}-${++this.sequence}` });
       const promise = new Promise<MarketResult>((resolve, reject) => {
-        this.active = { kind: 'command', id: request.requestId, text: request.text, ack: false, result: null, resolve, reject,
+        this.active = { kind: 'command', id: request.requestId, request, ack: false, result: null, resolve, reject,
           timer: setTimeout(() => this.fail(new Error('Pi operation timed out.')), this.config.timeoutMs) };
       });
-      this.state.operation = { kind: 'command', id: request.requestId, action: 'echo' };
+      this.state.operation = { kind: 'command', id: request.requestId, action: request.action };
       this.publish();
-      void child.request({ type: 'prompt', message: `/option-market ${JSON.stringify(request)}` }).then(ack => {
+      void child.request({ type: 'prompt', message: `/option-market ${JSON.stringify(request)}` }, this.config.timeoutMs).then(ack => {
         if (this.active?.id !== request.requestId) return;
-        if (object(ack.data).disposition !== 'handled') throw new Error('Pi echo command was not handled.');
+        if (object(ack.data).disposition !== 'handled') throw new Error('Pi market command was not handled.');
         this.active.ack = true;
         this.complete();
       }).catch(error => { if (this.active?.id === request.requestId) this.fail(error); });
@@ -192,7 +213,8 @@ export class PiDriver {
         const id = boundedText(record.toolCallId, 256);
         const name = boundedText(record.toolName, 128);
         if (!id || this.state.tools.some(tool => tool.id === id)) throw new Error('Invalid or duplicate tool start.');
-        if (name !== 'hello' && name !== 'read') throw new Error('Tool is not allowed.');
+        if (!OPTION_AGENT_TOOLS.includes(name)) throw new Error('Tool is not allowed.');
+        this.marketInput(name, record.args);
         if (++active.tools > AGENT_LIMITS.maxTools) throw new Error('Pi tool budget exceeded.');
         this.state.tools.push({ kind: 'running', id, name, input: record.args });
         this.state.operation = { kind: 'advice', id: active.id, turns: active.turns, tools: active.tools };
@@ -209,7 +231,13 @@ export class PiDriver {
           this.state.tools[index] = { ...tool, kind: 'failed', error: text };
           throw new Error(`Pi tool failed: ${text}`);
         }
-        this.state.tools[index] = { ...tool, kind: 'succeeded', text, hello: tool.name === 'hello' ? parseHello(result.details) : null };
+        const input = this.marketInput(tool.name, tool.input);
+        const market = input ? parseMarketToolResult(result.details) : null;
+        if (input && (!market || input.kind !== market.kind || !sameQuery(input.query, market.query))) {
+          throw new Error('Market tool result differs from input.');
+        }
+        this.state.tools[index] = { ...tool, kind: 'succeeded', text,
+          hello: tool.name === names.hello ? parseHello(result.details) : null, market };
         break;
       }
       case 'agent_settled': {
@@ -221,13 +249,19 @@ export class PiDriver {
       }
       case 'entry_appended': {
         const entry = object(record.entry);
-        if (entry.customType !== 'option-market-result/v1') return;
+        if (entry.customType !== MARKET_RESULT_ENTRY) return;
         const result = parseMarketResult(entry.data);
         const active = this.active;
-        if (active?.kind !== 'command' || result.requestId !== active.id) return;
-        if (active.result) throw new Error('Duplicate echo result.');
+        if (active?.kind !== 'command' || result.requestId !== active.id) throw new Error('Unmatched command correlation.');
+        if (active.result) throw new Error('Duplicate market result.');
         if (result.status === 'error') throw new Error(result.error);
-        if (result.text !== active.text) throw new Error('Echo result differs from request.');
+        const request = active.request;
+        if (result.action !== request.action) throw new Error('Market result action differs from request.');
+        if (request.action === 'echo' && result.action === 'echo' && result.text !== request.text
+          || request.action === 'market' && result.action === 'market' && !sameQuery(result.panel.query, request.query)
+          || request.action === 'contract' && result.action === 'contract' && result.occ !== request.occ) {
+          throw new Error('Market result differs from request.');
+        }
         active.result = result;
         this.complete();
         return;
@@ -237,6 +271,15 @@ export class PiDriver {
     this.publish();
   }
 
+  private marketInput(name: string, input: unknown): Pick<MarketToolResult, 'kind' | 'query'> | null {
+    switch (name) {
+      case names.dailyBars: return { kind: 'dailyBars', query: parseDailyBarsInput(input) };
+      case names.optionChain: return { kind: 'optionChain', query: parseOptionChainInput(input) };
+      case names.contract: return { kind: 'contract', query: parseContractInput(input) };
+      default: return null;
+    }
+  }
+
   private complete(): void {
     const active = this.active;
     if (!active?.ack) return;
@@ -244,6 +287,9 @@ export class PiDriver {
     clearTimeout(active.timer);
     this.active = null;
     this.state.operation = { kind: 'idle' };
+    if (active.kind === 'command' && active.result?.status === 'ok' && active.result.action === 'market') {
+      this.state.market = structuredClone(active.result.panel);
+    }
     this.publish();
     if (active.kind === 'advice') active.resolve();
     else if (active.result) active.resolve(active.result);
@@ -288,7 +334,7 @@ export class PiDriver {
       await stopping;
       if (generation !== this.generation) throw new Error('Pi restart was interrupted.');
       this.child = null;
-      this.state = { connection: { kind: 'new' }, operation: { kind: 'idle' }, messages: [], tools: [] };
+      this.state = { connection: { kind: 'new' }, operation: { kind: 'idle' }, messages: [], tools: [], market: null };
       await this.start();
     }).finally(() => { this.restarting = null; });
   }

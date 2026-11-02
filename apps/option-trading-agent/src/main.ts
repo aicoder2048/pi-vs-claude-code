@@ -62,6 +62,7 @@ async function launch(): Promise<void> {
       const command = parseDesktopCommand(value);
       switch (command.kind) {
         case 'ask': await driver.ask(command.text); break;
+        case 'market': await driver.loadMarket(command.query); break;
         case 'stop': await driver.stop(); break;
         case 'restart': await driver.restart(); break;
         default: { const exhaustive: never = command; return exhaustive; }
@@ -75,7 +76,7 @@ async function launch(): Promise<void> {
   await app.whenReady();
   if (shutdown) return;
   window = new BrowserWindow({
-    title: 'Option trading agent', width: 1240, height: 860, minWidth: 760, minHeight: 620,
+    title: '期权交易助理', width: 1240, height: 860, minWidth: 760, minHeight: 620,
     backgroundColor: '#10171e', show: false,
     webPreferences: {
       preload: join(outputDirectory, 'preload.cjs'), sandbox: true, contextIsolation: true,

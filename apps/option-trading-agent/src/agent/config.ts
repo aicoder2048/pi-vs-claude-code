@@ -1,6 +1,9 @@
 import { resolve } from 'node:path';
 
-export const OPTION_AGENT_TOOLS = Object.freeze(['read', 'hello'] as const);
+export const OPTION_AGENT_TOOL_NAMES = Object.freeze({
+  read: 'read', hello: 'hello', dailyBars: 'get_daily_bars', optionChain: 'get_option_chain', contract: 'get_contract',
+} as const);
+export const OPTION_AGENT_TOOLS: readonly string[] = Object.freeze(Object.values(OPTION_AGENT_TOOL_NAMES));
 
 export interface Config {
   piBin: string;

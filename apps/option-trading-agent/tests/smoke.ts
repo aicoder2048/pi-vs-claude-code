@@ -68,7 +68,7 @@ async function untilDead(pid: number): Promise<void> {
 
 async function ready(window: Page): Promise<void> {
   await window.waitForFunction(async () => (await globalThis.optionAgent.view()).connection.kind === 'ready');
-  await window.locator('#connection').filter({ hasText: /^Pi ready$/ }).waitFor();
+  await window.locator('#connection').filter({ hasText: /^Pi 已就绪$/ }).waitFor();
 }
 
 try {
@@ -116,7 +116,16 @@ try {
     assert.equal(observed.piDirectory, join(root, 'pi-agent'));
     assert.equal(observed.piExecutable, fake);
     assert.deepEqual(observed.credentialVariableNames, []);
-    assert.equal(await window.title(), 'Option trading agent');
+    assert.equal(await window.title(), '期权交易助理');
+    assert.equal(await window.locator('html').getAttribute('lang'), 'zh-CN');
+    assert.equal(await window.locator('h1').innerText(), '期权交易助理');
+    assert.equal(await window.locator('.advice-label').innerText(), '仅供参考，不构成投资建议。不下单，不连接券商。');
+    assert.equal(await window.locator('#send').innerText(), '发送');
+    assert.equal(await window.locator('#stop').innerText(), '停止');
+    assert.equal(await window.locator('#restart').innerText(), '重启 Pi');
+    assert.equal(await window.locator('#operation').innerText(), '可以提问');
+    assert.equal(await window.locator('#transcript .empty').innerText(), '输入问题开始对话。系统不会自动发送任何内容。');
+    assert.equal(await window.locator('#tools .empty').innerText(), '尚未调用工具。');
     assert.equal(await window.locator('#model').innerText(), 'openai-codex/gpt-6.1-sol');
     assert.equal(await window.locator('#send').isDisabled(), true);
     assert.equal(await window.locator('#transcript .message').count(), 0);
@@ -201,12 +210,18 @@ try {
     await window.waitForFunction(async () => (await globalThis.optionAgent.view()).operation.kind === 'idle');
     assert.equal(await window.locator('#transcript .user .message-text').innerText(), question);
     assert.deepEqual(await window.locator('#transcript .assistant .message-text').allTextContents(), ['Transport check.', 'Hello, Sean! Advice only.']);
-    assert.equal(await window.locator('#tools .tool h3').innerText(), 'hello · succeeded');
+    assert.equal(await window.locator('#tools .tool h3').innerText(), 'hello · 成功');
     assert.equal(await window.locator('#tools .tool .tool-id').innerText(), 'hello-1');
     assert.match(await window.locator('#tools .tool').innerText(), /Sean[\s\S]*Hello, Sean!/);
     assert.equal(await window.locator('#question').inputValue(), '');
     const log = await records();
-    assert(log.some(record => record.type === 'prompt' && record.message === `/skill:option-coach ${question}`));
+    const prompt = log.find(record => record.type === 'prompt' && typeof record.message === 'string' && record.message.startsWith('/skill:option-coach '));
+    assert(prompt && typeof prompt.message === 'string');
+    const context: unknown = JSON.parse(prompt.message.slice('/skill:option-coach '.length));
+    assert(context && typeof context === 'object' && 'question' in context && context.question === question);
+    assert('timeZone' in context && context.timeZone === 'America/New_York');
+    assert('selectedSymbol' in context && context.selectedSymbol === null);
+    assert('currentDate' in context && /^\d{4}-\d{2}-\d{2}$/.test(String(context.currentDate)));
     for (const event of ['input', 'turn_start', 'tool_call']) {
       assert(log.some(record => record.type === 'hook' && record.event === event), `actual extension hook ${event} ran`);
     }
@@ -221,7 +236,7 @@ try {
     try {
       await window.locator('#question').fill('Paused transport request');
       await window.locator('#send').click();
-      await window.locator('#operation').filter({ hasText: /^Working/ }).waitFor();
+      await window.locator('#operation').filter({ hasText: /^处理中/ }).waitFor();
       assert.equal(await window.locator('#send').isDisabled(), true);
       assert.equal(await window.locator('#restart').isDisabled(), true);
       const result = await window.evaluate(() => globalThis.optionAgent.send({ kind: 'ask', text: 'must not queue' }));
@@ -285,14 +300,14 @@ try {
     process.kill(pid, 'SIGSTOP');
     await window.locator('#question').fill('Stop this active request');
     await window.locator('#send').click();
-    await window.locator('#operation').filter({ hasText: /^Working/ }).waitFor();
+    await window.locator('#operation').filter({ hasText: /^处理中/ }).waitFor();
     await window.locator('#question').fill('停止后保留的草稿');
     await window.locator('#stop').click();
-    await window.locator('#connection').filter({ hasText: /^Pi stopped$/ }).waitFor();
+    await window.locator('#connection').filter({ hasText: /^Pi 已停止$/ }).waitFor();
     await untilDead(pid);
     assert.equal(await window.locator('#question').inputValue(), '停止后保留的草稿');
     assert.equal(await window.locator('#send').isDisabled(), true);
-    assert.match(await window.locator('#error').innerText(), /Pi stopped/);
+    assert.match(await window.locator('#error').innerText(), /^错误：.*Pi stopped/);
     assert.equal(await window.locator('#restart').isEnabled(), true);
   });
 
@@ -317,7 +332,7 @@ try {
       element.dispatchEvent(new Event('input', { bubbles: true }));
     }, invalid);
     await window.locator('#send').click();
-    await window.locator('#error').filter({ hasText: 'Invalid text.' }).waitFor();
+    await window.locator('#error').filter({ hasText: '错误：Invalid text.' }).waitFor();
     assert.equal(await window.locator('#question').inputValue(), invalid);
     assert.equal((await records()).filter(record => record.type === 'prompt').length, before);
     await window.locator('#question').fill('崩溃时保留的草稿');
@@ -327,7 +342,7 @@ try {
     const pid = await latestPid();
     const launches = (await records()).filter(record => record.type === 'launch').length;
     process.kill(pid, 'SIGKILL');
-    await window.locator('#connection').filter({ hasText: /^Pi failed$/ }).waitFor();
+    await window.locator('#connection').filter({ hasText: /^Pi 运行失败$/ }).waitFor();
     await untilDead(pid);
     assert.equal(await window.locator('#send').isDisabled(), true);
     assert.equal(await window.locator('#restart').isEnabled(), true);

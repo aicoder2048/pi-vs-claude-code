@@ -1,0 +1,32 @@
+{
+  "status": "OK",
+  "results": [
+    {
+      "details": { "ticker": "O:NIMB261106P00100000", "contract_type": "put", "expiration_date": "2026-11-06", "strike_price": 100 },
+      "underlying_asset": { "ticker": "NIMB", "price": 106, "last_updated": 1793390460000000000 },
+      "last_quote": { "bid": 0, "ask": 0.2, "last_updated": "1793390400123456789" },
+      "implied_volatility": 0.32,
+      "greeks": { "delta": -0.18, "gamma": 0.04, "theta": -0.06, "vega": 0.11 },
+      "open_interest": 0,
+      "day": { "volume": 0 }
+    },
+    {
+      "details": { "ticker": "O:NIMB261106C00105000", "contract_type": "call", "expiration_date": "2026-11-06", "strike_price": 105 },
+      "underlying_asset": { "ticker": "NIMB", "price": 106 },
+      "last_quote": { "bid": 2.4, "ask": 2.6, "last_updated": 1793390460000000000 },
+      "implied_volatility": 0.31,
+      "greeks": { "delta": 0.58, "gamma": 0.05, "theta": -0.07, "vega": 0.14 },
+      "open_interest": 245,
+      "day": { "volume": 12 }
+    },
+    {
+      "details": { "ticker": "O:NIMB261113P00095000", "contract_type": "put", "expiration_date": "2026-11-13", "strike_price": 95 },
+      "underlying_asset": { "ticker": "NIMB" },
+      "last_quote": { "bid": 0.1, "ask": 0.3, "last_updated": "1793390400000000000" },
+      "implied_volatility": 0.35,
+      "greeks": { "delta": -0.12, "gamma": 0.02, "theta": -0.04, "vega": 0.09 },
+      "open_interest": 88,
+      "day": { "volume": 4 }
+    }
+  ]
+}

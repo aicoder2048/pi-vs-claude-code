@@ -1,14 +1,22 @@
-import { describe, expect, test } from 'bun:test';
-import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Value } from '@sinclair/typebox/value';
 import optionAgent, { type ExtensionContext, type OptionExtensionAPI } from '../extensions/option-agent/index.ts';
 import { loadConfig, type Config } from '../src/agent/config.ts';
 import { PiDriver } from '../src/agent/driver.ts';
 import { JsonlDecoder, type RpcRecord } from '../src/agent/jsonl.ts';
 import { PiProcess } from '../src/agent/rpc.ts';
-import { AGENT_LIMITS, parseHello, parseMarketRequest, parseMarketResult, type AgentView } from '../src/business/types.ts';
+import { AGENT_LIMITS, parseHello, type AgentView } from '../src/business/types.ts';
+import { parseMarketRequest, parseMarketResult } from '../src/business/market-data/protocol.ts';
+import { MarketData, type MarketDataOptions } from '../src/business/market-data/client.ts';
+import bars from './fixtures/market/daily-bars.json';
+import chain from './fixtures/market/option-chain.json';
+import callsBeforePuts from './fixtures/market/calls-before-puts.ts';
+import contract from './fixtures/market/contract.json';
 
 const app = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 function config(mode = 'valid'): Config {
@@ -32,7 +40,10 @@ function records(text: string): RpcRecord[] {
   decoder.push(Buffer.from(text)); decoder.end(); return result;
 }
 
-function extension() {
+const extensionCaches: string[] = [];
+afterEach(async () => { await Promise.all(extensionCaches.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+
+function extension(options: Pick<MarketDataOptions, 'fetch'> = {}, Service: typeof MarketData = MarketData) {
   const hooks = new Map<string, Parameters<OptionExtensionAPI['on']>[1]>();
   const commands = new Map<string, Parameters<OptionExtensionAPI['registerCommand']>[1]>();
   const tools = new Map<string, Parameters<OptionExtensionAPI['registerTool']>[0]>();
@@ -41,10 +52,100 @@ function extension() {
   let shutdown = false;
   const ctx: ExtensionContext = { cwd: app, model: { provider: 'openai-codex', id: 'gpt-6.1-sol' },
     abort() { aborted = true; }, shutdown() { shutdown = true; } };
+  const cacheDir = mkdtempSync(join(tmpdir(), 'option-extension-'));
+  extensionCaches.push(cacheDir);
+  const marketData = new Service({ cacheDir, getApiKey: () => 'fixture-only-token', now: () => Date.parse('2026-10-30T20:05:00.000Z'),
+    fetch: options.fetch ?? (async () => { throw new Error('No market fixture route in hook tests.'); }) });
   optionAgent({ registerTool(tool) { tools.set(tool.name, tool); }, registerCommand(name, command) { commands.set(name, command); },
-    on(name, handler) { hooks.set(name, handler); }, appendEntry(customType, data) { entries.push({ customType, data }); } });
+    on(name, handler) { hooks.set(name, handler); }, appendEntry(customType, data) { entries.push({ customType, data }); } }, { marketData });
   return { ctx, commands, tools, entries, get aborted() { return aborted; }, get shutdown() { return shutdown; },
     hook(name: string, event: RpcRecord = {}) { return hooks.get(name)?.(event, ctx); } };
+}
+
+type RegisteredTool = Parameters<OptionExtensionAPI['registerTool']>[0];
+type RegisteredToolInput = Parameters<RegisteredTool['execute']>[1];
+type RegisteredToolResult = Awaited<ReturnType<RegisteredTool['execute']>>;
+type RegisteredMarketResult = Exclude<RegisteredToolResult['details'], { kind: 'hello' }>;
+type RegisteredMarketToolCase = {
+  name: RegisteredTool['name'];
+  input: RegisteredToolInput;
+  expected: Pick<RegisteredMarketResult, 'kind' | 'query'>;
+  rows: Partial<RegisteredMarketResult['result']['rows'][number]>[];
+  asOf: string;
+  schemaAccepted: RegisteredToolInput[];
+  invalid: { input: RegisteredToolInput; schemaAccepts: boolean }[];
+};
+
+const occ = contract.results.details.ticker;
+const marketToolCases: RegisteredMarketToolCase[] = [
+  {
+    name: 'get_daily_bars', input: { symbol: 'nimb', days: 4 },
+    expected: { kind: 'dailyBars', query: { symbol: 'NIMB', days: 4 } },
+    rows: [{ close: 102 }, { close: 101, volume: 0 }, { close: 103 }, { close: 106 }],
+    asOf: new Date(1793332800000).toISOString(),
+    schemaAccepted: [{ symbol: 'NIMB', days: 1 }, { symbol: 'N'.repeat(16), days: 500 }],
+    invalid: [
+      ...[null, [], {}, { symbol: 'NIMB' }, { days: 4 }, { symbol: 1, days: 4 },
+        { symbol: '', days: 4 }, { symbol: 'N'.repeat(17), days: 4 },
+        { symbol: 'NIMB', days: '4' }, { symbol: 'NIMB', days: 0 }, { symbol: 'NIMB', days: 501 },
+        { symbol: 'NIMB', days: 1.5 }, { symbol: 'NIMB', days: 4, apiKey: 'forged' },
+      ].map(input => ({ input, schemaAccepts: false })),
+      { input: { symbol: '../NIMB', days: 4 }, schemaAccepts: true },
+    ],
+  },
+  {
+    name: 'get_option_chain', input: { symbol: 'nimb', expiry: '2026-11-06', strikeRange: { min: 100, max: 105 } },
+    expected: { kind: 'optionChain', query: { symbol: 'NIMB', expiry: '2026-11-06', strikeRange: { min: 100, max: 105 } } },
+    rows: [{ occ, bid: 0, ask: 0.2, openInterest: 0, volume: 0 }, { occ: 'O:NIMB261106C00105000', strike: 105 }],
+    asOf: new Date(1793390460000).toISOString(),
+    schemaAccepted: [{ symbol: 'N'.repeat(16) }, { symbol: 'NIMB', expiry: '2026-11-06' },
+      { symbol: 'NIMB', strikeRange: { min: 0, max: 105.5 } },
+      { symbol: 'NIMB', side: 'put' }, { symbol: 'NIMB', side: 'call' }],
+    invalid: [
+      ...[null, [], {}, { symbol: 1 }, { symbol: '' }, { symbol: 'N'.repeat(17) },
+        { symbol: 'NIMB', expiry: 20261106 }, { symbol: 'NIMB', expiry: '11/06/2026' },
+        { symbol: 'NIMB', strikeRange: { min: -1, max: 105 } },
+        { symbol: 'NIMB', strikeRange: { min: 100 } }, { symbol: 'NIMB', strikeRange: { max: 105 } },
+        { symbol: 'NIMB', strikeRange: { min: 0, max: -1 } },
+        { symbol: 'NIMB', strikeRange: { min: '100', max: 105 } },
+        { symbol: 'NIMB', strikeRange: { min: 100, max: 105, extra: true } },
+        { symbol: 'NIMB', extra: true },
+        ...[null, '', 'PUT', 'CALL', 'Put', 'both', ' put', 'put ', 'put\n', 1, true, {}, [], ['put']]
+          .map(side => ({ symbol: 'NIMB', side })),
+      ].map(input => ({ input, schemaAccepts: false })),
+      ...[{ symbol: '../NIMB' }, { symbol: 'NIMB', expiry: '2026-02-30' },
+        { symbol: 'NIMB', strikeRange: { min: 105, max: 100 } },
+      ].map(input => ({ input, schemaAccepts: true })),
+    ],
+  },
+  {
+    name: 'get_contract', input: { occ: occ.replace('NIMB', 'nimb') },
+    expected: { kind: 'contract', query: { occ } },
+    rows: [{ occ, bid: 0, ask: 0.2, iv: 0.32, openInterest: 0, volume: 0, quotedAt: '2026-10-30T20:00:00.123Z' }],
+    asOf: '2026-10-30T20:00:00.123Z',
+    schemaAccepted: [{ occ: 'N'.repeat(16) }, { occ: 'N'.repeat(33) }],
+    invalid: [
+      ...[null, [], {}, { occ: 1 }, { occ: '' }, { occ: 'N'.repeat(15) }, { occ: 'N'.repeat(34) },
+        { occ, extra: true },
+      ].map(input => ({ input, schemaAccepts: false })),
+      ...[{ occ: 'N'.repeat(16) }, { occ: 'O:NIMB260230P00100000' }, { occ: 'O:NIMB261106P00000000' },
+      ].map(input => ({ input, schemaAccepts: true })),
+    ],
+  },
+];
+
+const fixtureIssues = Array.from({ length: 9 }, (_, index) => `Fixture issue ${index + 1}.`);
+class ManyIssuesMarketData extends MarketData {
+  override async optionChain(...args: Parameters<MarketData['optionChain']>): ReturnType<MarketData['optionChain']> {
+    const result = await super.optionChain(...args);
+    return { ...result, status: 'partial', issues: [...result.issues, ...fixtureIssues] };
+  }
+}
+
+function modelSummary(result: RegisteredToolResult): unknown {
+  expect(result.content).toHaveLength(1);
+  expect(result.content[0].type).toBe('text');
+  return JSON.parse(result.content[0].text);
 }
 
 describe('business boundary DTOs', () => {
@@ -62,6 +163,7 @@ describe('real extension registrations and hooks', () => {
   test('factory registers hello and no-model commands before any session event', async () => {
     const fixture = extension();
     expect([...fixture.commands.keys()]).toEqual(['option-agent', 'option-market']);
+    expect([...fixture.tools.keys()].sort()).toEqual(['get_contract', 'get_daily_bars', 'get_option_chain', 'hello']);
     const tool = fixture.tools.get('hello');
     if (!tool) throw new Error('Hello was not registered.');
     const result = await tool.execute('test', { name: 'Ada' }, undefined, undefined, fixture.ctx);
@@ -75,6 +177,159 @@ describe('real extension registrations and hooks', () => {
     for (const args of ['not json', '{"requestId":"bad","action":"daily-bars"}', '{"requestId":"bad","action":"echo","text":5}']) await command.handler(args, fixture.ctx);
     expect(fixture.entries.slice(1).every(entry => entry.customType === 'option-market-result/v1' && parseMarketResult(entry.data).status === 'error')).toBe(true);
     expect(parseMarketResult(fixture.entries[2].data).requestId).toBe('bad');
+  });
+  test.each(marketToolCases)('$name registers a read-only sequential schema and rejects direct invalid execution', async entry => {
+    let fetches = 0;
+    const fixture = extension({ fetch: async () => { fetches++; throw new Error('Invalid inputs must not reach the provider.'); } });
+    const tool = fixture.tools.get(entry.name);
+    if (!tool) throw new Error(`${entry.name} was not registered.`);
+    expect(tool.executionMode).toBe('sequential');
+    expect(tool.annotations).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true });
+    expect(tool.parameters.type).toBe('object');
+    expect(tool.parameters.additionalProperties).toBe(false);
+    for (const input of [entry.input, ...entry.schemaAccepted]) expect(Value.Check(tool.parameters, input)).toBe(true);
+    for (const { input, schemaAccepts } of entry.invalid) {
+      expect(Value.Check(tool.parameters, input)).toBe(schemaAccepts);
+      await expect(tool.execute('invalid-direct', input, undefined, undefined, fixture.ctx)).rejects.toThrow();
+    }
+    expect(fetches).toBe(0);
+  });
+  test.each(marketToolCases)('$name executes the real fixture-backed MarketData service', async entry => {
+    const calls: URL[] = [];
+    const fixture = extension({ fetch: async input => {
+      const url = new URL(input);
+      expect(url.origin).toBe('https://api.polygon.io');
+      calls.push(url);
+      if (/^\/v2\/aggs\/ticker\/NIMB\/range\/1\/day\/\d{4}-\d{2}-\d{2}\/2026-10-30$/.test(url.pathname)) return Response.json(bars);
+      if (url.pathname === '/v3/snapshot/options/NIMB') return Response.json(chain);
+      if (url.pathname === `/v3/snapshot/options/NIMB/${occ}`) return Response.json(contract);
+      throw new Error(`Unknown fixture route ${url.pathname}`);
+    } });
+    const tool = fixture.tools.get(entry.name);
+    if (!tool) throw new Error(`${entry.name} was not registered.`);
+    const result = await tool.execute('valid-direct', entry.input, undefined, undefined, fixture.ctx);
+    expect(result.isError).toBe(false);
+    expect(result.details).toMatchObject({ ...entry.expected, result: {
+      status: 'ok', provider: 'massive', source: 'network', asOf: entry.asOf,
+      fetchedAt: '2026-10-30T20:05:00.000Z', issues: [], rows: entry.rows,
+    } });
+    if (result.details.kind === 'hello') throw new Error('Market tool returned hello.');
+    expect(result.details.result.rows).toHaveLength(entry.rows.length);
+    expect(modelSummary(result)).toEqual({ ...entry.expected, ...result.details.result,
+      totalRows: entry.rows.length, shownRows: entry.rows.length, omittedRows: 0, totalIssues: 0 });
+    expect(calls).toHaveLength(1);
+    if (entry.name === 'get_option_chain') {
+      expect(calls[0].searchParams.get('expiration_date')).toBe('2026-11-06');
+      expect(calls[0].searchParams.get('strike_price.gte')).toBe('100');
+      expect(calls[0].searchParams.get('strike_price.lte')).toBe('105');
+    }
+  });
+  test('explicit PUT chain filters before the ten-row model summary when CALLs come first', async () => {
+    const calls: URL[] = [];
+    const fixture = extension({ fetch: async input => {
+      const url = new URL(input);
+      expect(url.origin).toBe('https://api.polygon.io');
+      expect(url.pathname).toBe('/v3/snapshot/options/NIMB');
+      calls.push(url);
+      return Response.json(callsBeforePuts);
+    } });
+    const tool = fixture.tools.get('get_option_chain');
+    if (!tool) throw new Error('Option chain was not registered.');
+    const query = { symbol: 'NIMB', expiry: '2026-11-06', strikeRange: { min: 100, max: 111 } };
+    const baseline = await tool.execute('unfiltered', query, undefined, undefined, fixture.ctx);
+    if (baseline.details.kind !== 'optionChain') throw new Error('Missing baseline chain.');
+    const all = baseline.details.result;
+    expect(all.status).toBe('ok');
+    expect(all.rows).toHaveLength(24);
+    expect(all.rows.slice(0, 12).every(row => row.side === 'call')).toBe(true);
+    expect(all.rows.slice(12).every(row => row.side === 'put')).toBe(true);
+    expect(modelSummary(baseline)).toMatchObject({ query, totalRows: 24, shownRows: 10, omittedRows: 14,
+      rows: all.rows.slice(0, 10) });
+    expect(all.rows.slice(0, 10).every(row => row.side === 'call')).toBe(true);
+    expect(calls[0].searchParams.has('contract_type')).toBe(false);
+
+    const input = { ...query, side: 'put' };
+    const filtered = await tool.execute('explicit-put', input, undefined, undefined, fixture.ctx);
+    if (filtered.details.kind !== 'optionChain') throw new Error('Missing filtered chain.');
+    const puts = filtered.details.result;
+    expect(puts).toMatchObject({ status: 'ok', issues: [] });
+    expect(puts.rows).toHaveLength(12);
+    expect(puts.rows.every(row => row.side === 'put')).toBe(true);
+    expect(modelSummary(filtered)).toMatchObject({ query: input, totalRows: 12, shownRows: 10, omittedRows: 2,
+      rows: puts.rows.slice(0, 10), guidance: expect.stringContaining('side') });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].searchParams.get('contract_type')).toBe('put');
+    expect(calls[1].searchParams.get('expiration_date')).toBe(query.expiry);
+    expect(calls[1].searchParams.get('strike_price.gte')).toBe('100');
+    expect(calls[1].searchParams.get('strike_price.lte')).toBe('111');
+  });
+  test.each([20, 500])('daily bars expose all %i requested bars in model content', async days => {
+    const providerRows = Array.from({ length: Math.ceil(days * 7 / 5) + 2 }, (_, index) => {
+      const date = new Date(Date.UTC(2026, 9, 29, 12) - index * 86_400_000);
+      return { ...bars.results[0], t: date.getTime() };
+    }).filter(row => ![0, 6].includes(new Date(row.t).getUTCDay())).slice(0, days);
+    let fetches = 0;
+    const fixture = extension({ fetch: async input => {
+      const url = new URL(input);
+      expect(url.origin).toBe('https://api.polygon.io');
+      expect(url.pathname).toMatch(/^\/v2\/aggs\/ticker\/NIMB\/range\/1\/day\/\d{4}-\d{2}-\d{2}\/2026-10-30$/);
+      fetches++;
+      return Response.json({ ...bars, resultsCount: providerRows.length, results: providerRows });
+    } });
+    const tool = fixture.tools.get('get_daily_bars');
+    if (!tool) throw new Error('Daily bars were not registered.');
+    const result = await tool.execute('full-history', { symbol: 'NIMB', days }, undefined, undefined, fixture.ctx);
+    if (result.details.kind !== 'dailyBars') throw new Error('Missing daily bars details.');
+    const full = result.details.result;
+    expect(full.status).toBe('ok');
+    expect(full.rows).toHaveLength(days);
+    expect(full.rows.every(row => !row.provisional)).toBe(true);
+    expect(modelSummary(result)).toMatchObject({ shownRows: days });
+    expect(modelSummary(result)).toEqual({
+      kind: 'dailyBars', query: { symbol: 'NIMB', days }, ...full,
+      totalIssues: 0, totalRows: days, shownRows: days, omittedRows: 0,
+    });
+    expect(result.content[0].text).toContain(new Date(providerRows[0].t).toISOString());
+    expect(result.content[0].text).toContain(new Date(providerRows[days - 1].t).toISOString());
+    expect(fetches).toBe(1);
+  });
+  test.each([
+    { label: 'real MarketData', Service: MarketData, issues: [], status: 'ok' },
+    { label: 'real MarketData plus nine fixture issues', Service: ManyIssuesMarketData, issues: fixtureIssues, status: 'partial' },
+  ])('$label bounds model JSON without truncating details', async ({ Service, issues, status }) => {
+    const providerRows = Array.from({ length: 13 }, (_, index) => {
+      const strike = 100 + index;
+      return { ...contract.results, details: { ...contract.results.details,
+        ticker: `O:NIMB261106P${String(strike * 1000).padStart(8, '0')}`, strike_price: strike } };
+    });
+    let fetches = 0;
+    const fixture = extension({ fetch: async input => {
+      const url = new URL(input);
+      expect(url.origin).toBe('https://api.polygon.io');
+      expect(url.pathname).toBe('/v3/snapshot/options/NIMB');
+      fetches++;
+      return Response.json({ status: 'OK', results: providerRows });
+    } }, Service);
+    const tool = fixture.tools.get('get_option_chain');
+    if (!tool) throw new Error('Option chain was not registered.');
+    const result = await tool.execute('bounded', { symbol: 'NIMB' }, undefined, undefined, fixture.ctx);
+    if (result.details.kind !== 'optionChain') throw new Error('Missing option chain details.');
+    const full = result.details.result;
+    expect(full.status).toBe(status);
+    expect(full.rows).toHaveLength(13);
+    expect(full.rows.map(row => row.occ)).toEqual(providerRows.map(row => row.details.ticker));
+    expect(full.rows.every(row => row.bid === 0 && row.ask === 0.2 && row.volume === 0)).toBe(true);
+    expect(full.issues).toEqual([...issues]);
+    expect(modelSummary(result)).toEqual({
+      kind: 'optionChain', query: { symbol: 'NIMB' }, status, provider: 'massive', source: 'network',
+      asOf: '2026-10-30T20:00:00.123Z', fetchedAt: '2026-10-30T20:05:00.000Z',
+      issues: issues.slice(0, 8), totalIssues: issues.length,
+      totalRows: 13, shownRows: 10, omittedRows: 3, rows: full.rows.slice(0, 10),
+      guidance: 'Option chain is truncated. Narrow side, expiry, or strikeRange and call get_option_chain again; do not treat these rows as exhaustive.',
+    });
+    expect(full.rows[12].occ).toBe('O:NIMB261106P00112000');
+    if (issues.length > 8) expect(full.issues[8]).toBe('Fixture issue 9.');
+    expect(fetches).toBe(1);
   });
   test('checks the actual model at every turn, aborting before continuation', async () => {
     for (const model of [undefined, { provider: 'anthropic', id: 'claude' }, { provider: 'openrouter', id: 'anthropic/claude' }, { provider: 'openai-codex', id: 'other' }]) {
@@ -94,17 +349,66 @@ describe('real extension registrations and hooks', () => {
     }
     expect(fixture.hook('cache_warming_decision')).toEqual({ action: 'stop' });
   });
-  test('native read rejects traversal, external files and symlinks before execution', async () => {
+  test('native read follows both actual coach markdown links through canonical authorized paths', async () => {
+    const fixture = extension();
+    const coach = join(app, 'skills/option-coach');
+    const markdown = await readFile(join(coach, 'SKILL.md'), 'utf8');
+    const links = [...markdown.matchAll(/\]\((\.\.\/[^)]+\/SKILL\.md)\)/g)].map(match => match[1]);
+    expect(links).toEqual(['../principle-facts-over-heuristics/SKILL.md', '../principle-advice-not-orders/SKILL.md']);
+    for (const link of links) {
+      const authorized = await realpath(resolve(coach, link));
+      for (const [cwd, path] of [[app, `${coach}/${link}`], [app, `skills/option-coach/${link}`], [coach, link]]) {
+        fixture.ctx.cwd = cwd;
+        const input = { path, offset: 1, limit: 2000 };
+        expect(await fixture.hook('tool_call', { toolName: 'read', input })).toBeUndefined();
+        expect(input).toEqual({ path: authorized, offset: 1, limit: 2000 });
+        expect(await readFile(input.path, 'utf8')).toBe(await readFile(authorized, 'utf8'));
+      }
+    }
+  });
+  test('native read normalizes an internal parent segment and forwards an absolute path', async () => {
+    const fixture = extension();
+    const input = { path: 'skills/option-coach/../option-coach/SKILL.md' };
+    expect(await fixture.hook('tool_call', { toolName: 'read', input })).toBeUndefined();
+    expect(input.path).toBe(await realpath(join(app, 'skills/option-coach/SKILL.md')));
+    expect(await readFile(input.path, 'utf8')).toContain('name: option-coach');
+  });
+  test('native read never forwards raw intermediate symlink and parent traversal to execution', async () => {
+    const fixture = extension();
+    const outside = await mkdtemp(join(tmpdir(), 'option-read-outside-'));
+    extensionCaches.push(outside);
+    await mkdir(join(outside, 'child'));
+    await mkdir(join(outside, 'option-coach'));
+    const secret = 'Outside fixture must not reach native read.';
+    await writeFile(join(outside, 'option-coach/SKILL.md'), secret);
+    const link = join(app, 'skills', `test-parent-link-${crypto.randomUUID()}`);
+    await symlink(join(outside, 'child'), link);
+    try {
+      const input = { path: `${link}/../option-coach/SKILL.md` };
+      expect(await readFile(input.path, 'utf8')).toBe(secret);
+      expect(await fixture.hook('tool_call', { toolName: 'read', input })).toBeUndefined();
+      const authorized = await realpath(join(app, 'skills/option-coach/SKILL.md'));
+      expect(input.path).toBe(authorized);
+      const executed = await readFile(input.path, 'utf8');
+      expect(executed).toBe(await readFile(authorized, 'utf8'));
+      expect(executed).not.toContain(secret);
+    } finally { await rm(link); }
+  });
+  test('native read rejects external traversal, external files and symlinks before execution', async () => {
     const fixture = extension();
     const link = join(app, 'skills', `test-link-${crypto.randomUUID()}.md`);
+    const directoryLink = join(app, 'skills', `test-directory-link-${crypto.randomUUID()}`);
+    const outsideLink = join(app, 'skills', `test-outside-link-${crypto.randomUUID()}.json`);
     await symlink(join(app, 'skills/option-coach/SKILL.md'), link);
+    await symlink(join(app, 'skills/option-coach'), directoryLink);
+    await symlink(join(app, 'package.json'), outsideLink);
     try {
       expect(await fixture.hook('tool_call', { toolName: 'read', input: { path: join(app, 'skills/option-coach/SKILL.md') } })).toBeUndefined();
-      for (const path of [join(app, 'package.json'), 'skills/../package.json', 'skills/option-coach/../option-coach/SKILL.md', 'skills/missing.md', link, 'skills', 4]) {
+      for (const path of [join(app, 'package.json'), 'skills/../package.json', 'skills/missing.md', link, join(directoryLink, 'SKILL.md'), outsideLink, 'skills', 4]) {
         expect(await fixture.hook('tool_call', { toolName: 'read', input: { path } })).toMatchObject({ block: true });
       }
       for (const toolName of ['bash', 'write', 'edit', 'codemode', 'unknown']) expect(await fixture.hook('tool_call', { toolName, input: {} })).toMatchObject({ block: true });
-    } finally { await rm(link); }
+    } finally { await Promise.all([link, directoryLink, outsideLink].map(path => rm(path))); }
   });
 });
 
@@ -117,7 +421,7 @@ describe('PiDriver over real subprocess pipes', () => {
       expect(driver.view().connection).toEqual({ kind: 'ready', model: 'openai-codex/gpt-6.1-sol' });
       expect(driver.view().operation).toEqual({ kind: 'idle' });
       expect(driver.view().messages.map(message => message.text)).toEqual(['Check hello transport.', 'Transport check.', 'Hello, Sean! Advice only.']);
-      expect(driver.view().tools).toEqual([{ id: 'hello-1', name: 'hello', input: { name: 'Sean' }, kind: 'succeeded', text: 'Hello, Sean!', hello: { kind: 'hello', name: 'Sean', greeting: 'Hello, Sean!', adviceOnly: true } }]);
+      expect(driver.view().tools).toEqual([{ id: 'hello-1', name: 'hello', input: { name: 'Sean' }, kind: 'succeeded', text: 'Hello, Sean!', hello: { kind: 'hello', name: 'Sean', greeting: 'Hello, Sean!', adviceOnly: true }, market: null }]);
       expect(views.some(view => view.messages.some(message => message.status === 'streaming'))).toBe(true);
       expect(views.some(view => view.tools.some(tool => tool.kind === 'running'))).toBe(true);
       const detached = driver.view(); detached.messages.length = 0;
@@ -144,12 +448,18 @@ describe('PiDriver over real subprocess pipes', () => {
       expect(driver.view().operation.kind).toBe('failed'); expect(driver.view().connection.kind).toBe('failed');
     });
   });
-  test.each(['agent-end-only', 'command-wrong-id'])('%s hits the operation deadline visibly', async mode => {
-    await using(mode, async driver => {
-      const pending = mode === 'agent-end-only' ? driver.ask('hello') : driver.command({ action: 'echo', text: 'test' });
-      await expect(pending).rejects.toThrow('timed out');
+  test('agent-end-only hits the operation deadline visibly', async () => {
+    await using('agent-end-only', async driver => {
+      await expect(driver.ask('hello')).rejects.toThrow('timed out');
       expect(driver.view().connection).toEqual({ kind: 'failed', error: 'Pi operation timed out.' });
     }, 120);
+  });
+  test('command-wrong-id fails immediately on correlation instead of waiting for the deadline', async () => {
+    await using('command-wrong-id', async driver => {
+      await expect(driver.command({ action: 'echo', text: 'test' })).rejects.toThrow(/correlation|request.?id|mismatch|unmatched/i);
+      expect(driver.view().connection.kind).toBe('failed');
+      expect(driver.view().operation.kind).toBe('failed');
+    }, 10000);
   });
   test.each([
     ['turn-budget', 'turn budget'], ['tool-budget', 'tool budget'], ['forbidden-tool', 'not allowed'],
@@ -297,7 +607,7 @@ describe('PiDriver over real subprocess pipes', () => {
       const ack = await child.request({ type: 'prompt', message: '/option-market {"requestId":"bad","action":"daily-bars"}' });
       expect(ack.data).toEqual({ disposition: 'handled' });
       const entry = events.find(record => record.type === 'entry_appended');
-      expect(parseMarketResult(entry ? Object(entry.entry).data : null)).toEqual({ requestId: 'bad', status: 'error', error: 'Invalid Stage 0 echo request.' });
+      expect(parseMarketResult(entry ? Object(entry.entry).data : null)).toMatchObject({ requestId: 'bad', status: 'error', error: expect.stringMatching(/invalid/i) });
       expect(events.some(record => record.type === 'turn_start')).toBe(false);
       const log = records(await readFile(logPath, 'utf8'));
       expect(log.some(record => record.type === 'turn_start' || record.type === 'hook')).toBe(false);

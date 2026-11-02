@@ -1,60 +1,93 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Option trading agent</title>
+  <title>期权交易助理</title>
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./renderer.js"></script>
 </head>
 <body>
   <header class="app-header">
     <div>
-      <p class="eyebrow">Options desk / Stage 0</p>
-      <h1>Option trading agent</h1>
-      <p class="advice-label">Advice only. No orders. No brokerage connection.</p>
+      <p class="eyebrow">期权工作台 / 第一阶段行情数据</p>
+      <h1>期权交易助理</h1>
+      <p class="advice-label">仅供参考，不构成投资建议。不下单，不连接券商。</p>
     </div>
     <div class="session">
-      <p id="connection" role="status">Connecting to desktop…</p>
+      <p id="connection" role="status">正在连接桌面端…</p>
       <p id="model" class="muted"></p>
       <div class="actions">
-        <button id="stop" type="button" disabled>Stop</button>
-        <button id="restart" type="button" disabled>Restart Pi</button>
+        <button id="stop" type="button" disabled>停止</button>
+        <button id="restart" type="button" disabled>重启 Pi</button>
       </div>
     </div>
   </header>
   <p id="error" class="error" role="alert" hidden></p>
+  <section class="panel market-panel" aria-labelledby="market-title">
+    <div class="panel-heading">
+      <h2 id="market-title">行情数据</h2>
+      <p id="loaded-query" class="muted" role="status">尚未加载行情数据。</p>
+    </div>
+    <form id="market-form" class="market-form">
+      <label>股票代码<input id="symbol" name="symbol" required maxlength="15" placeholder="NIMB" autocomplete="off"></label>
+      <label>日线天数<input id="days" name="days" type="number" min="1" max="500" step="1" value="20" required></label>
+      <label>到期日（选填）<input id="expiry" name="expiry" type="date"></label>
+      <label>最低行权价（选填）<input id="strike-min" name="strike-min" type="number" min="0" step="any"></label>
+      <label>最高行权价（选填）<input id="strike-max" name="strike-max" type="number" min="0" step="any"></label>
+      <button id="load-market" type="submit" class="primary" disabled>加载</button>
+    </form>
+    <p class="market-note muted">加载仅请求表格数据，不调用模型。下方的到期日和 PUT/CALL 筛选仅作用于已返回的数据。请求全部到期日时，数据可能受提供商限制而被截断。问题提示列出已知限制，到期日列表不代表完整市场数据。</p>
+    <div class="market-results">
+      <section aria-labelledby="daily-title">
+        <h3 id="daily-title">近期日线</h3>
+        <div id="bars-metadata" class="result-metadata" aria-live="polite"></div>
+        <p id="bars-count" class="muted">当前显示 0 行。</p>
+        <div class="table-scroll"><table id="bars-table">
+          <thead><tr><th>日期</th><th>开盘价</th><th>最高价</th><th>最低价</th><th>收盘价</th><th>调整后成交量</th><th>暂定数据</th></tr></thead>
+          <tbody id="bars-rows"></tbody>
+        </table></div>
+      </section>
+      <section aria-labelledby="chain-title">
+        <h3 id="chain-title">期权链</h3>
+        <div id="chain-metadata" class="result-metadata" aria-live="polite"></div>
+        <div class="display-filters">
+          <label>显示到期日<select id="display-expiry" disabled><option value="">暂无返回的到期日</option></select></label>
+          <label>期权类型<select id="display-side" disabled><option value="all">PUT + CALL</option><option value="put">仅 PUT</option><option value="call">仅 CALL</option></select></label>
+        </div>
+        <p id="chain-count" class="muted">当前显示 0 行。</p>
+        <div class="table-scroll"><table id="chain-table">
+          <thead><tr><th>合约</th><th>到期日</th><th>类型</th><th>行权价</th><th>买价</th><th>卖价</th><th>IV</th><th>Delta</th><th>Gamma</th><th>Theta</th><th>Vega</th><th>OI</th><th>报价时间</th></tr></thead>
+          <tbody id="chain-rows"></tbody>
+        </table></div>
+      </section>
+    </div>
+  </section>
   <main class="workspace">
     <section class="panel conversation" aria-labelledby="conversation-title">
       <div class="panel-heading">
-        <h2 id="conversation-title">Ask the agent</h2>
-        <p id="operation" class="muted" role="status">Waiting for Pi</p>
+        <h2 id="conversation-title">向助理提问</h2>
+        <p id="operation" class="muted" role="status">正在等待 Pi</p>
       </div>
-      <div id="transcript" class="transcript" role="log" aria-label="Conversation" aria-live="polite">
-        <p class="empty">Ask a question to start. Nothing is sent automatically.</p>
+      <div id="transcript" class="transcript" role="log" aria-label="对话记录" aria-live="polite">
+        <p class="empty">输入问题开始对话。系统不会自动发送任何内容。</p>
       </div>
       <form id="question-form" class="composer">
-        <label for="question">Your question</label>
-        <textarea id="question" name="question" maxlength="16000" rows="3" placeholder="Ask about an options concept or check the hello tool…"></textarea>
+        <label for="question">你的问题</label>
+        <textarea id="question" name="question" maxlength="16000" rows="3" placeholder="询问已加载股票的近期日线和 PUT 期权链…"></textarea>
         <div class="composer-footer">
-          <p class="muted">Stage 0 verifies the Pi connection. Market data is not available yet.</p>
-          <button id="send" type="submit" class="primary" disabled>Send</button>
+          <p class="muted">提问使用上次已加载的股票代码，不使用尚未提交的表单修改。系统不会自动发送任何内容。</p>
+          <button id="send" type="submit" class="primary" disabled>发送</button>
         </div>
       </form>
     </section>
     <aside class="side-column">
       <section class="panel tool-panel" aria-labelledby="tools-title">
-        <div class="panel-heading"><h2 id="tools-title">Actual tool calls</h2></div>
-        <div id="tools" class="tool-list" role="log" aria-label="Tool log" aria-live="polite">
-          <p class="empty">No tools have run.</p>
+        <div class="panel-heading"><h2 id="tools-title">实际工具调用</h2></div>
+        <div id="tools" class="tool-list" role="log" aria-label="工具日志" aria-live="polite">
+          <p class="empty">尚未调用工具。</p>
         </div>
-      </section>
-      <section class="panel market-space" aria-labelledby="market-title">
-        <p class="eyebrow">Next / Stage 1</p>
-        <h2 id="market-title">Market data</h2>
-        <p class="muted">Daily bars and an option chain will appear here once the market data connection is implemented.</p>
-        <p class="muted">No quotes or prices are loaded in Stage 0.</p>
       </section>
     </aside>
   </main>

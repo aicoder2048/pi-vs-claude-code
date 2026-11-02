@@ -1,7 +1,9 @@
-import { boundedText, object, type AgentView } from './business/types.ts';
+import { boundedText, object, type AgentView, type MarketQuery } from './business/types.ts';
+import { parseMarketQuery } from './business/market-data/protocol.ts';
 
 export type DesktopCommand =
   | { kind: 'ask'; text: string }
+  | { kind: 'market'; query: MarketQuery }
   | { kind: 'stop' }
   | { kind: 'restart' };
 
@@ -22,6 +24,9 @@ export function parseDesktopCommand(value: unknown): DesktopCommand {
       if (!text) throw new Error('A question is required.');
       return { kind: 'ask', text };
     }
+    case 'market':
+      if (Object.keys(data).some(key => key !== 'kind' && key !== 'query')) throw new Error('Unexpected market command fields.');
+      return { kind: 'market', query: parseMarketQuery(data.query) };
     case 'stop': case 'restart':
       if (Object.keys(data).some(key => key !== 'kind')) throw new Error('Unexpected command fields.');
       return { kind: data.kind };

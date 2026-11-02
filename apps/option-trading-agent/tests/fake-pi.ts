@@ -1,8 +1,19 @@
 #!/usr/bin/env bun
-import { appendFileSync, closeSync, readFileSync, readdirSync } from 'node:fs';
+import { appendFileSync, closeSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import optionAgent, { type ExtensionContext, type OptionExtensionAPI } from '../extensions/option-agent/index.ts';
 import { JsonlDecoder, type RpcRecord } from '../src/agent/jsonl.ts';
+import { MarketData } from '../src/business/market-data/client.ts';
+import { normalizeContract, normalizeOptionChain } from '../src/business/market-data/normalize.ts';
+import { parseMarketResult, parseMarketToolResult } from '../src/business/market-data/protocol.ts';
+import { object, type OptionChainQuery } from '../src/business/types.ts';
+import bars from './fixtures/market/daily-bars.json';
+import chain from './fixtures/market/option-chain.json';
+import callsBeforePuts from './fixtures/market/calls-before-puts.ts';
+import contract from './fixtures/market/contract.json';
+import holidays from './fixtures/market/holidays.json';
+import treasury from './fixtures/market/treasury.json';
 
 const mode = process.env.OPTION_AGENT_FAKE_MODE ?? process.env.FAKE_PI_MODE ?? 'valid';
 const emit = (record: RpcRecord): void => { process.stdout.write(`${JSON.stringify(record)}\n`); };
@@ -12,6 +23,40 @@ const log = (record: RpcRecord): void => {
 const response = (record: RpcRecord, data?: unknown): void => {
   emit({ type: 'response', id: record.id, command: record.type, success: true, data });
 };
+const cacheDir = mkdtempSync(join(tmpdir(), 'option-fake-pi-'));
+process.on('exit', () => rmSync(cacheDir, { recursive: true, force: true }));
+const occ = 'O:NIMB261106P00100000';
+const sideCase = /^(?:market|command)-side-(put|call|omitted)(?:-as-(put|call|omitted))?$/.exec(mode);
+const chainQuery: OptionChainQuery = { symbol: 'NIMB', expiry: '2026-11-06',
+  ...(sideCase?.[1] === 'put' || sideCase?.[1] === 'call' ? { side: sideCase[1] } : {}),
+  strikeRange: { min: 100, max: sideCase ? 111 : 105 } };
+const marketCalls = [
+  { name: 'get_daily_bars', input: { symbol: 'NIMB', days: 4 } },
+  { name: 'get_option_chain', input: chainQuery },
+  { name: 'get_contract', input: { occ } },
+];
+const withoutQuotes = (row: Record<string, unknown>) => ({
+  ...row, last_quote: null, implied_volatility: null, greeks: {}, open_interest: null, day: { volume: null },
+});
+const marketData = new MarketData({
+  cacheDir, now: () => Date.parse('2026-10-30T20:05:00.000Z'), getApiKey: () => 'fixture-only-token',
+  async fetch(input) {
+    const url = new URL(input);
+    if (url.origin !== 'https://api.polygon.io') throw new Error('Unknown fixture host.');
+    let value: unknown;
+    if (/^\/v2\/aggs\/ticker\/NIMB\/range\/1\/day\/\d{4}-\d{2}-\d{2}\/\d{4}-\d{2}-\d{2}$/.test(url.pathname)) value = bars;
+    else if (url.pathname === '/v3/snapshot/options/NIMB') value = sideCase ? callsBeforePuts
+      : mode === 'market-partial' ? { ...chain, results: chain.results.map(withoutQuotes) } : chain;
+    else if (url.pathname === `/v3/snapshot/options/NIMB/${occ}`) value = mode === 'market-partial' ? { ...contract, results: withoutQuotes(contract.results) } : contract;
+    else if (url.pathname === '/v1/marketstatus/upcoming') value = holidays;
+    else if (url.pathname === '/fed/v1/treasury-yields') value = treasury;
+    else throw new Error(`Unknown fixture URL ${url.pathname}`);
+    log({ type: 'fixture_fetch', path: url.pathname, search: url.search });
+    return new Response(JSON.stringify(mode === 'market-unavailable' ? { status: 'NOT_AUTHORIZED' } : value), {
+      status: mode === 'market-unavailable' ? 403 : 200,
+    });
+  },
+});
 const dialogs = new Map<string, RpcRecord>();
 const commands = new Map<string, Parameters<OptionExtensionAPI['registerCommand']>[1]>();
 const tools = new Map<string, Parameters<OptionExtensionAPI['registerTool']>[0]>();
@@ -30,12 +75,47 @@ optionAgent({
   on(event, handler) { hooks.set(event, [...hooks.get(event) ?? [], handler]); },
   appendEntry(customType, data) {
     let entry = { type: 'custom', customType, data };
-    if (mode === 'command-wrong-id' && customType === 'option-market-result/v1') entry = { ...entry, data: { ...Object(data), requestId: 'stale-id' } };
-    if (mode === 'command-malformed' && customType === 'option-market-result/v1') entry = { ...entry, data: { requestId: 'echo-1', status: 'bogus' } };
-    const send = () => emit({ type: 'entry_appended', entry });
+    const payload = object(data);
+    if (mode === 'command-wrong-id' && customType === 'option-market-result/v1') entry = { ...entry, data: { ...payload, requestId: 'stale-id' } };
+    if (mode === 'command-malformed' && customType === 'option-market-result/v1') entry = { ...entry, data: { ...payload, status: 'bogus' } };
+    if (mode === 'command-wrong-action' && customType === 'option-market-result/v1') entry = { ...entry, data: { requestId: payload.requestId, status: 'ok', action: 'echo', text: 'wrong action', marker: 'option-agent', stage: 0 } };
+    if (mode === 'command-query-mismatch' && customType === 'option-market-result/v1') {
+      const result = parseMarketResult(data);
+      if (result.status !== 'ok' || result.action !== 'market') throw new Error('Expected a market panel fixture.');
+      entry = { ...entry, data: { ...result, panel: { ...result.panel,
+        query: { ...result.panel.query, days: 3 }, bars: { ...result.panel.bars, rows: result.panel.bars.rows.slice(-3) } } } };
+    }
+    if (mode.startsWith('command-side-') && sideCase?.[2] && customType === 'option-market-result/v1') {
+      const result = parseMarketResult(data);
+      if (result.status !== 'ok' || result.action !== 'market') throw new Error('Expected a market panel fixture.');
+      const query = { ...result.panel.query };
+      delete query.side;
+      if (sideCase[2] === 'put' || sideCase[2] === 'call') query.side = sideCase[2];
+      entry = { ...entry, data: parseMarketResult({ ...result, panel: { ...result.panel, query,
+        chain: normalizeOptionChain(callsBeforePuts, query, { fetchedAt: result.panel.chain.fetchedAt, source: 'network' }) } }) };
+      log({ type: 'validated_fault', boundary: 'command', mode });
+    }
+    if (mode === 'command-wrong-contract' && customType === 'option-market-result/v1') {
+      const result = parseMarketResult(data);
+      if (result.status !== 'ok' || result.action !== 'contract') throw new Error('Expected a contract fixture.');
+      const otherOcc = 'O:NIMB261106C00105000';
+      entry = { ...entry, data: { ...result, occ: otherOcc,
+        result: normalizeContract({ status: 'OK', results: chain.results[1] }, { occ: otherOcc }, {
+          fetchedAt: result.result.fetchedAt, source: result.result.source,
+        }) } };
+    }
+    if (['command-query-mismatch', 'command-wrong-contract'].includes(mode) && customType === 'option-market-result/v1') {
+      entry = { ...entry, data: parseMarketResult(entry.data) };
+      log({ type: 'validated_fault', boundary: 'command', mode });
+    }
+    const send = () => {
+      log({ type: 'command_entry', requestId: object(entry.data).requestId });
+      emit({ type: 'entry_appended', entry });
+      if (mode === 'command-duplicate-entry') emit({ type: 'entry_appended', entry });
+    };
     if (mode === 'command-entry-late') setTimeout(send, 60); else send();
   },
-});
+}, { marketData });
 
 async function hook(type: string, event: RpcRecord = {}): Promise<unknown> {
   let result: unknown;
@@ -67,8 +147,15 @@ async function prompt(record: RpcRecord): Promise<void> {
   const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(record.message);
   const command = match ? commands.get(match[1]) : undefined;
   if (command) {
+    if (mode === 'command-turn-start') { emit({ type: 'turn_start' }); log({ type: 'turn_start' }); }
+    if (mode === 'command-slow-ack') await Bun.sleep(350);
     await command.handler(match?.[2] ?? '', ctx);
-    response(record, { disposition: mode === 'command-started' ? 'started' : 'handled' });
+    if (mode === 'command-slow-ack') await Bun.sleep(80);
+    const ack = mode === 'command-missing-disposition' ? {} : {
+      disposition: mode === 'command-started' ? 'started' : mode === 'command-queued' ? 'queued' : 'handled',
+    };
+    log({ type: 'command_ack', ...ack });
+    response(record, ack);
     return;
   }
   aborted = false;
@@ -91,12 +178,13 @@ async function prompt(record: RpcRecord): Promise<void> {
   emit({ type: 'message_update', assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'Transport check.' } });
   emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Transport check.' }], stopReason: 'toolUse' } });
   let greeting = '';
-  const count = mode === 'tool-budget' ? 25 : mode === 'at-limit' ? 24 : 1;
+  const count = mode.startsWith('market-') ? marketCalls.length : mode === 'tool-budget' ? 25 : mode === 'at-limit' ? 24 : 1;
   for (let index = 0; index < count; index++) {
-    const toolCallId = `hello-${++callSequence}`;
-    const toolName = mode === 'forbidden-tool' ? 'bash' : mode.startsWith('read-') ? 'read' : 'hello';
+    const marketCall = mode.startsWith('market-') ? marketCalls[index] : undefined;
+    const toolName = marketCall?.name ?? (mode === 'forbidden-tool' ? 'bash' : mode.startsWith('read-') ? 'read' : 'hello');
+    const toolCallId = `${marketCall ? toolName : 'hello'}-${++callSequence}`;
     const path = mode === 'read-outside' ? join(process.cwd(), 'package.json') : mode === 'read-traversal' ? 'skills/../package.json' : mode === 'read-symlink' ? 'skills/linked.md' : 'skills/option-coach/SKILL.md';
-    const input = toolName === 'read' ? { path } : { name: 'Sean' };
+    const input = marketCall?.input ?? (toolName === 'read' ? { path } : { name: 'Sean' });
     emit({ type: 'tool_execution_start', toolCallId, toolName, args: input });
     const gate = await hook('tool_call', { toolCallId, toolName, input });
     let result: unknown;
@@ -108,8 +196,35 @@ async function prompt(record: RpcRecord): Promise<void> {
         const tool = tools.get(toolName);
         if (!tool) throw new Error('Unknown tool.');
         const executed = await tool.execute(toolCallId, input, undefined, undefined, ctx);
-        greeting = executed.details.greeting;
+        if (executed.details.kind === 'hello') greeting = executed.details.greeting;
         result = executed;
+        if (mode.startsWith('market-side-') && sideCase?.[2] && toolName === 'get_option_chain') {
+          const query = { ...chainQuery };
+          delete query.side;
+          if (sideCase[2] === 'put' || sideCase[2] === 'call') query.side = sideCase[2];
+          const alternative = await tool.execute('alternative-side', query, undefined, undefined, ctx);
+          result = { ...executed, details: parseMarketToolResult(alternative.details) };
+          log({ type: 'validated_fault', boundary: 'tool', mode });
+        }
+        if (marketCall && index === 0) {
+          if (mode === 'market-tool-malformed') result = { ...executed, details: { kind: 'dailyBars', query: input, result: { status: 'ok', rows: [] } } };
+          if (mode === 'market-tool-query-mismatch') {
+            const details = parseMarketToolResult(executed.details);
+            if (details.kind !== 'dailyBars') throw new Error('Expected daily bars fixture.');
+            result = { ...executed, details: parseMarketToolResult({ ...details,
+              query: { ...details.query, days: 3 }, result: { ...details.result, rows: details.result.rows.slice(-3) } }) };
+            log({ type: 'validated_fault', boundary: 'tool', mode });
+          }
+          if (mode === 'market-tool-wrong-kind') {
+            const alternative = await tools.get('get_option_chain')?.execute('alternative-chain', chainQuery, undefined, undefined, ctx);
+            result = { ...executed, details: parseMarketToolResult(alternative?.details) };
+            log({ type: 'validated_fault', boundary: 'tool', mode });
+          }
+          if (mode === 'market-tool-wrong-row') {
+            const details = executed.details;
+            if (details.kind === 'dailyBars') result = { ...executed, details: { ...details, result: { ...details.result, rows: details.result.rows.map(row => ({ ...row, symbol: 'OTHER' })) } } };
+          }
+        }
       }
     } catch (error) {
       isError = true;
@@ -122,7 +237,7 @@ async function prompt(record: RpcRecord): Promise<void> {
   if (mode === 'protocol-failure') { process.stdout.write('{bad}\n'); return; }
   if (mode === 'bad-text') { emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 9 } }); return; }
   emit({ type: 'message_start', message: { role: 'assistant', content: [], stopReason: 'pending' } });
-  const text = `${greeting || 'Skill read.'} Advice only.`;
+  const text = `${greeting || (mode.startsWith('market-') ? 'Fixture market data retrieved.' : 'Skill read.')} Advice only.`;
   emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }], stopReason: mode === 'provider-failure' ? 'error' : 'stop', errorMessage: mode === 'provider-failure' ? 'Offline provider failure.' : undefined } });
   await hook('agent_end');
   emit({ type: 'agent_end', messages: [], willRetry: false });
@@ -219,5 +334,8 @@ const decoder = new JsonlDecoder(record => {
   void handle(record).catch(() => { process.stderr.write('fake handler failed\n'); process.exit(8); });
 });
 process.stdin.on('data', (chunk: Buffer) => decoder.push(chunk));
-process.stdin.on('end', () => { if (mode !== 'ignore-term' && mode !== 'stdout-eof') process.exit(0); });
+process.stdin.on('end', () => {
+  rmSync(cacheDir, { recursive: true, force: true });
+  if (mode !== 'ignore-term' && mode !== 'stdout-eof') process.exit(0);
+});
 if (mode === 'slow-read') { process.stdin.pause(); setTimeout(() => process.stdin.resume(), 150); }

@@ -11,7 +11,7 @@
     "build": "bun scripts/build.ts",
     "start": "bun scripts/build.ts --require-app && electron .",
     "check": "bun run typecheck && bun run test && bun run build",
-    "test:smoke": "bun scripts/build.ts --require-app && bun tests/smoke.ts",
+    "test:smoke": "bun scripts/build.ts --require-app && bun tests/smoke.ts && bun tests/market-smoke.ts",
     "verify:pi": "bun scripts/probe-pi.ts"
   },
   "devDependencies": {
