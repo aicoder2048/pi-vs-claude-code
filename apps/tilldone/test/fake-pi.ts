@@ -60,15 +60,29 @@ async function handle(r: any) {
 	// Echo an image prompt back as the user message Pi would record, so the desk can show it.
 	if (r.images) { emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text: r.message }, ...r.images] } }); return; }
 	if (r.message === "tasks") {
-		const details = { action: "add", tasks: [{ id: 1, text: "write the guide", status: "inprogress" }, { id: 2, text: "old", status: "done" }], nextId: 3, listTitle: "Split", listDescription: undefined };
-		emit({ type: "tool_execution_end", toolCallId: "tasks", toolName: "tilldone", result: { content: [], details }, isError: false });
+		const list = (tasks: object[]) => emit({ type: "tool_execution_end", toolCallId: `tasks-${tasks.length}`, toolName: "tilldone", isError: false,
+			result: { content: [], details: { action: "update", tasks, nextId: 3, listTitle: "Split", listDescription: undefined } } });
+		const reply = (text: string) => {
+			emit({ type: "message_start", message: { role: "assistant", content: [] } });
+			emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text }] } });
+		};
+		// Task 2 says one thing and calls no tools, so filtering on it leaves a single message.
+		list([{ id: 1, text: "write the guide", status: "idle" }, { id: 2, text: "old", status: "inprogress" }]);
+		reply("Old notes are already tidy.");
+		list([{ id: 1, text: "write the guide", status: "inprogress" }, { id: 2, text: "old", status: "done" }]);
 		// Past the split hint threshold, so the panel shows an emphasized count on the active task.
-		// Each turn makes one model request and calls one tool.
-		for (let i = 0; i < 16; i++) {
+		// Each turn makes one model request and calls one tool: six reads, a reply, then an edit and nine commands, the last failing.
+		const calls: [string, object][] = [
+			...["guide.md", "outline.md", "notes.md", "style.md", "faq.md", "index.md"].map((file): [string, object] => ["read", { path: `/work/docs/${file}` }]),
+			["edit", { path: "/work/docs/guide.md" }], ["bash", { command: "bun run lint" }],
+			...Array.from({ length: 7 }, (): [string, object] => ["bash", { command: "true" }]), ["bash", { command: "bun test" }],
+		];
+		calls.forEach(([toolName, args], i) => {
+			if (i === 6) reply("Draft is ready; checking the build.");
 			emit({ type: "turn_start" });
-			emit({ type: "tool_execution_start", toolCallId: `bash-${i}`, toolName: "bash", args: { command: "true" } });
-			emit({ type: "tool_execution_end", toolCallId: `bash-${i}`, toolName: "bash", result: { content: [] }, isError: false });
-		}
+			emit({ type: "tool_execution_start", toolCallId: `call-${i}`, toolName, args });
+			emit({ type: "tool_execution_end", toolCallId: `call-${i}`, toolName, result: { content: [{ type: "text", text: i === calls.length - 1 ? "1 test failed" : "ok" }] }, isError: i === calls.length - 1 });
+		});
 		return;
 	}
 	if (r.message === "subagents") {

@@ -1,9 +1,11 @@
 /** TillDone Desk L3 tests: recorded protocol projection, pure transitions, and intent rules. */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { initialState, reduce, toViewModel, planIntent, parseIntent, immediateUIResponse, viewChanged, collapseSkill } from "../src/domain.ts";
+import { initialState, reduce, toViewModel, planIntent, parseIntent, immediateUIResponse, viewChanged, collapseSkill, type Entry, type ToolGroup } from "../src/domain.ts";
 const records = readFileSync(new URL("fixtures/rpc-probe.jsonl", import.meta.url), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.dir === "out").map((r) => r.rec);
 const initial = () => initialState("openai-codex/gpt-6.1-sol", "/work");
+/** The conversation's messages, without tool groups. */
+const said = (view: { conversation: readonly (Entry | ToolGroup)[] }) => view.conversation.filter((e): e is Entry => e.kind !== "tools");
 
 describe("recorded Pi run", () => {
 	test("snapshots, current task, confirm, settlement, and live text", () => {
@@ -35,14 +37,14 @@ describe("recorded Pi run", () => {
 			}
 			if (r.assistantMessageEvent?.type === "text_delta") {
 				delta += r.assistantMessageEvent.delta;
-				expect(vm.conversation.at(-1)?.text).toBe(delta);
+				expect(said(vm).at(-1)?.text).toBe(delta);
 			}
 			if (r.type === "agent_end") expect(vm.status.running).toBe(true);
 			if (r.type === "agent_settled") { expect(vm.status.running).toBe(false); settled = true; }
 		}
 		expect([added, intermediate, confirmed, cleared, settled]).toEqual([true, true, true, true, true]);
 		expect(delta).toBe("ok");
-		expect(toViewModel(state).conversation.at(-1)?.text).toBe("ok");
+		expect(said(toViewModel(state)).at(-1)?.text).toBe("ok");
 		expect(JSON.parse(JSON.stringify(toViewModel(state)))).toEqual(toViewModel(state));
 	});
 });
@@ -52,9 +54,9 @@ test("text deltas concatenate by contentIndex; final message replaces partial te
 	for (const [contentIndex, delta] of [[2, "Hello "], [2, "world"], [4, "next"]] as const) {
 		s = reduce(s, { type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex, delta } });
 	}
-	expect(toViewModel(s).conversation[0].text).toBe("Hello world\nnext");
+	expect(said(toViewModel(s))[0].text).toBe("Hello world\nnext");
 	s = reduce(s, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "authoritative" }] } });
-	expect(toViewModel(s).conversation[0].text).toBe("authoritative");
+	expect(said(toViewModel(s))[0].text).toBe("authoritative");
 });
 
 test("only execution_end details change tasks; start args survive null end args", () => {
@@ -161,7 +163,7 @@ test("Restart after an exit resumes the session file get_state reported", () => 
 });
 test("a missing session record leaves one notice in the user's language", () => {
 	const s = reduce(initial(), { type: "desk_resume_unavailable" });
-	expect(toViewModel(s).conversation.map((m) => [m.kind, m.text])).toEqual([["notice", "没有找到上次会话的记录，已开始新会话。"]]);
+	expect(said(toViewModel(s)).map((m) => [m.kind, m.text])).toEqual([["notice", "没有找到上次会话的记录，已开始新会话。"]]);
 });
 test("views stay put when only the clock or an unchanged state poll moves", () => {
 	const polled = { type: "response", command: "get_state", success: true, data: { model: { provider: "openai-codex", id: "gpt-6.1-sol" }, thinkingLevel: "low", isStreaming: false } };
@@ -181,24 +183,23 @@ test("streaming a token reuses view entries for the unchanged history", () => {
 	const before = toViewModel(state).conversation;
 	state = reduce(state, { type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hi" } });
 	const after = toViewModel(state).conversation;
-	expect(after[0]).toBe(before[0]);
-	expect(after[1]).not.toBe(before[1]);
-	expect(after[1].text).toBe("hi");
+	expect((after[0] as ToolGroup).tools[0]).toBe((before[0] as ToolGroup).tools[0]);
+	expect(said({ conversation: after })[0].text).toBe("hi");
 });
 test("assistant messages without text stay out of the conversation until text arrives", () => {
 	const toolOnly = { role: "assistant", content: [{ type: "thinking", thinking: "plan" }, { type: "toolCall", id: "t1", name: "bash", arguments: {} }] };
 	let s = reduce(initial(), { type: "message_start", message: toolOnly });
 	s = reduce(s, { type: "message_end", message: toolOnly });
 	s = reduce(s, { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} });
-	expect(toViewModel(s).conversation.map((e) => e.kind)).toEqual(["tool"]);
+	expect(toViewModel(s).conversation.map((e) => e.kind)).toEqual(["tools"]);
 	s = reduce(s, { type: "message_start", message: { role: "assistant", content: [] } });
-	expect(toViewModel(s).conversation.map((e) => e.kind)).toEqual(["tool"]);
+	expect(toViewModel(s).conversation.map((e) => e.kind)).toEqual(["tools"]);
 	s = reduce(s, { type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "done" } });
-	expect(toViewModel(s).conversation.map((e) => [e.kind, e.text])).toEqual([["tool", ""], ["assistant", "done"]]);
+	expect(toViewModel(s).conversation.map((e) => [e.kind, e.kind === "tools" ? e.summary : e.text])).toEqual([["tools", "bash · 执行中"], ["assistant", "done"]]);
 });
 test("an assistant message with an error but no text still shows", () => {
 	const s = reduce(initial(), { type: "message_end", message: { role: "assistant", content: [], errorMessage: "rate limited" } });
-	expect(toViewModel(s).conversation.map((e) => [e.kind, e.error])).toEqual([["assistant", "rate limited"]]);
+	expect(said(toViewModel(s)).map((e) => [e.kind, e.error])).toEqual([["assistant", "rate limited"]]);
 });
 test("split subtasks carry their origin into the task panel", () => {
 	const details = { action: "split", nextId: 4, listTitle: "T", listDescription: undefined,
@@ -260,7 +261,7 @@ describe("pasted images", () => {
 	});
 	test("conversation entries count the images a message carries", () => {
 		const s = reduce(initial(), { type: "message_start", message: { role: "user", content: [{ type: "text", text: "see" }, { type: "image", data: "x", mimeType: "image/png" }, { type: "image", data: "y", mimeType: "image/png" }] } });
-		expect(toViewModel(s).conversation.map((e) => [e.text, e.images])).toEqual([["see", 2]]);
+		expect(said(toViewModel(s)).map((e) => [e.text, e.images])).toEqual([["see", 2]]);
 	});
 });
 describe("messages waiting for delivery", () => {
@@ -408,7 +409,7 @@ describe("copying an assistant reply", () => {
 	test("the view marks which entries offer a copy button, with localized labels", () => {
 		const s = reply();
 		const view = toViewModel(s);
-		expect(view.conversation.map((e) => [e.kind, e.copyable])).toEqual([["user", false], ["assistant", true]]);
+		expect(said(view).map((e) => [e.kind, e.copyable])).toEqual([["user", false], ["assistant", true]]);
 		expect([view.ui.copy, view.ui.copied]).toEqual(["复制 Markdown", "已复制"]);
 	});
 });
@@ -476,7 +477,7 @@ describe("pstack Poteto Mode", () => {
 	test("an expanded skill shows as the command the user typed", () => {
 		const skill = '<skill name="poteto-mode" location="/x/SKILL.md">\nReferences...\n# Poteto\n</skill>\n\n分析 GOOG';
 		const s = reduce(ready(), { type: "message_start", message: { role: "user", content: [{ type: "text", text: skill }] } });
-		expect(toViewModel(s).conversation.at(-1)?.text).toBe("/skill:poteto-mode 分析 GOOG");
+		expect(said(toViewModel(s)).at(-1)?.text).toBe("/skill:poteto-mode 分析 GOOG");
 		expect(collapseSkill('<skill name="a" location="b">x</skill>')).toBe("/skill:a");
 		expect(collapseSkill("plain <skill> text")).toBe("plain <skill> text");
 	});
@@ -582,4 +583,117 @@ describe("activity bar", () => {
 		const idle = at(s, 3000, { type: "agent_settled" });
 		expect(viewChanged(idle, at(idle, 9000))).toBe(false);
 	});
+});
+describe("tool calls as a timeline", () => {
+	const start = (id: string, toolName: string, args: object = {}) => ({ type: "tool_execution_start", toolCallId: id, toolName, args });
+	const end = (id: string, toolName: string, isError = false) => ({ type: "tool_execution_end", toolCallId: id, toolName, result: { content: [] }, isError });
+	const call = (id: string, toolName: string, args: object = {}, isError = false) => [start(id, toolName, args), end(id, toolName, isError)];
+	const read = (id: string, path: string) => call(id, "read", { path });
+	const list = (nextId: number, tasks: object[]) => ({ type: "tool_execution_end", toolCallId: `list-${nextId}`, toolName: "tilldone", isError: false,
+		result: { details: { action: "update", nextId, listTitle: "T", listDescription: undefined, tasks } } });
+	const user = (text: string) => ({ type: "message_start", message: { role: "user", content: text } });
+	const run = (records: object[], from = initial()) => records.reduce(reduce, from);
+	const groups = (s: ReturnType<typeof initial>) => toViewModel(s).conversation.filter((e): e is ToolGroup => e.kind === "tools");
+	const shape = (s: ReturnType<typeof initial>) => toViewModel(s).conversation.map((e) => e.kind === "tools" ? e.summary : `${e.kind}: ${e.text}`);
+	test("consecutive reads become one quiet, collapsed group naming three files", () => {
+		const s = run(["/src/a.ts", "/src/b.ts", "/src/c.ts", "/src/d.ts", "/src/e.ts", "/src/f.ts"].flatMap((path, i) => read(`r${i}`, path)));
+		expect(groups(s).map((g) => [g.summary, g.tone, g.open, g.tools.length])).toEqual([["读取 6 个文件：a.ts、b.ts、c.ts…", "quiet", false, 6]]);
+		expect(toViewModel(s).conversation).toHaveLength(1);
+	});
+	test("one tool names its file or command instead of counting", () => {
+		expect(groups(run(read("r", "/app/src/domain.ts")))[0].summary).toBe("读取 domain.ts");
+		expect(groups(run(call("b", "bash", { command: "uv run pytest -q" })))[0].summary).toBe("运行 uv run pytest -q");
+		expect(groups(run([...call("b1", "bash", { command: "ls\n -la" }), ...call("b2", "bash", { command: "git status" })]))[0].summary).toBe("运行 2 条命令：ls -la");
+	});
+	test("a visible message between tools splits groups; a tool-only assistant turn does not", () => {
+		const silent = { type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", id: "x", name: "read" }] } };
+		const s = run([...read("r1", "a.ts"), silent, ...read("r2", "b.ts"), user("next"), ...read("r3", "c.ts")]);
+		expect(shape(s)).toEqual(["读取 2 个文件：a.ts、b.ts", "user: next", "读取 c.ts"]);
+	});
+	test("an edit or write marks the group as a change", () => {
+		const s = run([...read("r", "a.ts"), ...call("e", "edit", { path: "src/domain.ts" }), ...call("w", "write", { path: "src/new.ts" })]);
+		expect(groups(s).map((g) => [g.summary, g.tone])).toEqual([["读取 a.ts；修改 2 个文件：domain.ts、new.ts", "change"]]);
+	});
+	test("a failed command marks the group as an error, opens it, and counts the failure", () => {
+		const s = run([...call("e", "edit", { path: "a.ts" }), ...call("b", "bash", { command: "uv run pytest -q" }, true)]);
+		expect(groups(s).map((g) => [g.summary, g.tone, g.open])).toEqual([["修改 a.ts；运行 uv run pytest -q · 1 个失败", "error", true]]);
+	});
+	test("a running tool counts and the summary says it is still running", () => {
+		const s = run([...read("r1", "a.ts"), start("r2", "read", { path: "b.ts" })]);
+		expect(groups(s)[0].summary).toBe("读取 2 个文件：a.ts、b.ts · 执行中");
+	});
+	test("other tools are named with a count, and read-only ones stay quiet", () => {
+		const s = run([...call("g1", "grep"), ...call("g2", "grep"), ...call("l", "ls")]);
+		expect(groups(s).map((g) => [g.summary, g.tone])).toEqual([["grep ×2；ls", "quiet"]]);
+		const t = run([...call("t", "tilldone"), ...call("s", "subagent"), ...call("w", "web_search")]);
+		expect(groups(t).map((g) => [g.summary, g.tone])).toEqual([["更新任务清单；委派子 agent；web_search", "normal"]]);
+	});
+	test("the group keeps its first tool's id as tools append", () => {
+		let s = run(read("first", "a.ts"));
+		expect(groups(s)[0].id).toBe("first");
+		s = run([...read("second", "b.ts"), start("third", "bash", { command: "true" })], s);
+		expect(groups(s).map((g) => [g.id, g.tools.map((t) => t.id)])).toEqual([["first", ["first", "second", "third"]]]);
+	});
+	const twoTasks = () => run([
+		list(3, [{ id: 1, text: "write", status: "inprogress" }, { id: 2, text: "test", status: "idle" }]),
+		...read("r1", "a.ts"),
+		list(3, [{ id: 1, text: "write", status: "idle" }, { id: 2, text: "test", status: "inprogress" }]),
+		user("next"), ...call("b", "bash", { command: "bun test" }),
+		list(3, [{ id: 1, text: "write", status: "inprogress" }, { id: 2, text: "test", status: "done" }]),
+		...read("r2", "b.ts"),
+	]);
+	const filtered = (s: ReturnType<typeof initial>, id: number | null) => run(planIntent(s, { type: "filterTask", id }).events, s);
+	test("messages and tools are stamped with the task in progress when they begin", () => {
+		const s = twoTasks();
+		expect(s.tools.map((t) => [t.id, t.task?.id ?? null])).toEqual([["r1", 1], ["b", 2], ["r2", 1]]);
+		expect(s.messages.map((m) => m.task?.id ?? null)).toEqual([2]);
+		expect(shape(s)).toEqual(["读取 a.ts", "user: next", "运行 bun test；读取 b.ts"]);
+	});
+	test("filtering shows only that task's entries and regroups them", () => {
+		const s = twoTasks();
+		expect(shape(filtered(s, 1))).toEqual(["读取 2 个文件：a.ts、b.ts"]);
+		expect(shape(filtered(s, 2))).toEqual(["user: next", "运行 bun test"]);
+		const view = toViewModel(filtered(s, 2));
+		expect(view.filter).toEqual({ label: "只看任务 #2：test", clear: "显示全部" });
+		expect(view.tasks.items.map((t) => t.filtered)).toEqual([false, true]);
+		expect(toViewModel(s).filter).toBeNull();
+	});
+	test("picking the filtered task again, or null, shows everything; unknown tasks are refused", () => {
+		const s = filtered(twoTasks(), 1);
+		expect(planIntent(s, { type: "filterTask", id: 1 })).toEqual({ commands: [], events: [{ type: "desk_filter_task", id: null }] });
+		expect(planIntent(s, { type: "filterTask", id: 2 })).toEqual({ commands: [], events: [{ type: "desk_filter_task", id: 2 }] });
+		expect(planIntent(s, { type: "filterTask", id: null })).toEqual({ commands: [], events: [{ type: "desk_filter_task", id: null }] });
+		expect(planIntent(s, { type: "filterTask", id: 9 })).toEqual({ commands: [], events: [] });
+		expect(shape(filtered(s, 1))).toHaveLength(3);
+		expect(planIntent(reduce(s, { type: "desk_exit", error: "gone" }), { type: "filterTask", id: 2 }).events).toEqual([{ type: "desk_filter_task", id: 2 }]);
+	});
+	test("a filter on a task that left the list is ignored, even when a new list reuses its id", () => {
+		const s = filtered(twoTasks(), 2);
+		const removed = run([list(3, [{ id: 1, text: "write", status: "inprogress" }])], s);
+		expect(toViewModel(removed).filter).toBeNull();
+		expect(shape(removed)).toHaveLength(3);
+		const onOne = filtered(twoTasks(), 1);
+		const replaced = run([list(2, [{ id: 1, text: "fresh", status: "inprogress" }]), ...read("r3", "c.ts")], onOne);
+		expect(toViewModel(replaced).filter).toBeNull();
+		const fresh = filtered(replaced, 1);
+		expect(shape(fresh)).toEqual(["读取 c.ts"]);
+	});
+	test("parseIntent accepts a positive integer task id or null", () => {
+		expect(parseIntent({ type: "filterTask", id: 3 })).toEqual({ type: "filterTask", id: 3 });
+		expect(parseIntent({ type: "filterTask", id: null })).toEqual({ type: "filterTask", id: null });
+		for (const id of [0, -1, 1.5, "1", undefined, NaN, {}]) expect(parseIntent({ type: "filterTask", id })).toBeUndefined();
+	});
+	test("summaries and the filter bar follow the language", () => {
+		const en = reduce(twoTasks(), { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
+		const s = filtered(run([...call("b2", "bash", { command: "false" }, true), start("w", "write", { path: "x.ts" })], en), 1);
+		expect(shape(s)).toEqual(["Read 2 files: a.ts, b.ts; Ran false; Changed x.ts · running · 1 failed"]);
+		expect(toViewModel(s).filter).toEqual({ label: "Only task #1: write", clear: "Show all" });
+	});
+});
+test("a tool card inside a group names its command or path", () => {
+	let s = reduce(initialState("m", "/w"), { type: "tool_execution_start", toolCallId: "b", toolName: "bash", args: { command: "bun run lint" } });
+	s = reduce(s, { type: "tool_execution_end", toolCallId: "b", toolName: "bash", result: { content: [] }, isError: true });
+	s = reduce(s, { type: "tool_execution_start", toolCallId: "t", toolName: "tilldone", args: { action: "list" } });
+	const group = toViewModel(s).conversation[0];
+	expect(group.kind === "tools" && group.tools.map((t) => t.label)).toEqual(["bash · bun run lint · 出错", "tilldone · 执行中"]);
 });

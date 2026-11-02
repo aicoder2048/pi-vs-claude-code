@@ -119,6 +119,20 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; flex: 1; min-
 .markdown .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .markdown .link-inert { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
 .markdown .image-alt { color: var(--muted); }
+/* Tool groups: one line per run of calls. Quiet reads recede; changes and failures stand out. */
+#filter-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 30px 0; padding: 7px 8px 7px 14px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--active); color: var(--active-ink); font-size: 13px; }
+#filter-label { font-weight: 600; overflow-wrap: anywhere; }
+#filter-clear { flex: none; padding: 3px 10px; font-size: 12px; }
+.tools { margin: 4px 0 14px; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); }
+.tools > summary { cursor: pointer; color: var(--muted); font: 13px/1.6 var(--sans); }
+.tools[data-tone="quiet"] > summary { font-size: 12px; opacity: .8; }
+.tools[data-tone="change"] { border-left-color: var(--accent); }
+.tools[data-tone="change"] > summary { color: var(--ink); font-weight: 600; }
+.tools[data-tone="error"] { border-left: 3px solid var(--danger); background: var(--danger-bg); border-radius: 0 var(--radius) var(--radius) 0; padding: 6px 10px 6px 12px; }
+.tools[data-tone="error"] > summary { color: var(--danger); font-weight: 600; }
+.tools-list { margin-top: 6px; }
+.tools-list .tool { margin: 3px 0; padding: 3px 10px; }
+.tools-list .tool summary { font-size: 11px; }
 .tool { background: var(--tool); border: 1px solid var(--line); border-radius: var(--radius); margin: 10px 0 18px; padding: 10px 13px; }
 .tool summary { cursor: pointer; color: var(--muted); font: 12px var(--mono); }
 .tool pre { font: 12px/1.6 var(--mono); margin-top: 12px; max-height: 320px; overflow: auto; }
@@ -135,6 +149,9 @@ aside { border-left: 1px solid var(--line); padding: 25px 22px; overflow-y: auto
 #current { font-size: 12px; color: var(--accent); border-bottom: 1px solid var(--line); padding-bottom: 16px; }
 ol { padding: 0; list-style: none; } li { padding: 10px; border-radius: var(--radius); margin-bottom: 5px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 li.current { color: var(--active-ink); background: var(--active); border: 1px solid var(--accent); } li.done { color: var(--muted); }
+#task-list li { cursor: pointer; border: 1px solid transparent; } #task-list li.current { border-color: var(--accent); } #task-list li:not(.current):hover { border-color: var(--line); }
+#task-list li:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#task-list li[data-filtered="true"] { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent), 0 0 0 2px var(--accent); }
 li { display: flex; align-items: flex-start; gap: 8px; } li > span { flex: 1; }
 li .split { flex: none; padding: 2px 8px; font: 11px var(--sans); opacity: 0; transition: opacity .15s; }
 li:hover .split, li:focus-within .split, li.current .split { opacity: 1; }

@@ -14,15 +14,17 @@ interface View {
 	status: { model: string; thinking: string; running: boolean; cwd: string; tilldone: string };
 	poteto: { available: boolean; active: boolean };
 	input: { enabled: boolean; running: boolean; newSession: boolean; images: boolean };
-	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number;
-		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean; splitting: boolean;
+	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number; filterTitle: string;
+		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; filtered: boolean; splittable: boolean; splitting: boolean;
 			toolCallsLabel: string; toolCallsTitle: string; heavy: boolean; modelCallsLabel: string; modelCallsTitle: string }[] };
 	queued: string[];
 	activity: { text: string; elapsed: string; total: string; lastActivity: string; stale: boolean;
 		children: { agent: string; status: string; icon: string; text: string; nested: string; stale: boolean }[] } | null;
-	conversation: { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean }[];
+	filter: { label: string; clear: string } | null;
+	conversation: (Entry | { kind: "tools"; id: string; summary: string; tone: "error" | "change" | "quiet" | "normal"; open: boolean; tools: Entry[] })[];
 	dialog: { id: string; kind: "confirm" | "select" | "input" | "editor"; title: string; message: string; options: string[]; placeholder: string; prefill: string; remainingSeconds: number | null } | null;
 }
+type Entry = { id: string; kind: "assistant" | "user" | "nudge" | "notice" | "tool"; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean };
 declare global {
 	interface Window { tilldone: { send(intent: unknown): Promise<{ ok: boolean; error?: string }>; onView(callback: (view: View) => void): () => void } }
 }
@@ -205,44 +207,26 @@ function render(view: View) {
 	renderActivity(view.activity);
 	setText("input-hint", !view.input.enabled ? view.connection === "exited" ? ui.restartHint : ui.connecting : view.input.running ? ui.busy : ui.ready);
 
+	renderFilter(view.filter);
 	const conversation = $("conversation");
 	const atBottom = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 70;
-	const existing = new Map(Array.from(conversation.children).map((el) => [(el as HTMLElement).dataset.key, el as HTMLElement]));
 	if (!view.conversation.length) {
 		if (!conversation.querySelector(".empty")) { const empty = node("p"); empty.className = "empty"; conversation.replaceChildren(empty); }
 		conversation.querySelector(".empty")!.textContent = ui.empty;
 	} else {
 		conversation.querySelector(".empty")?.remove();
-		for (const item of view.conversation) {
-			let element = existing.get(item.id);
-			if (!element) {
-				if (item.kind === "tool") {
-					element = node("details"); element.className = "tool";
-					element.append(node("summary"), node("pre"), node("pre"));
-				} else {
-					element = node("article"); element.className = `message ${item.kind}`;
-					const error = node("p"); error.className = "message-error";
-					const images = node("p"); images.className = "message-images";
-					// Assistant replies are Markdown; user, nudge and notice text is shown as written.
-					const body = item.kind === "assistant" ? node("div") : node("p");
-					if (item.kind === "assistant") body.className = "markdown";
-					element.append(node("h3"), body, error, images);
-					if (item.kind === "assistant") element.append(copyButton(item.id));
-				}
-				element.dataset.key = item.id; conversation.append(element);
-			}
-			const values = item.kind === "tool" ? [item.label, `${ui.args}\n${item.args}`, `${ui.result}\n${item.result}`]
-				: [item.label, item.text, item.error, item.images ? `🖼 ${ui.image} ×${item.images}` : ""];
-			values.forEach((value, index) => {
+		placeKeyed(conversation, view.conversation, (item, element) => {
+			if (item.kind === "tools") return renderGroup(item, element, ui);
+			element ??= messageElement(item);
+			[item.label, item.text, item.error, item.images ? `🖼 ${ui.image} ×${item.images}` : ""].forEach((value, index) => {
 				const child = element!.children[index];
 				if (item.kind === "assistant" && index === 1) setMarkdown(child, value);
 				else if (child.textContent !== value) child.textContent = value;
 			});
 			const copy = element.querySelector<HTMLButtonElement>("button.copy");
 			if (copy) { if (copy.hidden === item.copyable) copy.hidden = !item.copyable; labelCopy(copy); }
-			existing.delete(item.id);
-		}
-		for (const element of existing.values()) element.remove();
+			return element;
+		});
 	}
 	if (atBottom) conversation.scrollTop = conversation.scrollHeight;
 
@@ -251,12 +235,16 @@ function render(view: View) {
 	const progress = $<HTMLProgressElement>("progress"); progress.max = Math.max(1, view.tasks.total); progress.value = view.tasks.done;
 	// Rebuild the list only when its content changes, not on every streamed view.
 	const taskList = $("task-list");
-	const taskSignature = JSON.stringify([view.tasks.items, ui.split, ui.splitting]);
+	const taskSignature = JSON.stringify([view.tasks.items, ui.split, ui.splitting, view.tasks.filterTitle]);
 	if (taskList.dataset.signature !== taskSignature) {
 		taskList.dataset.signature = taskSignature;
+		// The list is rebuilt, so keyboard focus moves to the rebuilt row it was on.
+		const focused = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("#task-list li")?.dataset.id;
 		taskList.replaceChildren(...view.tasks.items.map((task) => {
 			const li = node("li");
 			li.className = task.current ? "current" : task.status;
+			li.dataset.id = String(task.id); li.dataset.filtered = String(task.filtered);
+			li.tabIndex = 0; li.title = view.tasks.filterTitle;
 			li.setAttribute("aria-label", `${task.statusLabel}: ${task.text}`);
 			li.append(node("span", `${task.icon}  ${task.label}  ${task.text}`));
 			if (task.modelCallsLabel || task.toolCallsLabel) {
@@ -282,6 +270,7 @@ function render(view: View) {
 			}
 			return li;
 		}));
+		if (focused) taskList.querySelector<HTMLElement>(`li[data-id="${focused}"]`)?.focus();
 	}
 	const panel = $("tasks");
 	if (panel.dataset.focus !== String(view.tasks.focus)) {
@@ -290,6 +279,56 @@ function render(view: View) {
 	}
 	renderConfirm(view.dialog?.kind === "confirm" ? view.dialog : null, ui);
 	renderAsk(view.dialog && view.dialog.kind !== "confirm" ? view.dialog : null, ui);
+}
+/** Puts one element per item in order, reusing elements by key; DOM nodes move only when out of place. */
+function placeKeyed<T extends { id: string }>(parent: HTMLElement, items: readonly T[], render: (item: T, element: HTMLElement | undefined) => HTMLElement) {
+	const existing = new Map(Array.from(parent.children).map((el) => [(el as HTMLElement).dataset.key, el as HTMLElement]));
+	let cursor = parent.firstElementChild;
+	for (const item of items) {
+		const element = render(item, existing.get(item.id));
+		element.dataset.key = item.id;
+		existing.delete(item.id);
+		if (element === cursor) cursor = cursor.nextElementSibling;
+		else parent.insertBefore(element, cursor);
+	}
+	for (const element of existing.values()) element.remove();
+}
+function messageElement(item: Entry) {
+	const element = node("article"); element.className = `message ${item.kind}`;
+	const error = node("p"); error.className = "message-error";
+	const images = node("p"); images.className = "message-images";
+	// Assistant replies are Markdown; user, nudge and notice text is shown as written.
+	const body = item.kind === "assistant" ? node("div") : node("p");
+	if (item.kind === "assistant") body.className = "markdown";
+	element.append(node("h3"), body, error, images);
+	if (item.kind === "assistant") element.append(copyButton(item.id));
+	return element;
+}
+function renderGroup(group: Extract<View["conversation"][number], { kind: "tools" }>, element: HTMLElement | undefined, ui: View["ui"]) {
+	if (!element) {
+		element = node("details"); element.className = "tools";
+		const list = node("div"); list.className = "tools-list";
+		element.append(node("summary"), list);
+	}
+	const details = element as HTMLDetailsElement;
+	if (details.dataset.tone !== group.tone) details.dataset.tone = group.tone;
+	// The view opens a group when it gains a failure; otherwise the user's own toggle stands.
+	if (details.dataset.open !== String(group.open)) { details.dataset.open = String(group.open); details.open = group.open; }
+	if (details.children[0].textContent !== group.summary) details.children[0].textContent = group.summary;
+	placeKeyed(details.children[1] as HTMLElement, group.tools, (tool, card) => {
+		if (!card) { card = node("details"); card.className = "tool"; card.append(node("summary"), node("pre"), node("pre")); }
+		[tool.label, `${ui.args}\n${tool.args}`, `${ui.result}\n${tool.result}`].forEach((value, index) => {
+			if (card!.children[index].textContent !== value) card!.children[index].textContent = value;
+		});
+		return card;
+	});
+	return details;
+}
+function renderFilter(filter: View["filter"]) {
+	$("filter-bar").hidden = !filter;
+	if (!filter) return;
+	setText("filter-label", filter.label);
+	setText("filter-clear", filter.clear);
 }
 function renderActivity(activity: View["activity"]) {
 	$("activity").hidden = !activity;
@@ -397,6 +436,15 @@ $("prompt").addEventListener("keydown", (event) => {
 		event.preventDefault(); if (!$<HTMLButtonElement>("send").disabled) $<HTMLFormElement>("composer").requestSubmit();
 	}
 });
+// A task row filters the conversation to that task; its split button and counts keep their own behavior.
+function filterFromRow(event: Event) {
+	if ((event.target as Element).closest("button")) return;
+	const row = (event.target as Element).closest<HTMLElement>("#task-list li");
+	if (row?.dataset.id) void send({ type: "filterTask", id: Number(row.dataset.id) });
+}
+$("task-list").addEventListener("click", filterFromRow);
+$("task-list").addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.target as Element).matches("li")) filterFromRow(event); });
+$("filter-clear").onclick = () => { void send({ type: "filterTask", id: null }); };
 $("stop").onclick = () => { void send({ type: "abort" }); };
 $("restart").onclick = () => { void send({ type: "restart" }); };
 $("new-session").onclick = () => { const dialog = $<HTMLDialogElement>("new-session-dialog"); dialog.showModal(); $("new-session-cancel").focus(); };

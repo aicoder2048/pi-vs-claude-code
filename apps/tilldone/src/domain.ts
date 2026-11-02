@@ -13,12 +13,18 @@ import { INITIAL_API, apiView, API_PROVIDERS, isApiProvider, parseCredentialChan
 
 // RPC is extensible; unknown records are deliberately ignored by this projection.
 export type RecordValue = Record<string, any>;
+/**
+ * The task in progress when a message or tool began. Task ids restart when a list is replaced,
+ * so the stamp also names which list (State.listEpoch) the id belongs to.
+ */
+export interface TaskStamp { readonly list: number; readonly id: number }
 export interface Message {
 	readonly id: string;
 	readonly kind: "assistant" | "user" | "nudge" | "notice";
 	readonly blocks: Readonly<Record<number, string>>;
 	readonly images: number;
 	readonly error: string;
+	readonly task: TaskStamp | null;
 }
 /** A pasted image as the renderer sends it; Pi resizes oversized ones before they reach the model. */
 export interface Image { readonly mimeType: string; readonly data: string }
@@ -33,6 +39,7 @@ export interface Tool {
 	readonly result: unknown;
 	readonly phase: "running" | "done" | "error";
 	readonly startedAt: number;
+	readonly task: TaskStamp | null;
 }
 /** A question an extension is blocked on: Pi's four RPC dialog methods. */
 export type DialogKind = "confirm" | "select" | "input" | "editor";
@@ -59,6 +66,10 @@ function selectOptions(raw: unknown): string[] | undefined {
 }
 export interface State {
 	readonly list: ListState;
+	/** Counts list replacements (new-list, clear), the moments task ids restart. */
+	readonly listEpoch: number;
+	/** The conversation shows only this task's activity; ignored once the task leaves the list. */
+	readonly taskFilter: TaskStamp | null;
 	readonly messages: readonly Message[];
 	readonly tools: readonly Tool[];
 	readonly timeline: readonly { kind: "message" | "tool"; id: string }[];
@@ -105,7 +116,7 @@ export interface State {
 	readonly api: ApiState;
 }
 export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false, pstack = false): State {
-	return { list: EMPTY_LIST, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
+	return { list: EMPTY_LIST, listEpoch: 0, taskFilter: null, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
 		poteto: { available: pstack, on: false }, dialogs: [], statuses: {}, now: 0, runStartedAt: null, turnAt: 0, activityAt: 0, runActive: false, streaming: false, compacting: false,
 		queued: [], pendingSplits: [], toolCalls: {}, modelCalls: {}, model, imageInput: false, thinking: "unknown", cwd, sessionFile: "", connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
 }
@@ -115,10 +126,14 @@ function contentBlocks(content: any): Record<number, string> {
 	return Object.fromEntries((Array.isArray(content) ? content : []).flatMap((block, index) => block?.type === "text" ? [[index, text(block.text)]] : []));
 }
 const imageCount = (content: any): number => Array.isArray(content) ? content.filter((block) => block?.type === "image").length : 0;
+function stampTask(state: State): TaskStamp | null {
+	const active = current(state.list);
+	return active ? { list: state.listEpoch, id: active.id } : null;
+}
 function addMessage(state: State, kind: Message["kind"], blocks: Record<number, string>, error = "", images = 0): State {
 	const id = `message-${state.sequence + 1}`;
 	return { ...state, sequence: state.sequence + 1,
-		messages: [...state.messages, { id, kind, blocks, images, error }],
+		messages: [...state.messages, { id, kind, blocks, images, error, task: stampTask(state) }],
 		timeline: [...state.timeline, { kind: "message", id }],
 		...(kind === "assistant" ? { assistantId: id } : {}) };
 }
@@ -145,9 +160,10 @@ function countActive(counts: Counts, list: ListState): Counts {
 	const active = current(list);
 	return active ? { ...counts, [active.id]: (counts[active.id] ?? 0) + 1 } : counts;
 }
-/** Ids only restart when a list is replaced (new-list, clear), so a lower nextId means the old counts belong to other tasks. */
+/** Ids only restart when a list is replaced (new-list, clear), so a lower nextId means old ids belong to other tasks. */
+const replacesList = (previous: ListState, list: ListState): boolean => list.nextId < previous.nextId;
 function keepCounts(counts: Counts, previous: ListState, list: ListState): Counts {
-	if (list.nextId < previous.nextId) return {};
+	if (replacesList(previous, list)) return {};
 	const kept = Object.entries(counts).filter(([id]) => list.tasks.some((t) => t.id === Number(id)));
 	return kept.length === Object.keys(counts).length ? counts : Object.fromEntries(kept);
 }
@@ -182,6 +198,7 @@ function project(state: State, record: RecordValue): State {
 		case "desk_exit": return { ...state, connection: "exited", error: text(record.error), runStartedAt: null, runActive: false, streaming: false, compacting: false, dialogs: [], queued: [], pendingSplits: [] };
 		case "desk_resume_unavailable": return addMessage(state, "notice", { 0: copyFor(state.preferences.language).resumeUnavailable });
 		case "desk_split_requested": return { ...state, pendingSplits: [...state.pendingSplits, record.id] };
+		case "desk_filter_task": return { ...state, taskFilter: record.id === null ? null : { list: state.listEpoch, id: record.id } };
 		case "queue_update": {
 			const strings = (value: unknown) => Array.isArray(value) && value.every((v) => typeof v === "string");
 			if (!strings(record.steering) || !strings(record.followUp)) return state;
@@ -226,7 +243,7 @@ function project(state: State, record: RecordValue): State {
 			return { ...updateAssistant(s, (m) => ({ ...m, blocks: contentBlocks(record.message.content), error: text(record.message.errorMessage) })), assistantId: null };
 		}
 		case "tool_execution_start": {
-			const tool: Tool = { id: record.toolCallId, name: record.toolName, args: record.args ?? null, result: null, phase: "running", startedAt: state.now };
+			const tool: Tool = { id: record.toolCallId, name: record.toolName, args: record.args ?? null, result: null, phase: "running", startedAt: state.now, task: stampTask(state) };
 			const toolCalls = record.toolName === TOOL.name ? state.toolCalls : countActive(state.toolCalls, state.list);
 			return { ...state, toolCalls, tools: [...state.tools, tool], timeline: [...state.timeline, { kind: "tool", id: tool.id }] };
 		}
@@ -237,7 +254,8 @@ function project(state: State, record: RecordValue): State {
 			// A pending split is resolved once its task is gone from the list (split replaces it) or done.
 			const pendingSplits = list === state.list ? state.pendingSplits : state.pendingSplits.filter((id) => list.tasks.some((t) => t.id === id && t.status !== "done"));
 			const counts = list === state.list ? state : { toolCalls: keepCounts(state.toolCalls, state.list, list), modelCalls: keepCounts(state.modelCalls, state.list, list) };
-			return { ...state, turnAt: state.now, list, pendingSplits, toolCalls: counts.toolCalls, modelCalls: counts.modelCalls, tools: state.tools.map((t) => t.id === record.toolCallId
+			const listEpoch = replacesList(state.list, list) ? state.listEpoch + 1 : state.listEpoch;
+			return { ...state, turnAt: state.now, list, listEpoch, pendingSplits, toolCalls: counts.toolCalls, modelCalls: counts.modelCalls, tools: state.tools.map((t) => t.id === record.toolCallId
 				? { ...t, result: record.result, phase: record.isError ? "error" : "done" } : t) };
 		}
 		case "extension_ui_request": {
@@ -271,6 +289,8 @@ export type Intent = { type: "submit"; message: string; images?: readonly Image[
 	/** Answers a select, input or editor dialog; null cancels it. */
 	| { type: "answer"; id: string; value: string | null }
 	| { type: "splitTask"; id: number }
+	/** Shows only one task's activity; null shows everything. */
+	| { type: "filterTask"; id: number | null }
 	| { type: "copyMessage"; id: string }
 	| { type: "openLink"; id: string; url: string }
 	| { type: "preferences"; preferences: Preferences }
@@ -303,6 +323,7 @@ export function parseIntent(raw: unknown): Intent | undefined {
 		if (preferences) return { type: "preferences", preferences };
 	}
 	if (r.type === "splitTask" && Number.isInteger(r.id) && r.id > 0) return { type: "splitTask", id: r.id };
+	if (r.type === "filterTask" && (r.id === null || (Number.isInteger(r.id) && r.id > 0))) return { type: "filterTask", id: r.id };
 	if (r.type === "copyMessage" && typeof r.id === "string" && r.id.length > 0 && r.id.length <= 64) return { type: "copyMessage", id: r.id };
 	if (r.type === "openLink" && typeof r.id === "string" && r.id.length > 0 && r.id.length <= 64 && typeof r.url === "string" && r.url.length > 0 && r.url.length <= 2048) {
 		return { type: "openLink", id: r.id, url: r.url };
@@ -326,6 +347,12 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 		return { commands: [], events: [{ type: "desk_focus_tasks" }] };
 	}
 	if (intent.type === "preferences") return { commands: [], events: [{ type: "desk_preferences", preferences: intent.preferences }] };
+	// A view-only choice: it works while Pi is busy or gone. Picking the task already shown goes back to everything.
+	if (intent.type === "filterTask") {
+		if (intent.id !== null && !state.list.tasks.some((t) => t.id === intent.id)) return empty;
+		const id = intent.id !== null && intent.id === activeFilter(state)?.id ? null : intent.id;
+		return { commands: [], events: [{ type: "desk_filter_task", id }] };
+	}
 	// Restart follows a crash or exit, so it resumes the session Pi was saving.
 	if (intent.type === "restart") return state.connection === "exited" ? { ...empty, restart: "resume" } : empty;
 	// The renderer names a message; the text comes from state, so it is the reply's Markdown source as Pi sent it.
@@ -392,7 +419,7 @@ function dialogView(dialog: Dialog, now: number) {
 	return { ...shown, remainingSeconds: deadline === null ? null : Math.max(0, Math.ceil((deadline - now) / 1000)) };
 }
 const pretty = (value: unknown) => JSON.stringify(value, null, 2) ?? "";
-type Entry = { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean };
+export type Entry = { id: string; kind: Message["kind"] | "tool"; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean };
 // Messages and tools are immutable, so an entry stays valid while its source object and copy are unchanged.
 // Without this, every streamed token re-serializes the whole history, including every tool result.
 const entries = new WeakMap<Message | Tool, { ui: ReturnType<typeof copyFor>; entry: Entry }>();
@@ -566,12 +593,98 @@ function activityView(state: State, ui: Ui) {
 		stale: state.now - state.activityAt >= (now.kind === "subagents" ? STALE_CHILD_MS : STALE_RUN_MS),
 		children: now.kind === "subagents" ? now.children.map((c) => childView(c, state.now, ui)) : [] };
 }
+/** The filter as the view applies it: a task of the current list, else nothing. */
+function activeFilter(state: State) {
+	const filter = state.taskFilter;
+	return filter && filter.list === state.listEpoch ? state.list.tasks.find((t) => t.id === filter.id) : undefined;
+}
+// What each tool means for the timeline. Unlisted tools are summarized by name.
+type ToolKind = "read" | "change" | "bash" | "list" | "delegate";
+const TOOL_KINDS: Readonly<Record<string, ToolKind>> = { read: "read", edit: "change", write: "change", bash: "bash", [TOOL.name]: "list", [SUBAGENT_TOOL]: "delegate" };
+/** Tools that only look: a group of nothing else fades into the background. */
+const QUIET_TOOLS: ReadonlySet<string> = new Set(["read", TOOL.name, "ls", "grep", "find"]);
+type Tone = "error" | "change" | "quiet" | "normal";
+/** The first matching rule sets a group's emphasis. */
+const TONES: readonly [Tone, (tools: readonly Tool[]) => boolean][] = [
+	["error", (tools) => tools.some((t) => t.phase === "error")],
+	["change", (tools) => tools.some((t) => TOOL_KINDS[t.name] === "change")],
+	["quiet", (tools) => tools.every((t) => QUIET_TOOLS.has(t.name))],
+];
+const MAX_NAMED_FILES = 3;
+const basename = (args: unknown): string => isObject(args) ? text(args.path).split(/[\\/]/).filter(Boolean).at(-1) ?? "" : "";
+function filesPart(tools: readonly Tool[], one: string, many: string, ui: Ui): string | undefined {
+	const files = [...new Set(tools.map((t) => basename(t.args)).filter(Boolean))];
+	if (!files.length) return;
+	if (files.length === 1) return one.replace("{file}", files[0]);
+	const named = files.slice(0, MAX_NAMED_FILES).join(ui.fileSeparator) + (files.length > MAX_NAMED_FILES ? "…" : "");
+	return many.replace("{n}", String(files.length)).replace("{files}", named);
+}
+function bashPart(tools: readonly Tool[], ui: Ui): string | undefined {
+	const command = tools.map((t) => toolDetail(t.name, t.args)).find(Boolean);
+	if (!command) return;
+	return tools.length === 1 ? ui.groupBashOne.replace("{command}", command) : ui.groupBash.replace("{n}", String(tools.length)).replace("{command}", command);
+}
+const SUMMARIES: Readonly<Record<ToolKind, (tools: readonly Tool[], ui: Ui) => string | undefined>> = {
+	read: (tools, ui) => filesPart(tools, ui.groupReadOne, ui.groupRead, ui),
+	change: (tools, ui) => filesPart(tools, ui.groupChangeOne, ui.groupChange, ui),
+	bash: bashPart,
+	list: (_, ui) => ui.groupList,
+	delegate: (_, ui) => ui.groupDelegate,
+};
+function otherPart(tools: readonly Tool[], ui: Ui): string {
+	return tools.length === 1 ? tools[0].name : ui.groupOther.replace("{name}", tools[0].name).replace("{n}", String(tools.length));
+}
+function groupSummary(tools: readonly Tool[], ui: Ui): string {
+	const byKind = new Map<string, Tool[]>();
+	for (const tool of tools) {
+		const key = TOOL_KINDS[tool.name] ?? `other:${tool.name}`;
+		byKind.set(key, [...(byKind.get(key) ?? []), tool]);
+	}
+	const parts = [...byKind].map(([key, same]) => (SUMMARIES[key as ToolKind]?.(same, ui)) ?? otherPart(same, ui));
+	const failed = tools.filter((t) => t.phase === "error").length;
+	const status = [tools.some((t) => t.phase === "running") ? ui.toolRunning : "", failed ? ui.nowFailed.replace("{n}", String(failed)) : ""].filter(Boolean);
+	return [parts.join(ui.groupSeparator), ...status].join(" · ");
+}
+function toolEntry(t: Tool, ui: Ui): Entry {
+	return entryFor(t, ui, () => ({ id: t.id, kind: "tool", label: [t.name, toolDetail(t.name, t.args), { running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]].filter(Boolean).join(" · "), text: "", images: 0, args: pretty(t.args), result: pretty(t.result), error: "", copyable: false }));
+}
+function messageEntry(m: Message, ui: Ui): Entry {
+	return entryFor(m, ui, () => ({ id: m.id, kind: m.kind, label: { assistant: ui.assistant, user: ui.user, nudge: ui.nudge, notice: ui.notice }[m.kind],
+		text: shownText(m), images: m.images, error: m.error, args: "", result: "", copyable: copyable(m) }));
+}
+/** Consecutive tools with no visible message between them; the id is the first tool's, so it holds as the group grows. */
+export interface ToolGroup { readonly kind: "tools"; readonly id: string; readonly summary: string; readonly tone: Tone; readonly open: boolean; readonly tools: readonly Entry[] }
+function groupView(tools: readonly Tool[], ui: Ui): ToolGroup {
+	return { kind: "tools", id: tools[0].id, summary: groupSummary(tools, ui), tone: TONES.find(([, matches]) => matches(tools))?.[0] ?? "normal",
+		open: tools.some((t) => t.phase === "error"), tools: tools.map((t) => toolEntry(t, ui)) };
+}
+function conversationView(state: State, filter: number | null, ui: Ui): (Entry | ToolGroup)[] {
+	const messages = new Map(state.messages.map((m) => [m.id, m]));
+	const tools = new Map(state.tools.map((t) => [t.id, t]));
+	const shows = (source: Message | Tool) => filter === null || (source.task?.list === state.listEpoch && source.task.id === filter);
+	const items: (Entry | ToolGroup)[] = [];
+	let run: Tool[] = [];
+	const flush = () => { if (run.length) items.push(groupView(run, ui)); run = []; };
+	for (const entry of state.timeline) {
+		if (entry.kind === "tool") {
+			const tool = tools.get(entry.id)!;
+			if (shows(tool)) run.push(tool);
+			continue;
+		}
+		const message = messages.get(entry.id)!;
+		// A tool-only assistant turn carries no text, only the call the tool group already shows.
+		if (!shows(message) || isSilentAssistant(message)) continue;
+		flush();
+		items.push(messageEntry(message, ui));
+	}
+	flush();
+	return items;
+}
 export function toViewModel(state: State) {
 	const ui = copyFor(state.preferences.language);
 	const counts = countByStatus(state.list);
 	const active = current(state.list);
-	const messages = new Map(state.messages.map((m) => [m.id, m]));
-	const tools = new Map(state.tools.map((t) => [t.id, t]));
+	const filter = activeFilter(state);
 	return {
 		ui,
 		api: apiView(state.api, state.preferences.language, state.model),
@@ -582,22 +695,14 @@ export function toViewModel(state: State) {
 		input: { enabled: state.connection === "ready", running: isRunning(state), newSession: state.connection === "ready" && !isRunning(state), images: state.connection === "ready" && state.imageInput },
 		tasks: { title: state.list.title ?? "TillDone", description: state.list.description ?? "", done: counts.done,
 			total: state.list.tasks.length, progress: `${counts.done} / ${state.list.tasks.length} ${ui.done}`,
-			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus,
+			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus, filterTitle: ui.filterTitle,
 			items: state.list.tasks.map((t) => ({ ...t, label: t.from === undefined ? `#${t.id}` : `#${t.id} ← #${t.from}`, icon: STATUS_ICON[t.status], statusLabel: { idle: ui.taskIdle, inprogress: ui.taskInprogress, done: ui.taskDone }[t.status], current: t.id === active?.id,
-				splittable: state.connection === "ready" && t.status !== "done", splitting: state.pendingSplits.includes(t.id),
+				filtered: t.id === filter?.id, splittable: state.connection === "ready" && t.status !== "done", splitting: state.pendingSplits.includes(t.id),
 				...toolCallsView(state.toolCalls[t.id] ?? 0, ui), ...modelCallsView(state.modelCalls[t.id] ?? 0, ui) })) },
 		queued: state.queued,
 		activity: activityView(state, ui),
-		// A tool-only assistant turn carries no text, only the call the next tool card already shows.
-		conversation: state.timeline.filter((entry) => entry.kind === "tool" || !isSilentAssistant(messages.get(entry.id)!)).map((entry) => {
-			if (entry.kind === "tool") {
-				const t = tools.get(entry.id)!;
-				return entryFor(t, ui, () => ({ id: t.id, kind: "tool", label: `${t.name} · ${{ running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]}`, text: "", images: 0, args: pretty(t.args), result: pretty(t.result), error: "", copyable: false }));
-			}
-			const m = messages.get(entry.id)!;
-			return entryFor(m, ui, () => ({ id: m.id, kind: m.kind, label: { assistant: ui.assistant, user: ui.user, nudge: ui.nudge, notice: ui.notice }[m.kind],
-				text: shownText(m), images: m.images, error: m.error, args: "", result: "", copyable: copyable(m) }));
-		}),
+		filter: filter ? { label: ui.filterLabel.replace("{id}", String(filter.id)).replace("{text}", filter.text), clear: ui.filterClear } : null,
+		conversation: conversationView(state, filter?.id ?? null, ui),
 		dialog: state.dialogs.length ? dialogView(state.dialogs[0], state.now) : null,
 	};
 }

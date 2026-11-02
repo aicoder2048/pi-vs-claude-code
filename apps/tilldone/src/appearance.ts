@@ -39,6 +39,10 @@ const zh = {
 	runTotal: "本次运行 {d}", lastActivity: "最后动静：{d}前",
 	durationSeconds: "{s} 秒", durationMinutes: "{m} 分 {s} 秒", durationHours: "{h} 小时 {m} 分",
 	childPending: "排队中", childRunning: "运行 {d}", childDone: "完成 · 用时 {d}", childFailed: "失败", childTurns: "{n} 轮", childTokens: "{n} tokens", childNestedOne: "转包 1 个子 agent", childNested: "转包 {n} 个子 agent",
+	groupReadOne: "读取 {file}", groupRead: "读取 {n} 个文件：{files}", groupChangeOne: "修改 {file}", groupChange: "修改 {n} 个文件：{files}",
+	groupBashOne: "运行 {command}", groupBash: "运行 {n} 条命令：{command}", groupList: "更新任务清单", groupDelegate: "委派子 agent", groupOther: "{name} ×{n}",
+	fileSeparator: "、", groupSeparator: "；",
+	filterLabel: "只看任务 #{id}：{text}", filterClear: "显示全部", filterTitle: "点击只看这个任务期间的活动，再点一次显示全部",
 };
 export type Copy = typeof zh;
 const en: Copy = {
@@ -64,6 +68,10 @@ const en: Copy = {
 	runTotal: "Run {d}", lastActivity: "Last activity {d} ago",
 	durationSeconds: "{s}s", durationMinutes: "{m}m {s}s", durationHours: "{h}h {m}m",
 	childPending: "queued", childRunning: "running {d}", childDone: "done in {d}", childFailed: "failed", childTurns: "{n} turns", childTokens: "{n} tokens", childNestedOne: "delegated to 1 subagent", childNested: "delegated to {n} subagents",
+	groupReadOne: "Read {file}", groupRead: "Read {n} files: {files}", groupChangeOne: "Changed {file}", groupChange: "Changed {n} files: {files}",
+	groupBashOne: "Ran {command}", groupBash: "Ran {n} commands: {command}", groupList: "Updated the task list", groupDelegate: "Delegated to subagents", groupOther: "{name} ×{n}",
+	fileSeparator: ", ", groupSeparator: "; ",
+	filterLabel: "Only task #{id}: {text}", filterClear: "Show all", filterTitle: "Click to see only this task's activity; click again to see everything",
 };
 export function copyFor(language: Preferences["language"]): Copy { return language === "en" ? en : zh; }
 export function appearanceView(preferences: Preferences, systemDark: boolean) {

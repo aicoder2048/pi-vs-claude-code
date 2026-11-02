@@ -7,6 +7,9 @@ import { JsonlDecoder } from "../src/jsonl.ts";
 import { loadConfig, piArgs } from "../src/config.ts";
 import { PiProcess } from "../src/rpc.ts";
 import { Desk } from "../src/desk.ts";
+import type { Entry, ToolGroup } from "../src/domain.ts";
+/** The conversation's messages, without tool groups. */
+const said = (view: { conversation: readonly (Entry | ToolGroup)[] }) => view.conversation.filter((e): e is Entry => e.kind !== "tools");
 const app = resolve(import.meta.dir, "..");
 const fake = resolve(import.meta.dir, "fake-pi.ts");
 const config = () => loadConfig(app, { TILLDONE_PI_BIN: fake }, app);
@@ -112,7 +115,7 @@ test("fake Pi replay blocks for confirm; Desk echoes exact UI ID, answers select
 		await desk.send({ type: "confirm", id: "wrong", confirmed: true });
 		expect(view!.dialog!.id).toBe(id);
 		await desk.send({ type: "confirm", id, confirmed: true });
-		await until(() => view!.conversation.at(-1)?.text === "ok" && !view!.status.running);
+		await until(() => said(view!).at(-1)?.text === "ok" && !view!.status.running);
 		expect(view!.tasks.total).toBe(0);
 		expect(readLog().find((r) => r.type === "extension_ui_response")).toEqual({ type: "extension_ui_response", id, confirmed: true });
 		await desk.send({ type: "submit", message: "busy" });
@@ -223,7 +226,7 @@ test("Desk coalesces streamed records and stays quiet while idle", async () => {
 		// The replay bursts ~150 records before the confirm; a view per record would publish that many.
 		expect(views).toBeLessThan(20);
 		await desk.send({ type: "confirm", id: last!.dialog!.id, confirmed: true });
-		await until(() => last!.conversation.at(-1)?.text === "ok" && !last!.status.running);
+		await until(() => said(last!).at(-1)?.text === "ok" && !last!.status.running);
 		await Bun.sleep(300);
 		const settled = views;
 		// Idle: 250 ms clock ticks and 2 s state polls change nothing visible.
@@ -239,8 +242,8 @@ test("Desk copies an assistant reply's Markdown through the injected clipboard",
 	try {
 		await until(() => last?.connection === "ready");
 		await desk.send({ type: "submit", message: "markdown" });
-		await until(() => Boolean(last?.conversation.some((e) => e.copyable && e.text.includes("<img"))));
-		const reply = last!.conversation.find((e) => e.copyable)!;
+		await until(() => Boolean(last && said(last).some((e) => e.copyable && e.text.includes("<img"))));
+		const reply = said(last!).find((e) => e.copyable)!;
 		await desk.send({ type: "copyMessage", id: reply.id });
 		expect(copied).toEqual([reply.text]);
 		expect(copied[0]).toStartWith("## 周度小结\n\n第一行\n");
@@ -256,8 +259,8 @@ test("Desk reports a copy it cannot perform instead of pretending it worked", as
 	try {
 		await until(() => last?.connection === "ready");
 		await desk.send({ type: "submit", message: "markdown" });
-		await until(() => Boolean(last?.conversation.some((e) => e.copyable && e.text.includes("<img"))));
-		await expect(desk.send({ type: "copyMessage", id: last!.conversation.find((e) => e.copyable)!.id })).rejects.toThrow("Cannot copy");
+		await until(() => Boolean(last && said(last).some((e) => e.copyable && e.text.includes("<img"))));
+		await expect(desk.send({ type: "copyMessage", id: said(last!).find((e) => e.copyable)!.id })).rejects.toThrow("Cannot copy");
 	} finally { await desk.stop(); }
 });
 test("with pstack each session's first prompt reaches Pi with the skill prefix, later ones do not", async () => {
@@ -277,7 +280,7 @@ test("with pstack each session's first prompt reaches Pi with the skill prefix, 
 		await desk.send({ type: "submit", message: "plan the work" });
 		await desk.send({ type: "submit", message: "/next" });
 		await until(() => view!.conversation.length === 3);
-		expect(view!.conversation.map((m) => m.text)).toEqual(["/do it", "/skill:poteto-mode plan the work", "/next"]);
+		expect(said(view!).map((m) => m.text)).toEqual(["/do it", "/skill:poteto-mode plan the work", "/next"]);
 		expect(view!.poteto.active).toBe(true);
 		await desk.send({ type: "newSession" });
 		await until(() => view?.connection === "ready" && view.conversation.length === 0);
