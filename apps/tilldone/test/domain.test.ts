@@ -562,6 +562,11 @@ describe("activity bar", () => {
 		expect(bar(at(s, 25_000 + 119_999))!.children[0].stale).toBe(false);
 		expect(bar(at(s, 25_000 + 120_000))!.children[0].stale).toBe(true);
 	});
+	test("while waiting on subagents the run allows 120 s of silence, since children report only per message", () => {
+		const s = delegating(subagents(), 30_000, [working]);
+		expect(bar(at(s, 30_000 + 119_999))?.stale).toBe(false);
+		expect(bar(at(s, 30_000 + 120_000))?.stale).toBe(true);
+	});
 	test("malformed subagent details never throw and skip unusable entries", () => {
 		for (const partialResult of [null, "x", { details: "x" }, { details: { results: "x" } }]) {
 			const s = at(subagents(), 6000, { type: "tool_execution_update", toolCallId: "sub", toolName: "subagent", partialResult });

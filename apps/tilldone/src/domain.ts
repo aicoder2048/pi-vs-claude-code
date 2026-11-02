@@ -562,7 +562,8 @@ function activityView(state: State, ui: Ui) {
 	return { text: activityText(now, ui), elapsed: duration(state.now - now.since, ui),
 		total: state.runStartedAt === null ? "" : ui.runTotal.replace("{d}", duration(state.now - state.runStartedAt, ui)),
 		lastActivity: ui.lastActivity.replace("{d}", duration(state.now - state.activityAt, ui)),
-		stale: state.now - state.activityAt >= STALE_RUN_MS,
+		// Children report only when one of their messages ends, so a long child step is silence, not a hang.
+		stale: state.now - state.activityAt >= (now.kind === "subagents" ? STALE_CHILD_MS : STALE_RUN_MS),
 		children: now.kind === "subagents" ? now.children.map((c) => childView(c, state.now, ui)) : [] };
 }
 export function toViewModel(state: State) {
