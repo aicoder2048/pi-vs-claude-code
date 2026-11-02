@@ -18,6 +18,8 @@ interface View {
 		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; splittable: boolean; splitting: boolean;
 			toolCallsLabel: string; toolCallsTitle: string; heavy: boolean; modelCallsLabel: string; modelCallsTitle: string }[] };
 	queued: string[];
+	activity: { text: string; elapsed: string; total: string; lastActivity: string; stale: boolean;
+		children: { agent: string; status: string; icon: string; text: string; nested: string; stale: boolean }[] } | null;
 	conversation: { id: string; kind: string; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean }[];
 	dialog: { id: string; kind: "confirm" | "select" | "input" | "editor"; title: string; message: string; options: string[]; placeholder: string; prefill: string; remainingSeconds: number | null } | null;
 }
@@ -200,6 +202,7 @@ function render(view: View) {
 		queued.dataset.signature = queuedSignature;
 		queued.replaceChildren(...view.queued.map((message) => node("li", `⏳ ${ui.queued} · ${message}`)));
 	}
+	renderActivity(view.activity);
 	setText("input-hint", !view.input.enabled ? view.connection === "exited" ? ui.restartHint : ui.connecting : view.input.running ? ui.busy : ui.ready);
 
 	const conversation = $("conversation");
@@ -287,6 +290,28 @@ function render(view: View) {
 	}
 	renderConfirm(view.dialog?.kind === "confirm" ? view.dialog : null, ui);
 	renderAsk(view.dialog && view.dialog.kind !== "confirm" ? view.dialog : null, ui);
+}
+function renderActivity(activity: View["activity"]) {
+	$("activity").hidden = !activity;
+	if (!activity) return;
+	const stale = String(activity.stale);
+	if ($("activity").dataset.stale !== stale) $("activity").dataset.stale = stale;
+	setText("activity-text", `${activity.text} · ${activity.elapsed}`);
+	setText("activity-meta", [activity.total, activity.lastActivity].filter(Boolean).join(" · "));
+	const list = $("activity-children");
+	const signature = JSON.stringify(activity.children);
+	if (list.dataset.signature === signature) return;
+	list.dataset.signature = signature;
+	list.hidden = activity.children.length === 0;
+	list.replaceChildren(...activity.children.map((child) => {
+		const li = node("li");
+		li.dataset.status = child.status; li.dataset.stale = String(child.stale);
+		const icon = node("span", child.icon); icon.className = "child-icon"; icon.setAttribute("aria-hidden", "true");
+		const text = node("span", child.text); text.className = "child-text";
+		li.append(icon, text);
+		if (child.nested) { const nested = node("small", `↳ ${child.nested}`); nested.className = "child-nested"; li.append(nested); }
+		return li;
+	}));
 }
 // Read-only: Poteto Mode follows how the desk was started (TILLDONE_PSTACK=1), there is no switch.
 function renderPoteto(poteto: View["poteto"], ui: View["ui"]) {

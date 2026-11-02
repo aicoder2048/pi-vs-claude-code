@@ -481,3 +481,100 @@ describe("pstack Poteto Mode", () => {
 		expect(collapseSkill("plain <skill> text")).toBe("plain <skill> text");
 	});
 });
+
+describe("activity bar", () => {
+	const at = (state: ReturnType<typeof initial>, now: number, record?: Record<string, unknown>) => {
+		const ticked = reduce(state, { type: "desk_tick", now });
+		return record ? reduce(ticked, record) : ticked;
+	};
+	const bar = (state: ReturnType<typeof initial>) => toViewModel(state).activity;
+	const started = () => at(initial(), 1000, { type: "agent_start" });
+	const usage = (u: Record<string, number> = {}) => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, ...u });
+	const pending = { agent: "reviewer", source: "pending", task: "review", exitCode: -1, messages: [], stderr: "", usage: usage() };
+	const working = { agent: "poteto-agent", source: "bundled", task: "dig", model: "openai-codex/gpt-x", exitCode: 0, stderr: "",
+		usage: usage({ input: 30000, output: 1000, cacheRead: 10000, turns: 7 }),
+		messages: [
+			{ role: "user", content: "dig", timestamp: 10_000 },
+			{ role: "assistant", content: [{ type: "text", text: "Looking" }, { type: "toolCall", name: "bash", arguments: { command: "rg  activity\nsrc" } }], stopReason: "toolUse", timestamp: 20_000, durationMs: 5_000 },
+		] };
+	const finished = { agent: "explorer", source: "bundled", task: "find", exitCode: 0, stderr: "", usage: usage(),
+		messages: [{ role: "assistant", content: [{ type: "text", text: "Found it." }], stopReason: "stop", timestamp: 12_000, durationMs: 3_000 }] };
+	const delegating = (state: ReturnType<typeof initial>, now: number, results: unknown) =>
+		at(state, now, { type: "tool_execution_update", toolCallId: "sub", toolName: "subagent", partialResult: { content: [], details: { results } } });
+	const subagents = () => at(started(), 5000, { type: "tool_execution_start", toolCallId: "sub", toolName: "subagent", args: { tasks: [] } });
+
+	test("idle shows no bar", () => {
+		expect(bar(initial())).toBeNull();
+		expect(bar(at(started(), 2000, { type: "agent_settled" }))).toBeNull();
+	});
+	test("between tools the model is thinking, timed from the turn", () => {
+		const s = at(started(), 13_000);
+		expect(bar(s)).toMatchObject({ text: "模型思考中", elapsed: "12 秒", total: "本次运行 12 秒", lastActivity: "最后动静：12 秒前", stale: false, children: [] });
+	});
+	test("a running bash tool shows its command; its end starts a new thinking spell", () => {
+		let s = at(started(), 2000, { type: "tool_execution_start", toolCallId: "b", toolName: "bash", args: { command: "uv run pytest -q" } });
+		expect(bar(at(s, 42_000))).toMatchObject({ text: "执行 bash：uv run pytest -q", elapsed: "40 秒" });
+		s = at(s, 42_000, { type: "tool_execution_end", toolCallId: "b", toolName: "bash", result: { content: [] }, isError: false });
+		expect(bar(at(s, 45_000))).toMatchObject({ text: "模型思考中", elapsed: "3 秒", total: "本次运行 44 秒" });
+	});
+	test("a tool an aborted run never finished does not show in the next run", () => {
+		let s = at(started(), 2000, { type: "tool_execution_start", toolCallId: "b", toolName: "bash", args: { command: "sleep 99" } });
+		s = at(s, 3000, { type: "agent_settled" });
+		s = at(s, 4000, { type: "agent_start" });
+		expect(bar(at(s, 5000))?.text).toBe("模型思考中");
+	});
+	test("compaction reported by the state poll shows as compacting", () => {
+		const s = at(started(), 2000, { type: "response", command: "get_state", success: true, data: { isCompacting: true } });
+		expect(bar(s)?.text).toBe("压缩上下文中");
+	});
+	test("a subagent call lists each child with status, progress and latest step", () => {
+		const s = at(delegating(subagents(), 30_000, [pending, working, finished]), 30_000);
+		const view = bar(s)!;
+		expect(view).toMatchObject({ text: "等待 3 个子 agent（1 个完成）", elapsed: "25 秒", total: "本次运行 29 秒" });
+		expect(view.children.map((c) => [c.status, c.icon])).toEqual([["pending", "○"], ["running", "◐"], ["done", "✓"]]);
+		expect(view.children.map((c) => c.text)).toEqual([
+			"reviewer · 排队中",
+			"poteto-agent · openai-codex/gpt-x · 运行 20 秒 · 7 轮 · 41k tokens · bash: rg activity src",
+			"explorer · 完成 · 用时 3 秒 · 1 轮 · Found it.",
+		]);
+		expect(view.children.every((c) => c.nested === "" && !c.stale)).toBe(true);
+	});
+	test("a child waiting on its own subagent call shows the delegation until the result returns", () => {
+		const call = { role: "assistant", content: [{ type: "toolCall", name: "subagent", arguments: { tasks: [{ agent: "a", task: "x" }, { agent: "b", task: "y" }] } }], stopReason: "toolUse", timestamp: 20_000, durationMs: 1000 };
+		const nesting = { ...working, messages: [working.messages[0], call] };
+		let s = delegating(subagents(), 30_000, [nesting]);
+		expect(bar(s)).toMatchObject({ text: "等待 1 个子 agent", children: [{ status: "running", nested: "转包 2 个子 agent" }] });
+		s = delegating(s, 31_000, [{ ...nesting, messages: [...nesting.messages, { role: "toolResult", toolName: "subagent", content: [], timestamp: 31_000 }] }]);
+		expect(bar(s)!.children[0]).toMatchObject({ status: "running", nested: "", text: expect.stringContaining("· subagent") });
+	});
+	test("failed children count separately, in English too", () => {
+		const failed = { ...working, agent: "broken", exitCode: 1, stopReason: "error" };
+		const s = delegating(reduce(subagents(), { type: "desk_preferences", preferences: { theme: "system", language: "en" } }), 30_000, [pending, failed, finished]);
+		const view = bar(s)!;
+		expect(view.text).toBe("Waiting on 3 subagents (1 done, 1 failed)");
+		expect(view.children.map((c) => c.status)).toEqual(["pending", "failed", "done"]);
+		expect(view.children[0].text).toBe("reviewer · queued");
+	});
+	test("the run turns stale after 60 s without Pi activity, a child after 120 s", () => {
+		expect(bar(at(started(), 60_999))?.stale).toBe(false);
+		expect(bar(at(started(), 61_000))?.stale).toBe(true);
+		const s = delegating(subagents(), 30_000, [working]);
+		expect(bar(at(s, 25_000 + 119_999))!.children[0].stale).toBe(false);
+		expect(bar(at(s, 25_000 + 120_000))!.children[0].stale).toBe(true);
+	});
+	test("malformed subagent details never throw and skip unusable entries", () => {
+		for (const partialResult of [null, "x", { details: "x" }, { details: { results: "x" } }]) {
+			const s = at(subagents(), 6000, { type: "tool_execution_update", toolCallId: "sub", toolName: "subagent", partialResult });
+			expect(bar(s)).toMatchObject({ text: "等待 0 个子 agent", children: [] });
+		}
+		const s = delegating(subagents(), 6000, [null, 5, { agent: 3 }, { agent: "odd", messages: "nope", usage: "x", exitCode: "bad", model: 7 }]);
+		expect(bar(s)!.children.map((c) => [c.agent, c.status, c.text])).toEqual([["odd", "running", "odd · 运行 1 秒"]]);
+	});
+	test("while running, a new displayed second is a view change; while idle the clock is not", () => {
+		const s = started();
+		expect(viewChanged(s, at(s, 1900))).toBe(false);
+		expect(viewChanged(s, at(s, 2000))).toBe(true);
+		const idle = at(s, 3000, { type: "agent_settled" });
+		expect(viewChanged(idle, at(idle, 9000))).toBe(false);
+	});
+});

@@ -71,6 +71,26 @@ async function handle(r: any) {
 		}
 		return;
 	}
+	if (r.message === "subagents") {
+		// pstack's parallel subagent call as its partial results report it: queued, working, finished, and one quiet child waiting on its own delegation.
+		const now = Date.now();
+		const usage = (u: object = {}) => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, ...u });
+		const queued = (agent: string) => ({ agent, source: "pending", task: "review", exitCode: -1, messages: [], stderr: "", usage: usage() });
+		const prompt = (at: number) => ({ role: "user", content: [{ type: "text", text: "task" }], timestamp: at });
+		const working = { agent: "poteto-agent", source: "bundled", task: "dig", model: "openai-codex/gpt-6.1-sol", exitCode: 0, stderr: "", usage: usage({ input: 30000, output: 1500, cacheRead: 9000, turns: 7 }),
+			messages: [prompt(now - 190_000), { role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command: "rg -n activity src" } }], stopReason: "toolUse", timestamp: now - 3000, durationMs: 2000 }] };
+		const finished = { agent: "explorer", source: "bundled", task: "find", model: "deepseek/deepseek-v4", exitCode: 0, stderr: "", usage: usage({ input: 8000, output: 600, turns: 2 }),
+			messages: [prompt(now - 190_000), { role: "assistant", content: [{ type: "text", text: "The reducer lives in src/domain.ts." }], stopReason: "stop", timestamp: now - 120_000, durationMs: 4000 }] };
+		const nesting = { agent: "architect", source: "bundled", task: "design", model: "openai-codex/gpt-6.1-terra", exitCode: 0, stderr: "", usage: usage({ input: 12000, output: 900, turns: 3 }),
+			messages: [prompt(now - 400_000), { role: "assistant", content: [{ type: "toolCall", name: "subagent", arguments: { agent: "poteto-agent", task: "prototype" } }], stopReason: "toolUse", timestamp: now - 300_000, durationMs: 5000 }] };
+		const update = (results: object[]) => emit({ type: "tool_execution_update", toolCallId: "sub", toolName: "subagent", args: { tasks: [] }, partialResult: { content: [], details: { results } } });
+		emit({ type: "agent_start" });
+		emit({ type: "turn_start" });
+		emit({ type: "tool_execution_start", toolCallId: "sub", toolName: "subagent", args: { tasks: [{ agent: "poteto-agent", task: "dig" }, { agent: "explorer", task: "find" }, { agent: "architect", task: "design" }, { agent: "reviewer", task: "review" }] } });
+		update([queued("poteto-agent"), queued("explorer"), queued("architect"), queued("reviewer")]);
+		update([working, finished, nesting, queued("reviewer")]);
+		return;
+	}
 	if (r.message.startsWith("Split task")) return;
 	if (r.message === "expiry") { emit({ type: "extension_ui_request", method: "confirm", id: "expiry-id", title: "Timeout", message: "Close only", timeout: 100 }); return; }
 	if (r.message === "dialogs") {

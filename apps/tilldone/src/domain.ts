@@ -32,6 +32,7 @@ export interface Tool {
 	readonly args: unknown;
 	readonly result: unknown;
 	readonly phase: "running" | "done" | "error";
+	readonly startedAt: number;
 }
 /** A question an extension is blocked on: Pi's four RPC dialog methods. */
 export type DialogKind = "confirm" | "select" | "input" | "editor";
@@ -80,6 +81,12 @@ export interface State {
 	readonly modelCalls: Readonly<Record<number, number>>;
 	readonly statuses: Readonly<Record<string, string>>;
 	readonly now: number;
+	/** When the current run began; null while idle. */
+	readonly runStartedAt: number | null;
+	/** Since when the model has been working on its next step: a new turn or the end of a tool. */
+	readonly turnAt: number;
+	/** Arrival of the last Pi record that shows progress; the state poll does not count. */
+	readonly activityAt: number;
 	readonly runActive: boolean;
 	readonly streaming: boolean;
 	readonly compacting: boolean;
@@ -99,7 +106,7 @@ export interface State {
 }
 export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false, pstack = false): State {
 	return { list: EMPTY_LIST, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
-		poteto: { available: pstack, on: false }, dialogs: [], statuses: {}, now: 0, runActive: false, streaming: false, compacting: false,
+		poteto: { available: pstack, on: false }, dialogs: [], statuses: {}, now: 0, runStartedAt: null, turnAt: 0, activityAt: 0, runActive: false, streaming: false, compacting: false,
 		queued: [], pendingSplits: [], toolCalls: {}, modelCalls: {}, model, imageInput: false, thinking: "unknown", cwd, sessionFile: "", connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
 }
 const text = (value: unknown): string => typeof value === "string" ? value : "";
@@ -126,7 +133,10 @@ export function viewChanged(previous: State, next: State): boolean {
 	if (previous === next) return false;
 	if (next.dialogs.length) return true;
 	for (const key of Object.keys(next) as (keyof State)[]) if (key !== "now" && previous[key] !== next[key]) return true;
-	return false;
+	// While running, the activity bar's timers are part of the view.
+	if (!isRunning(next)) return false;
+	const ui = copyFor(next.preferences.language);
+	return JSON.stringify(activityView(previous, ui)) !== JSON.stringify(activityView(next, ui));
 }
 
 type Counts = Readonly<Record<number, number>>;
@@ -141,7 +151,13 @@ function keepCounts(counts: Counts, previous: ListState, list: ListState): Count
 	const kept = Object.entries(counts).filter(([id]) => list.tasks.some((t) => t.id === Number(id)));
 	return kept.length === Object.keys(counts).length ? counts : Object.fromEntries(kept);
 }
+/** Every Pi record except the state poll's response proves Pi is still making progress. */
 export function reduce(state: State, record: RecordValue): State {
+	const next = project(state, record);
+	if (typeof record.type !== "string" || record.type.startsWith("desk_") || record.type === "response" || next.activityAt === next.now) return next;
+	return { ...next, activityAt: next.now };
+}
+function project(state: State, record: RecordValue): State {
 	switch (record.type) {
 		case "desk_api_summary": return { ...state, api: { ...state.api, summary: record.summary } };
 		case "desk_api_open": return { ...state, api: { ...state.api, open: true, error: null, saved: false } };
@@ -163,7 +179,7 @@ export function reduce(state: State, record: RecordValue): State {
 		case "desk_dialog_closed": return { ...state, dialogs: state.dialogs.filter((d) => d.id !== record.id) };
 		case "desk_error": return { ...state, error: text(record.error) };
 		case "desk_stderr": return { ...state, diagnostics: (state.diagnostics + text(record.text)).slice(-8000) };
-		case "desk_exit": return { ...state, connection: "exited", error: text(record.error), runActive: false, streaming: false, compacting: false, dialogs: [], queued: [], pendingSplits: [] };
+		case "desk_exit": return { ...state, connection: "exited", error: text(record.error), runStartedAt: null, runActive: false, streaming: false, compacting: false, dialogs: [], queued: [], pendingSplits: [] };
 		case "desk_resume_unavailable": return addMessage(state, "notice", { 0: copyFor(state.preferences.language).resumeUnavailable });
 		case "desk_split_requested": return { ...state, pendingSplits: [...state.pendingSplits, record.id] };
 		case "queue_update": {
@@ -183,11 +199,11 @@ export function reduce(state: State, record: RecordValue): State {
 			if (state.connection === "ready" && state.model === model && state.imageInput === imageInput && state.thinking === thinking && state.streaming === streaming && state.compacting === compacting && state.sessionFile === sessionFile) return state;
 			return { ...state, connection: "ready", model, imageInput, thinking, streaming, compacting, sessionFile };
 		}
-		case "agent_start": return { ...state, runActive: true, error: "" };
+		case "agent_start": return { ...state, runActive: true, error: "", runStartedAt: state.runStartedAt ?? state.now, turnAt: state.now };
 		// One turn is one model request; it belongs to the task in progress when it starts.
-		case "turn_start": return { ...state, modelCalls: countActive(state.modelCalls, state.list) };
+		case "turn_start": return { ...state, turnAt: state.now, modelCalls: countActive(state.modelCalls, state.list) };
 		// agent_end is intentionally not an idle transition: a nudge may start another run.
-		case "agent_settled": return { ...state, runActive: false, streaming: false, compacting: false, queued: [], pendingSplits: [] };
+		case "agent_settled": return { ...state, runStartedAt: null, runActive: false, streaming: false, compacting: false, queued: [], pendingSplits: [] };
 		case "thinking_level_changed": return { ...state, thinking: text(record.level) };
 		case "message_start": {
 			const m = record.message;
@@ -210,7 +226,7 @@ export function reduce(state: State, record: RecordValue): State {
 			return { ...updateAssistant(s, (m) => ({ ...m, blocks: contentBlocks(record.message.content), error: text(record.message.errorMessage) })), assistantId: null };
 		}
 		case "tool_execution_start": {
-			const tool: Tool = { id: record.toolCallId, name: record.toolName, args: record.args ?? null, result: null, phase: "running" };
+			const tool: Tool = { id: record.toolCallId, name: record.toolName, args: record.args ?? null, result: null, phase: "running", startedAt: state.now };
 			const toolCalls = record.toolName === TOOL.name ? state.toolCalls : countActive(state.toolCalls, state.list);
 			return { ...state, toolCalls, tools: [...state.tools, tool], timeline: [...state.timeline, { kind: "tool", id: tool.id }] };
 		}
@@ -221,7 +237,7 @@ export function reduce(state: State, record: RecordValue): State {
 			// A pending split is resolved once its task is gone from the list (split replaces it) or done.
 			const pendingSplits = list === state.list ? state.pendingSplits : state.pendingSplits.filter((id) => list.tasks.some((t) => t.id === id && t.status !== "done"));
 			const counts = list === state.list ? state : { toolCalls: keepCounts(state.toolCalls, state.list, list), modelCalls: keepCounts(state.modelCalls, state.list, list) };
-			return { ...state, list, pendingSplits, toolCalls: counts.toolCalls, modelCalls: counts.modelCalls, tools: state.tools.map((t) => t.id === record.toolCallId
+			return { ...state, turnAt: state.now, list, pendingSplits, toolCalls: counts.toolCalls, modelCalls: counts.modelCalls, tools: state.tools.map((t) => t.id === record.toolCallId
 				? { ...t, result: record.result, phase: record.isError ? "error" : "done" } : t) };
 		}
 		case "extension_ui_request": {
@@ -421,6 +437,134 @@ export function collapseSkill(text: string): string {
 const shownText = (m: Message) => m.kind === "user" ? collapseSkill(messageText(m)) : messageText(m);
 const copyable = (m: Message) => m.kind === "assistant" && messageText(m).trim() !== "";
 const isSilentAssistant = (m: Message) => m.kind === "assistant" && !m.error && Object.values(m.blocks).every((value) => !value.trim());
+/** What the run is doing right now, derived from state; never stored. */
+export type Activity = { kind: "idle" } | { kind: "compacting"; since: number } | { kind: "thinking"; since: number }
+	| { kind: "tool"; name: string; detail: string; since: number }
+	| { kind: "subagents"; since: number; children: readonly Child[] };
+/** One pstack subagent child as its latest partial result describes it. */
+export interface Child {
+	readonly agent: string;
+	readonly model: string;
+	readonly status: "pending" | "running" | "done" | "failed";
+	readonly turns: number;
+	readonly tokens: number;
+	readonly startedAt: number;
+	readonly lastAt: number;
+	/** The child's latest tool call as "name: key arg", else its latest text. */
+	readonly last: string;
+	/** Subagents the child itself is waiting on; their own activity is invisible. */
+	readonly nested: number;
+}
+const SUBAGENT_TOOL = "subagent";
+const STALE_RUN_MS = 60_000, STALE_CHILD_MS = 120_000;
+const isObject = (value: unknown): value is RecordValue => typeof value === "object" && value !== null && !Array.isArray(value);
+const num = (value: unknown): number => typeof value === "number" && Number.isFinite(value) ? value : 0;
+const oneLine = (value: string, max = 80): string => {
+	const line = value.replace(/\s+/g, " ").trim();
+	return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+};
+/** The argument that says what a call is about: bash → command, read/edit/write → path, else nothing. */
+function toolDetail(name: string, args: unknown): string {
+	if (!isObject(args)) return "";
+	if (name === "bash") return oneLine(text(args.command));
+	if (name === "read" || name === "edit" || name === "write") return oneLine(text(args.path));
+	return "";
+}
+/** How many agents one subagent call delegates to: parallel tasks, chain steps, or one. */
+const delegated = (args: unknown): number => isObject(args) && Array.isArray(args.tasks) && args.tasks.length ? args.tasks.length
+	: isObject(args) && Array.isArray(args.chain) && args.chain.length ? args.chain.length : 1;
+function parseChild(raw: unknown, toolStartedAt: number): Child | undefined {
+	if (!isObject(raw) || typeof raw.agent !== "string") return;
+	const messages = (Array.isArray(raw.messages) ? raw.messages : []).filter(isObject);
+	const assistants = messages.filter((m) => m.role === "assistant");
+	const latest = assistants.at(-1);
+	const lastMessage = messages.at(-1);
+	const exitCode = num(raw.exitCode);
+	const failedReason = (reason: unknown) => reason === "error" || reason === "aborted";
+	const status: Child["status"] = exitCode === -1 ? "pending"
+		: failedReason(raw.stopReason) || failedReason(latest?.stopReason) || exitCode > 0 ? "failed"
+		: lastMessage?.role === "assistant" && lastMessage.stopReason === "stop" ? "done" : "running";
+	let last = "";
+	for (const message of [...assistants].reverse()) {
+		const blocks = (Array.isArray(message.content) ? message.content : []).filter(isObject);
+		const call = blocks.filter((b) => b.type === "toolCall" && typeof b.name === "string").at(-1);
+		const said = blocks.filter((b) => b.type === "text" && text(b.text).trim()).at(-1);
+		if (call) { const detail = toolDetail(call.name, call.arguments); last = detail ? `${call.name}: ${detail}` : call.name; break; }
+		if (said) { last = oneLine(text(said.text)); break; }
+	}
+	// Only a call still waiting for its result is delegation in progress.
+	const waiting = lastMessage?.role === "assistant" && Array.isArray(lastMessage.content) ? lastMessage.content.filter((b: unknown) => isObject(b) && b.type === "toolCall" && b.name === SUBAGENT_TOOL) : [];
+	const stamps = messages.map((m) => num(m.timestamp) + (m.role === "assistant" ? num(m.durationMs) : 0)).filter((t) => t > 0);
+	const startedAt = messages.map((m) => num(m.timestamp)).find((t) => t > 0) ?? toolStartedAt;
+	const usage = isObject(raw.usage) ? raw.usage : {};
+	return { agent: raw.agent, model: text(raw.model), status, turns: num(usage.turns) || assistants.length,
+		tokens: num(usage.input) + num(usage.output) + num(usage.cacheRead) + num(usage.cacheWrite),
+		startedAt, lastAt: stamps.length ? Math.max(...stamps) : startedAt, last,
+		nested: status === "running" ? waiting.reduce((sum: number, call: RecordValue) => sum + delegated(call.arguments), 0) : 0 };
+}
+// A tool's result only changes by replacing the tool, so its parsed children stay valid per object.
+const childrenCache = new WeakMap<Tool, readonly Child[]>();
+function childrenOf(tool: Tool): readonly Child[] {
+	const cached = childrenCache.get(tool);
+	if (cached) return cached;
+	const results = isObject(tool.result) && isObject(tool.result.details) && Array.isArray(tool.result.details.results) ? tool.result.details.results : [];
+	const children = results.flatMap((raw: unknown) => parseChild(raw, tool.startedAt) ?? []);
+	childrenCache.set(tool, children);
+	return children;
+}
+export function activity(state: State): Activity {
+	if (!isRunning(state)) return { kind: "idle" };
+	// Pi reports compaction through the poll only; the last Pi record is the closest start time.
+	if (state.compacting) return { kind: "compacting", since: state.activityAt };
+	// A tool an aborted run never finished belongs to that run, not this one.
+	const running = state.tools.filter((t) => t.phase === "running" && t.startedAt >= (state.runStartedAt ?? 0));
+	const subagent = running.filter((t) => t.name === SUBAGENT_TOOL).at(-1);
+	if (subagent) return { kind: "subagents", since: subagent.startedAt, children: childrenOf(subagent) };
+	const tool = running.at(-1);
+	if (tool) return { kind: "tool", name: tool.name, detail: toolDetail(tool.name, tool.args), since: tool.startedAt };
+	return { kind: "thinking", since: state.turnAt };
+}
+type Ui = ReturnType<typeof copyFor>;
+function duration(ms: number, ui: Ui): string {
+	const s = Math.max(0, Math.floor(ms / 1000));
+	if (s < 60) return ui.durationSeconds.replace("{s}", String(s));
+	if (s < 3600) return ui.durationMinutes.replace("{m}", String(Math.floor(s / 60))).replace("{s}", String(s % 60));
+	return ui.durationHours.replace("{h}", String(Math.floor(s / 3600))).replace("{m}", String(Math.floor(s / 60) % 60));
+}
+const tokenCount = (n: number): string => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+const CHILD_ICON: Record<Child["status"], string> = { pending: "○", running: "◐", done: "✓", failed: "✗" };
+function childView(child: Child, now: number, ui: Ui) {
+	const time = { pending: ui.childPending, running: ui.childRunning.replace("{d}", duration(now - child.startedAt, ui)),
+		done: ui.childDone.replace("{d}", duration(child.lastAt - child.startedAt, ui)), failed: ui.childFailed }[child.status];
+	const parts = [child.agent, child.model, time, child.turns ? ui.childTurns.replace("{n}", String(child.turns)) : "",
+		child.tokens ? ui.childTokens.replace("{n}", tokenCount(child.tokens)) : "", child.last];
+	return { agent: child.agent, status: child.status, icon: CHILD_ICON[child.status], text: parts.filter(Boolean).join(" · "),
+		nested: child.nested === 0 ? "" : child.nested === 1 ? ui.childNestedOne : ui.childNested.replace("{n}", String(child.nested)),
+		stale: child.status === "running" && now - child.lastAt >= STALE_CHILD_MS };
+}
+function activityText(now: Activity, ui: Ui): string {
+	switch (now.kind) {
+		case "idle": return "";
+		case "compacting": return ui.nowCompacting;
+		case "thinking": return ui.nowThinking;
+		case "tool": return (now.detail ? ui.nowToolDetail : ui.nowTool).replace("{name}", now.name).replace("{detail}", now.detail);
+		case "subagents": {
+			const done = now.children.filter((c) => c.status === "done").length, failed = now.children.filter((c) => c.status === "failed").length;
+			const counts = [done ? ui.nowDone.replace("{n}", String(done)) : "", failed ? ui.nowFailed.replace("{n}", String(failed)) : ""].filter(Boolean).join(ui.listSeparator);
+			const waiting = now.children.length === 1 ? ui.nowSubagentOne : ui.nowSubagents.replace("{n}", String(now.children.length));
+			return counts ? `${waiting}${ui.nowCounts.replace("{counts}", counts)}` : waiting;
+		}
+	}
+}
+function activityView(state: State, ui: Ui) {
+	const now = activity(state);
+	if (now.kind === "idle") return null;
+	return { text: activityText(now, ui), elapsed: duration(state.now - now.since, ui),
+		total: state.runStartedAt === null ? "" : ui.runTotal.replace("{d}", duration(state.now - state.runStartedAt, ui)),
+		lastActivity: ui.lastActivity.replace("{d}", duration(state.now - state.activityAt, ui)),
+		stale: state.now - state.activityAt >= STALE_RUN_MS,
+		children: now.kind === "subagents" ? now.children.map((c) => childView(c, state.now, ui)) : [] };
+}
 export function toViewModel(state: State) {
 	const ui = copyFor(state.preferences.language);
 	const counts = countByStatus(state.list);
@@ -442,6 +586,7 @@ export function toViewModel(state: State) {
 				splittable: state.connection === "ready" && t.status !== "done", splitting: state.pendingSplits.includes(t.id),
 				...toolCallsView(state.toolCalls[t.id] ?? 0, ui), ...modelCallsView(state.modelCalls[t.id] ?? 0, ui) })) },
 		queued: state.queued,
+		activity: activityView(state, ui),
 		// A tool-only assistant turn carries no text, only the call the next tool card already shows.
 		conversation: state.timeline.filter((entry) => entry.kind === "tool" || !isSilentAssistant(messages.get(entry.id)!)).map((entry) => {
 			if (entry.kind === "tool") {

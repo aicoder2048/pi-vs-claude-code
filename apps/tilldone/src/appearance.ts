@@ -34,6 +34,11 @@ const zh = {
 	toolCallOne: "1 工具", toolCalls: "{n} 工具", toolCallsTitle: "这个任务进行期间边牧调用其他工具的次数（不含管理清单的 tilldone 调用）；每满 {every} 次会提醒边牧考虑细分",
 	modelCallOne: "1 模型", modelCalls: "{n} 模型", modelCallsTitle: "这个任务进行期间边牧请求大模型的次数：每次请求是一个 turn，一次回复里可能带若干个工具调用",
 	potetoOn: "Poteto 模式", potetoPending: "Poteto 模式 · 首条消息开启", potetoTitle: "用 TILLDONE_PSTACK=1（just tilldone-with-pstack）启动：每个会话的第一条消息会开启 pstack 的 Poteto 模式（规划、按 playbook 做事、必要时分派 subagent）。不想用就用 just tilldone 启动。", newSession: "新会话", newSessionTitle: "开始新会话？", newSessionMessage: "将重启 Pi：当前对话和任务清单都会清空，模型不再记得之前的内容。", cancel: "取消", newSessionConfirm: "开始新会话",
+	nowThinking: "模型思考中", nowCompacting: "压缩上下文中", nowTool: "执行 {name}", nowToolDetail: "执行 {name}：{detail}",
+	nowSubagentOne: "等待 1 个子 agent", nowSubagents: "等待 {n} 个子 agent", nowCounts: "（{counts}）", nowDone: "{n} 个完成", nowFailed: "{n} 个失败", listSeparator: "，",
+	runTotal: "本次运行 {d}", lastActivity: "最后动静：{d}前",
+	durationSeconds: "{s} 秒", durationMinutes: "{m} 分 {s} 秒", durationHours: "{h} 小时 {m} 分",
+	childPending: "排队中", childRunning: "运行 {d}", childDone: "完成 · 用时 {d}", childFailed: "失败", childTurns: "{n} 轮", childTokens: "{n} tokens", childNestedOne: "转包 1 个子 agent", childNested: "转包 {n} 个子 agent",
 };
 export type Copy = typeof zh;
 const en: Copy = {
@@ -54,6 +59,11 @@ const en: Copy = {
 	toolCallOne: "1 tool", toolCalls: "{n} tools", toolCallsTitle: "Other tools Pi called while this task was in progress (tilldone's own list calls not included); every {every} calls it is reminded to consider splitting",
 	modelCallOne: "1 llm", modelCalls: "{n} llms", modelCallsTitle: "Model requests Pi made while this task was in progress: each request is one turn, and one reply can carry several tool calls",
 	potetoOn: "Poteto Mode", potetoPending: "Poteto Mode · starts with the first message", potetoTitle: "Started with TILLDONE_PSTACK=1 (just tilldone-with-pstack): each session's first message turns on pstack Poteto Mode (plan, follow a playbook, delegate to subagents when useful). Start with just tilldone to run without it.", newSession: "New session", newSessionTitle: "Start a new session?", newSessionMessage: "Pi restarts: the conversation and task list are cleared, and the model forgets everything before.", cancel: "Cancel", newSessionConfirm: "Start new session",
+	nowThinking: "Model thinking", nowCompacting: "Compacting context", nowTool: "Running {name}", nowToolDetail: "Running {name}: {detail}",
+	nowSubagentOne: "Waiting on 1 subagent", nowSubagents: "Waiting on {n} subagents", nowCounts: " ({counts})", nowDone: "{n} done", nowFailed: "{n} failed", listSeparator: ", ",
+	runTotal: "Run {d}", lastActivity: "Last activity {d} ago",
+	durationSeconds: "{s}s", durationMinutes: "{m}m {s}s", durationHours: "{h}h {m}m",
+	childPending: "queued", childRunning: "running {d}", childDone: "done in {d}", childFailed: "failed", childTurns: "{n} turns", childTokens: "{n} tokens", childNestedOne: "delegated to 1 subagent", childNested: "delegated to {n} subagents",
 };
 export function copyFor(language: Preferences["language"]): Copy { return language === "en" ? en : zh; }
 export function appearanceView(preferences: Preferences, systemDark: boolean) {
