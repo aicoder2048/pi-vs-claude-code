@@ -1,0 +1,1 @@
+Call the subagent tool exactly once with the tasks parameter (parallel): two tasks, both agent poteto-agent and role "arena runners". Task A: reply with only ALPHA. Task B: reply with only BRAVO. No tools besides reading your required skill. Then report both replies verbatim and which model each subagent used.

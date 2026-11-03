@@ -29,3 +29,8 @@ typecheck:
 # 实际启动 Electron，用假 pi 验证 UI（需要图形桌面）
 smoke: install
     bun run test:smoke
+
+# 无人值守地驱动桌面跑一个长任务（真实模型，消耗 Codex 订阅额度），参数见 scripts/claude-driver/README.md
+# 例：just drive --work ../../some-project --prompt my-task.md --name build
+drive *ARGS: install
+    bun scripts/claude-driver/desk-run.ts {{ARGS}}

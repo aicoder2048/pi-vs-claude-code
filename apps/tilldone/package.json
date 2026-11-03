@@ -9,7 +9,7 @@
     "start": "bun run build && electron .",
     "test": "bun test test/*.test.ts extensions/tilldone/state.test.ts",
     "typecheck": "tsc --noEmit",
-    "test:smoke": "bun run build && bun test/smoke.ts && bun test/api-smoke.ts"
+    "test:smoke": "bun run build && bun test/smoke.ts && bun test/api-smoke.ts && bun test/claude-driver-smoke.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

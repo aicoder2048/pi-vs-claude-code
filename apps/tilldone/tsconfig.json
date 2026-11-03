@@ -11,5 +11,5 @@
     "types": ["bun", "node"],
     "lib": ["ES2022", "DOM"]
   },
-  "include": ["src/**/*.ts", "renderer/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "renderer/**/*.ts", "test/**/*.ts", "scripts/claude-driver/*.ts", "scripts/claude-driver/lib/**/*.ts"]
 }

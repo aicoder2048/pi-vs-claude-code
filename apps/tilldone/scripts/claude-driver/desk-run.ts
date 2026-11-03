@@ -1,107 +1,163 @@
 /**
- * Drive the real TillDone Desk (Pi + tilldone + pstack Poteto Mode) through one long task, for Claude Code.
- * Generalised from desk-blackjack-run.ts / desk-blackjack-fix-run.ts (the Blackjack build, 2026-11-01).
+ * Claude driver: drive the real TillDone Desk (Pi + tilldone, pstack Poteto Mode by default) through one long task,
+ * so Claude Code can hand the desk a job and read the result afterwards. Run with --help for the options; see README.md.
  *
- * Usage (from apps/tilldone):
- *   bun scripts/claude-driver/desk-run.ts --work <project dir> --prompt <prompt.md> --out <dir> [--name run] [--max-min 150] [--model openai-codex/gpt-6.1-sol]
- *
- * - Launches this app with TILLDONE_PSTACK=1 and TILLDONE_CWD=<work>; the project must have pstack installed
- *   (`pi install npm:pi-pstack -l`).
- * - Pastes the whole prompt file and sends it. Start the prompt with `/skill:poteto-mode` (the desk passes it through as-is).
- * - Every 15 s: auto-denies confirm dialogs, cancels ask dialogs (select/input/editor), logs task-list changes, stops on alert.
- * - Treats the run as settled after 20 s idle; hard limit --max-min minutes.
- * - Writes <out>/<name>.log, <name>.png (screenshot), <name>-conversation.txt, <name>-tasks.txt.
+ * Every run writes one directory:
+ *   summary.json      outcome, timings, dialogs answered, final task list, file names (read this first)
+ *   run.log           timestamped progress: connection, task-list changes, dialogs, outcome
+ *   conversation.txt  the desk's conversation panel at the end
+ *   tasks.txt         the desk's task panel at the end
+ *   final.png         screenshot at the end
+ *   userdata/         the desk's throwaway Electron profile
  */
-import { _electron as electron } from "@playwright/test";
-import { appendFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DESK, Desk } from "./lib/desk.ts";
+import { checkOptions, deskEnv, type Options, parseOptions, USAGE } from "./lib/options.ts";
+import { EXIT_CODE, initialWatch, type Outcome, step, type WatchState } from "./lib/watch.ts";
 
-const argv = process.argv.slice(2);
-const arg = (name: string, fallback?: string) => {
-	const i = argv.indexOf(`--${name}`);
-	const value = i >= 0 ? argv[i + 1] : fallback;
-	if (value === undefined) throw new Error(`missing --${name}`);
-	return value;
-};
 const app = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const work = resolve(arg("work"));
-const promptFile = resolve(arg("prompt"));
-const out = resolve(arg("out"));
-const name = arg("name", "run");
-const maxMinutes = Number(arg("max-min", "150"));
-const model = arg("model", "openai-codex/gpt-6.1-sol");
-if (model.startsWith("anthropic/")) throw new Error("anthropic/* models are not allowed (pay-per-use API).");
 
-await mkdir(out, { recursive: true });
-const logFile = join(out, `${name}.log`);
-await writeFile(logFile, "");
-const log = (s: string) => {
-	const line = `[${new Date().toISOString().slice(11, 19)}] ${s}`;
-	console.log(line);
-	return appendFile(logFile, line + "\n");
-};
+const FILES = { summary: "summary.json", log: "run.log", conversation: "conversation.txt", tasks: "tasks.txt", screenshot: "final.png", userData: "userdata" } as const;
 
-const prompt = await readFile(promptFile, "utf8");
-const userData = await mkdtemp(join(out, `${name}-userdata-`));
-await log(`app=${app} work=${work} prompt=${promptFile} (${prompt.length} chars) model=${model}`);
-const application = await electron.launch({
-	executablePath: join(app, "node_modules/.bin/electron"),
-	args: [app, `--user-data-dir=${userData}`],
-	cwd: app,
-	env: { ...process.env, TILLDONE_PSTACK: "1", TILLDONE_CWD: work, TILLDONE_MODEL: model },
-});
-const deadline = Date.now() + maxMinutes * 60_000;
+interface Summary {
+	name: string;
+	outcome: Outcome["kind"] | "error";
+	detail: string;
+	exitCode: number;
+	startedAt: string;
+	endedAt: string;
+	durationSeconds: number;
+	model: string;
+	pstack: boolean;
+	work: string;
+	prompt: string;
+	runDir: string;
+	connected: string | null;
+	deniedConfirms: string[];
+	cancelledAsks: string[];
+	taskChanges: number;
+	finalTasks: string;
+	pageErrors: string[];
+	files: typeof FILES;
+}
+
+let options: Options | null;
 try {
-	const page = await application.firstWindow();
-	page.on("pageerror", (e) => void log("PAGE ERROR " + e.message));
-	await page.waitForFunction(() => !(document.querySelector("#send") as HTMLButtonElement).disabled, null, { timeout: 90_000 });
-	await log("connected: " + (await page.locator("footer").innerText()).replace(/\n/g, " | "));
-	await page.locator("#prompt").fill(prompt);
-	await page.locator("#send").click();
-	await page.waitForFunction(
-		() => !(document.querySelector("#stop") as HTMLButtonElement).disabled || !(document.querySelector("#alert") as HTMLElement).hidden,
-		null,
-		{ timeout: 90_000 },
-	);
-	if (await page.locator("#alert").isVisible()) throw new Error("Desk alert after send: " + (await page.locator("#alert").innerText()));
-	await log("running");
-	let idleSince = 0;
-	let lastTasks = "";
-	while (Date.now() < deadline) {
-		await page.waitForTimeout(15_000);
-		if (await page.locator("#confirm-dialog").evaluate((d: HTMLDialogElement) => d.open)) {
-			await log(`CONFIRM DENIED: ${await page.locator("#confirm-title").innerText()} — ${await page.locator("#confirm-message").innerText()}`);
-			await page.locator("#deny").click();
+	options = parseOptions(process.argv.slice(2), { cwd: process.cwd(), tmp: tmpdir(), now: new Date() });
+	if (!options) {
+		console.log(USAGE);
+		process.exit(0);
+	}
+	checkOptions(options, app, process.env);
+} catch (error) {
+	console.error(`desk-run: ${error instanceof Error ? error.message : error}`);
+	process.exit(EXIT_CODE.error);
+}
+process.exit(await run(options));
+
+async function run(options: Options): Promise<number> {
+	const out = options.out;
+	await mkdir(out, { recursive: true });
+	const path = (file: string) => join(out, file);
+	const started = Date.now();
+	const log = async (message: string) => {
+		const line = `[${new Date().toISOString().slice(11, 19)}] ${message}`;
+		console.log(line);
+		await appendFile(path(FILES.log), line + "\n");
+	};
+	await writeFile(path(FILES.log), "");
+	console.log(`run directory: ${out}`);
+
+	let watch: WatchState = initialWatch();
+	let outcome: Outcome | { kind: "error"; detail: string } = { kind: "error", detail: "the driver stopped before the run ended" };
+	let connected: string | null = null;
+	let finalTasks = "";
+	const pageErrors: string[] = [];
+	let desk: Desk | null = null;
+	try {
+		const prompt = await readFile(options.prompt, "utf8");
+		await log(`app=${app} work=${options.work} prompt=${options.prompt} (${prompt.length} chars) model=${options.model} pstack=${options.pstack}`);
+		const build = spawnSync("bun", ["run", "build"], { cwd: app, encoding: "utf8" });
+		if (build.status !== 0) throw new Error(`desk build failed:\n${build.stderr || build.stdout}`);
+		desk = await Desk.launch(app, path(FILES.userData), deskEnv(options, process.env), (message) => {
+			pageErrors.push(message);
+			void log(`PAGE ERROR ${message}`);
+		});
+		connected = await desk.connected();
+		await log(`connected: ${connected}`);
+		const alertOnSend = await desk.send(prompt);
+		if (alertOnSend !== null) {
+			outcome = { kind: "alert", detail: alertOnSend };
+			await log(`ALERT after send: ${alertOnSend}`);
+		} else await log("running");
+		const limits = { idleMs: options.idleSeconds * 1000, deadline: started + options.maxMinutes * 60_000 };
+		while (alertOnSend === null) {
+			await desk.page.waitForTimeout(options.pollSeconds * 1000);
+			const result = step(watch, await desk.snapshot(), Date.now(), limits);
+			watch = result.state;
+			for (const action of result.actions) await (action === "deny-confirm" ? desk.denyConfirm() : desk.cancelAsk());
+			for (const line of result.logs) await log(line);
+			if (result.outcome) {
+				outcome = result.outcome;
+				break;
+			}
 		}
-		if (await page.locator("#ask-dialog").evaluate((d: HTMLDialogElement) => d.open)) {
-			await log(`ASK CANCELLED: ${await page.locator("#ask-title").innerText()}`);
-			await page.locator("#ask-cancel").click();
-		}
-		const tasks = (await page.locator("#tasks").innerText()).replace(/\n+/g, " | ");
-		if (tasks !== lastTasks) {
-			await log("tasks: " + tasks.slice(0, 1200));
-			lastTasks = tasks;
-		}
-		const running = !(await page.locator("#stop").isDisabled());
-		if (await page.locator("#alert").isVisible()) {
-			await log("ALERT: " + (await page.locator("#alert").innerText()));
-			break;
-		}
-		if (running) idleSince = 0;
-		else if (!idleSince) idleSince = Date.now();
-		else if (Date.now() - idleSince > 20_000) {
-			await log("idle — run settled");
-			break;
+	} catch (error) {
+		outcome = { kind: "error", detail: error instanceof Error ? error.message : String(error) };
+		await log(`ERROR: ${outcome.detail}`);
+	} finally {
+		if (desk) {
+			// Collect what the desk shows even after an error; each piece is best effort.
+			const save = async (label: string, work: () => Promise<unknown>) => {
+				try {
+					await work();
+				} catch (error) {
+					await log(`could not save ${label}: ${error instanceof Error ? error.message : error}`);
+				}
+			};
+			await save("screenshot", () => desk!.screenshot(path(FILES.screenshot)));
+			await save("conversation", async () => {
+				const conversation = await desk!.text(DESK.conversation);
+				await writeFile(path(FILES.conversation), conversation);
+				await log(`=== final conversation tail ===\n${conversation.slice(-4000)}`);
+			});
+			await save("tasks", async () => {
+				finalTasks = await desk!.text(DESK.tasks);
+				await writeFile(path(FILES.tasks), finalTasks);
+			});
+			await save("diagnostics", async () => log(`=== diagnostics ===\n${(await desk!.text(DESK.diagnostics)).slice(-1500)}`));
+			await desk.close().catch(() => undefined);
 		}
 	}
-	if (Date.now() >= deadline) await log("DEADLINE reached");
-	await page.screenshot({ path: join(out, `${name}.png`) });
-	const conversation = await page.locator("#conversation").innerText();
-	await writeFile(join(out, `${name}-conversation.txt`), conversation);
-	await writeFile(join(out, `${name}-tasks.txt`), await page.locator("#tasks").innerText());
-	await log("=== final assistant tail ===\n" + conversation.slice(-4000));
-	await log("=== diagnostics ===\n" + (await page.locator("#stderr").innerText()).slice(-1500));
-} finally {
-	await application.close();
+
+	const exitCode = EXIT_CODE[outcome.kind];
+	const ended = Date.now();
+	const summary: Summary = {
+		name: options.name,
+		outcome: outcome.kind,
+		detail: outcome.detail,
+		exitCode,
+		startedAt: new Date(started).toISOString(),
+		endedAt: new Date(ended).toISOString(),
+		durationSeconds: Math.round((ended - started) / 1000),
+		model: options.model,
+		pstack: options.pstack,
+		work: options.work,
+		prompt: options.prompt,
+		runDir: out,
+		connected,
+		deniedConfirms: watch.deniedConfirms,
+		cancelledAsks: watch.cancelledAsks,
+		taskChanges: watch.taskChanges,
+		finalTasks,
+		pageErrors,
+		files: FILES,
+	};
+	await writeFile(path(FILES.summary), JSON.stringify(summary, null, 2) + "\n");
+	await log(`outcome: ${outcome.kind} (${outcome.detail}); summary: ${path(FILES.summary)}`);
+	return exitCode;
 }
