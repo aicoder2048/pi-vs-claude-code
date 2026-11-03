@@ -385,6 +385,46 @@ export function gate(model: Model, toolName: string): Verdict {
 	return { block: false };
 }
 
+// Billing gate: subagents must not reach the metered Anthropic API
+
+/**
+ * anthropic/* is a metered API with no funded credit. The desk refuses it for the main session before spawning
+ * Pi (src/config.ts); this covers pstack subagents, whose model comes from the call itself or from pstack's
+ * role config. Unlike the discipline gate above, this one is a hard rule and applies with or without tasks.
+ */
+export const METERED_MODEL = /^\s*anthropic\//i;
+
+export const BILLING_REASON = (models: readonly string[]): string =>
+	`🚫 Refusing subagent model ${models.join(", ")}: anthropic/* uses a metered API without funded credit. ` +
+	"Omit `model` to inherit the session model, or use an openai-codex/* model such as openai-codex/gpt-6.1-sol. " +
+	"Do not retry with another anthropic/* model.";
+
+/** pstack's role-to-model map: a model id, or an ordered pool of them. */
+export type Roles = Readonly<Record<string, unknown>>;
+
+const record = (value: unknown): Record<string, unknown> => (value && typeof value === "object" ? (value as Record<string, unknown>) : {});
+const strings = (value: unknown): string[] =>
+	typeof value === "string" ? [value] : Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
+/** Every model a subagent or pstack_config call could start or store, as far as the call and the role map tell. */
+export function requestedModels(toolName: string, input: unknown, roles: Roles = {}): string[] {
+	const params = record(input);
+	if (toolName === "pstack_config") return params.action === "set" ? [...strings(params.model), ...strings(params.models)] : [];
+	if (toolName !== "subagent") return [];
+	// Single mode reads model/role from the top level; tasks and chain entries carry their own.
+	const entries = [params, ...(Array.isArray(params.tasks) ? params.tasks : []), ...(Array.isArray(params.chain) ? params.chain : [])].map(record);
+	return entries.flatMap((entry) => {
+		const explicit = strings(entry.model);
+		if (explicit.length) return explicit;
+		return typeof entry.role === "string" ? strings(roles[entry.role]) : [];
+	});
+}
+
+export function billingGate(toolName: string, input: unknown, roles: Roles = {}): Verdict {
+	const metered = [...new Set(requestedModels(toolName, input, roles).filter((model) => METERED_MODEL.test(model)))];
+	return metered.length ? { block: true, reason: BILLING_REASON(metered) } : { block: false };
+}
+
 // Split hint: a task that keeps eating tool calls is a candidate for split
 
 /** Counts one non-tilldone tool call against the active task. Without an active task nothing is counted. */

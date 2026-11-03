@@ -69,7 +69,7 @@ Skin changes use a 320ms fade plus paint-property transitions, without recreatin
 | `TILLDONE_CWD` | Electron's startup `process.cwd()` |
 | `TILLDONE_PSTACK` | unset (off); `1` loads pstack and runs every session in Poteto Mode, see below |
 
-**All `anthropic/*` models are rejected before window creation or child spawn**, with a billing explanation and nonzero exit. That API is metered and has no funded credit. The renderer cannot change models or submit arbitrary RPC commands.
+**All `anthropic/*` models are rejected before window creation or child spawn**, with a billing explanation and nonzero exit. That API is metered and has no funded credit. The desk's TillDone extension applies the same rule to pstack subagents: a `subagent` call whose explicit `model`, task/chain `model`, or `role` (looked up in `<agent dir>/pstack/models.json`) resolves to `anthropic/*` is blocked before any child starts, and so is `pstack_config set` with an `anthropic/*` model. Subagents spawned by subagents do not load this extension, so the rule covers the first level only. The renderer cannot change models or submit arbitrary RPC commands.
 
 The just recipe changes into `apps/tilldone`, matching the stock app's recipes. To work in the repository root instead:
 

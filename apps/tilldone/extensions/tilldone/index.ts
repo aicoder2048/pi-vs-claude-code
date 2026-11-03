@@ -6,11 +6,14 @@
  * Usage: pi -e extensions/tilldone
  */
 
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { applyExtensionDefaults } from "../themeMap.ts";
-import { agentEnd, gate, INITIAL_MODEL, type Model, restore, runTool, TOOL, toolCalled, userInput } from "./state.ts";
+import { agentEnd, billingGate, gate, INITIAL_MODEL, type Model, type Roles, restore, runTool, TOOL, toolCalled, userInput } from "./state.ts";
 import { paint, renderCall, renderResult, showList } from "./ui.ts";
 
 const Params = Type.Object({
@@ -20,6 +23,18 @@ const Params = Type.Object({
 	description: Type.Optional(Type.String({ description: TOOL.params.description })),
 	id: Type.Optional(Type.Number({ description: TOOL.params.id })),
 });
+
+// pstack keeps its role-to-model map in <agent dir>/pstack/models.json; the agent dir follows Pi's own rule.
+async function pstackRoles(cwd: string): Promise<Roles> {
+	const configured = process.env.PI_CODING_AGENT_DIR;
+	const agentDir = configured ? resolve(cwd, configured.replace(/^~(?=$|\/)/, homedir())) : join(homedir(), ".pi", "agent");
+	try {
+		const parsed = JSON.parse(await readFile(join(agentDir, "pstack", "models.json"), "utf8")) as { roles?: unknown };
+		return parsed.roles && typeof parsed.roles === "object" ? (parsed.roles as Roles) : {};
+	} catch {
+		return {}; // No config means every role inherits the session model, which the desk already checked.
+	}
+}
 
 // themeMap keys the theme on the basename of this URL. The file's own URL would
 // give "index"; the directory URL gives "tilldone", like the original file.
@@ -51,7 +66,11 @@ export default function (pi: ExtensionAPI) {
 	});
 	pi.on("session_tree", async (_event, ctx) => restoreFrom(ctx));
 
-	pi.on("tool_call", async (event) => {
+	pi.on("tool_call", async (event, ctx) => {
+		// Billing first: a hard rule that holds even when the discipline gate would let the call through.
+		const roles = event.toolName === "subagent" ? await pstackRoles(ctx.cwd) : {};
+		const billing = billingGate(event.toolName, event.input, roles);
+		if (billing.block) return billing;
 		const verdict = gate(model, event.toolName);
 		if (verdict.block) return verdict;
 		const counted = toolCalled(model, event.toolName);

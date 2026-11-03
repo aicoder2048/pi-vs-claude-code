@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import {
 	type Ask,
 	agentEnd,
+	BILLING_REASON,
+	billingGate,
 	type Details,
 	gate,
 	INITIAL_MODEL,
@@ -495,6 +497,53 @@ describe("nudge latch (T:365-388)", () => {
 	test("tool transitions keep the latch", () => {
 		const nudged = agentEnd(withTasks("a")).model;
 		expect(step(nudged, { action: "add", text: "b" }).nudged).toBe(true);
+	});
+});
+
+describe("billing gate for subagents", () => {
+	const blocked = (models: string[]) => ({ block: true, reason: BILLING_REASON(models) });
+	const pass = { block: false };
+	const roles = { "judgment and prose": "anthropic/claude-opus-5-5", "swarm workers": "openai-codex/gpt-6.1-terra", "arena runners": ["openai-codex/gpt-6-astra", "anthropic/claude-sonnet-5-5"], "bug-fix": "inherit-parent" };
+
+	test("the 2026-11-01 call: single subagent with an explicit anthropic model", () => {
+		expect(billingGate("subagent", { agent: "poteto-agent", model: "anthropic/claude-sonnet-5-5", task: "review" })).toEqual(blocked(["anthropic/claude-sonnet-5-5"]));
+	});
+
+	test("explicit models in parallel tasks and chain steps; case and padding do not matter", () => {
+		expect(billingGate("subagent", { tasks: [{ agent: "a", task: "t" }, { agent: "b", task: "t", model: "Anthropic/claude-haiku-5-5" }] })).toEqual(blocked(["Anthropic/claude-haiku-5-5"]));
+		expect(billingGate("subagent", { chain: [{ agent: "a", task: "t", model: " anthropic/claude-fable-5-1" }] })).toEqual(blocked([" anthropic/claude-fable-5-1"]));
+	});
+
+	test("role models from pstack config: string or pool, listed once", () => {
+		expect(billingGate("subagent", { agent: "a", task: "t", role: "judgment and prose" }, roles)).toEqual(blocked(["anthropic/claude-opus-5-5"]));
+		expect(billingGate("subagent", { tasks: [{ agent: "a", task: "t", role: "arena runners" }, { agent: "b", task: "t", role: "arena runners" }] }, roles)).toEqual(blocked(["anthropic/claude-sonnet-5-5"]));
+	});
+
+	test("an explicit model overrides the role, as in pstack", () => {
+		expect(billingGate("subagent", { agent: "a", task: "t", role: "judgment and prose", model: "openai-codex/gpt-6.1-sol" }, roles)).toEqual(pass);
+		expect(billingGate("subagent", { agent: "a", task: "t", role: "swarm workers", model: "anthropic/claude-sonnet-5-5" }, roles)).toEqual(blocked(["anthropic/claude-sonnet-5-5"]));
+	});
+
+	test("inherited, codex, deepseek and unknown roles pass", () => {
+		for (const input of [{ agent: "a", task: "t" }, { agent: "a", task: "t", role: "bug-fix" }, { agent: "a", task: "t", role: "no such role" }, { agent: "a", task: "t", model: "deepseek/deepseek-flash" }, { tasks: [{ agent: "a", task: "t", role: "swarm workers" }] }]) {
+			expect(billingGate("subagent", input, roles)).toEqual(pass);
+		}
+	});
+
+	test("pstack_config cannot store an anthropic model; reads stay allowed", () => {
+		expect(billingGate("pstack_config", { action: "set", role: "bug-fix", model: "anthropic/claude-opus-5-5" })).toEqual(blocked(["anthropic/claude-opus-5-5"]));
+		expect(billingGate("pstack_config", { action: "set", role: "arena runners", models: ["openai-codex/gpt-6-astra", "anthropic/claude-sonnet-5-5"] })).toEqual(blocked(["anthropic/claude-sonnet-5-5"]));
+		expect(billingGate("pstack_config", { action: "set", role: "bug-fix", model: "openai-codex/gpt-6.1-sol" })).toEqual(pass);
+		expect(billingGate("pstack_config", { action: "get" })).toEqual(pass);
+	});
+
+	test("other tools and malformed input pass untouched", () => {
+		expect(billingGate("bash", { command: "echo anthropic/claude-opus-5-5" })).toEqual(pass);
+		for (const input of [undefined, null, "anthropic/x", 3, { tasks: "nope", chain: [null, 4] }]) expect(billingGate("subagent", input, roles)).toEqual(pass);
+	});
+
+	test("the reason names the refused model and the way out", () => {
+		expect(BILLING_REASON(["anthropic/claude-sonnet-5-5"])).toMatch(/anthropic\/claude-sonnet-5-5.*metered.*openai-codex/s);
 	});
 });
 
