@@ -19,7 +19,7 @@ test("product name, slogan, and logo label follow language in every theme", () =
 	for (const theme of THEME_IDS) {
 		const zh = toViewModel(initialState("model", "/work", { theme, language: "zh-CN" })).ui;
 		const en = toViewModel(initialState("model", "/work", { theme, language: "en" })).ui;
-		expect(zh.productName).toBe("边牧任务桌面");
+		expect(zh.productName).toBe("边牧");
 		expect(zh.slogan).toBe("羊不进圈，边牧不歇");
 		expect(zh.logo).toBe("AI 边牧标志");
 		expect(zh.workspace).toBe("PI · 任务工作台");

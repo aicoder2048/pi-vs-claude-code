@@ -23,12 +23,12 @@ try {
 	await page.locator("#send").waitFor();
 	await page.waitForFunction(() => !(document.querySelector("#send") as HTMLButtonElement).disabled);
 	console.log("Smoke: Pi connected");
-	assert.equal(await page.title(), "边牧任务桌面");
-	assert.equal(await page.locator("#product-name").innerText(), "边牧任务桌面");
+	assert.equal(await page.title(), "边牧");
+	assert.equal(await page.locator("#product-name").innerText(), "边牧");
 	assert.equal(await page.locator("#brand-slogan").innerText(), "羊不进圈，边牧不歇");
 	assert.equal(await page.locator("#brand-logo-title").textContent(), "AI 边牧标志");
 	assert.equal(await page.locator('svg#brand-logo[role="img"]').count(), 1);
-	assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getTitle()), "边牧任务桌面");
+	assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getTitle()), "边牧");
 	assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
 	assert.equal(await page.locator("#send").innerText(), "发送");
 	assert.equal(await page.locator("#theme").inputValue(), "system");
@@ -387,7 +387,7 @@ try {
 	assert.equal(await restored.locator("html").getAttribute("lang"), "zh-CN");
 	assert.equal(await restored.locator("#shortcut-night").getAttribute("aria-pressed"), "true");
 	assert.equal(await restored.locator("#shortcut-label-night").innerText(), "星夜");
-	assert.equal(await restored.title(), "边牧任务桌面");
+	assert.equal(await restored.title(), "边牧");
 	assert.equal(await restored.locator("#brand-slogan").innerText(), "羊不进圈，边牧不歇");
 	await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(880, 700));
 	for (const theme of ["paper", "night", "ink", "neon"]) {

@@ -1,4 +1,4 @@
-# 边牧任务桌面 · TillDone Desk（在此目录运行 just 即可）
+# 边牧 · TillDone Desk（在此目录运行 just 即可）
 # 默认：安装依赖并启动 Electron
 [default]
 default: tilldone
