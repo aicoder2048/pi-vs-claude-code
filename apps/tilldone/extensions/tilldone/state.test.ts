@@ -558,13 +558,4 @@ describe("layering", () => {
 	test("state.ts imports nothing", () => {
 		expect(src("./state.ts")).not.toMatch(/^\s*import\s|\brequire\(|\bimport\(/m);
 	});
-
-	test("ui.ts reads only types, selectors and the icon table from state.ts", () => {
-		const values = importsFrom(src("./ui.ts"), "./state.ts").filter((n) => !n.startsWith("type "));
-		expect(values.sort()).toEqual(["STATUS_ICON", "countByStatus", "current"]);
-	});
-
-	test("ui.ts never reaches L2", () => {
-		expect(src("./ui.ts")).not.toMatch(/from\s+"\.\/index/);
-	});
 });

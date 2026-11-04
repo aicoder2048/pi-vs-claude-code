@@ -103,7 +103,6 @@ export interface State {
 	readonly toolCalls: Readonly<Record<number, number>>;
 	/** Turns, one model request each, started while each task was in progress. */
 	readonly modelCalls: Readonly<Record<number, number>>;
-	readonly statuses: Readonly<Record<string, string>>;
 	readonly now: number;
 	/** When the current run began; null while idle. */
 	readonly runStartedAt: number | null;
@@ -130,7 +129,7 @@ export interface State {
 }
 export function initialState(model: string, cwd: string, preferences = DEFAULT_PREFERENCES, systemDark = false, pstack = false): State {
 	return { list: EMPTY_LIST, listEpoch: 0, taskFilter: null, messages: [], tools: [], timeline: [], assistantId: null, sequence: 0,
-		poteto: { available: pstack, on: false }, dialogs: [], statuses: {}, now: 0, runStartedAt: null, turnAt: 0, activityAt: 0, runActive: false, streaming: false, compacting: false,
+		poteto: { available: pstack, on: false }, dialogs: [], now: 0, runStartedAt: null, turnAt: 0, activityAt: 0, runActive: false, streaming: false, compacting: false,
 		queued: [], pendingSplits: [], toolCalls: {}, modelCalls: {}, model, imageInput: false, thinking: "unknown", cwd, sessionFile: "", connection: "starting", error: "", diagnostics: "", taskFocus: 0, preferences, systemDark, api: INITIAL_API };
 }
 const text = (value: unknown): string => typeof value === "string" ? value : "";
@@ -296,12 +295,6 @@ function project(state: State, record: RecordValue): State {
 				? { ...t, result: record.result, phase: record.isError ? "error" : "done" } : t) };
 		}
 		case "extension_ui_request": {
-			if (record.method === "setStatus") {
-				const statuses = { ...state.statuses };
-				if (typeof record.statusText === "string") statuses[record.statusKey] = record.statusText;
-				else delete statuses[record.statusKey];
-				return { ...state, statuses };
-			}
 			if (DIALOG_KINDS.includes(record.method)) {
 				const options = record.method === "select" ? selectOptions(record.options) : [];
 				// An unusable select was already cancelled by immediateUIResponse.
@@ -758,7 +751,7 @@ export function toViewModel(state: State) {
 		api: apiView(state.api, state.preferences.language, state.model),
 		appearance: appearanceView(state.preferences, state.systemDark),
 		connection: state.connection, error: state.error, diagnostics: state.diagnostics,
-		status: { model: state.model, thinking: state.thinking, running: isRunning(state), cwd: state.cwd, tilldone: state.statuses.tilldone ?? "" },
+		status: { model: state.model, thinking: state.thinking, running: isRunning(state), cwd: state.cwd },
 		poteto: { available: state.poteto.available, active: state.poteto.on },
 		input: { enabled: state.connection === "ready", running: isRunning(state), newSession: state.connection === "ready" && !isRunning(state), images: state.connection === "ready" && state.imageInput },
 		tasks: { title: state.list.title ?? "TillDone", description: state.list.description ?? "", done: counts.done,

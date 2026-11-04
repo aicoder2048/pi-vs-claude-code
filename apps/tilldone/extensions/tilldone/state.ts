@@ -96,7 +96,6 @@ export const TOOL = {
 		description: "List description (for new-list)",
 		id: "Task ID (for start/done/remove/update/split)",
 	},
-	commandDescription: "Show all TillDone tasks on the current branch",
 } as const;
 
 export const GATE_REASON = {

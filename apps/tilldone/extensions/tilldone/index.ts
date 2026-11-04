@@ -1,7 +1,11 @@
 /**
  * TillDone L2: glue. Owns the single mutable cell and translates Pi events
- * into L3 transitions and L4 paints. No business rule and no model-facing
- * string lives here.
+ * into L3 transitions. No business rule and no model-facing string lives here.
+ *
+ * The desk copy has no L4: the desk renders the task list from the tool's details
+ * over RPC, so the TUI widget, footer, status line, tool cards and /tilldone overlay
+ * of the repository's extensions/tilldone are left out, and so is its themeMap
+ * (RPC refuses setTheme, and the desk sets its own window title).
  *
  * Usage: pi -e extensions/tilldone
  */
@@ -12,9 +16,7 @@ import { join, resolve } from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { applyExtensionDefaults } from "../themeMap.ts";
 import { agentEnd, billingGate, gate, INITIAL_MODEL, type Model, type Roles, restore, runTool, TOOL, toolCalled, userInput } from "./state.ts";
-import { paint, renderCall, renderResult, showList } from "./ui.ts";
 
 const Params = Type.Object({
 	action: StringEnum(TOOL.actions),
@@ -36,19 +38,10 @@ async function pstackRoles(cwd: string): Promise<Roles> {
 	}
 }
 
-// themeMap keys the theme on the basename of this URL. The file's own URL would
-// give "index"; the directory URL gives "tilldone", like the original file.
-const THEME_KEY_URL = new URL(".", import.meta.url).href;
-
 export default function (pi: ExtensionAPI) {
 	let model: Model = INITIAL_MODEL;
 	// Split hints decided at tool_call, keyed by call id, appended when that call's result comes back.
 	const hints = new Map<string, string>();
-
-	const set = (next: Model, ctx?: ExtensionContext): void => {
-		model = next;
-		if (ctx) paint(ctx.ui, next.list);
-	};
 
 	const restoreFrom = (ctx: ExtensionContext): void => {
 		const details: unknown[] = [];
@@ -57,13 +50,10 @@ export default function (pi: ExtensionAPI) {
 			const msg = entry.message;
 			if (msg.role === "toolResult" && msg.toolName === TOOL.name && msg.details) details.push(msg.details);
 		}
-		set(restore(model, details), ctx);
+		model = restore(model, details);
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
-		applyExtensionDefaults(THEME_KEY_URL, ctx);
-		restoreFrom(ctx);
-	});
+	pi.on("session_start", async (_event, ctx) => restoreFrom(ctx));
 	pi.on("session_tree", async (_event, ctx) => restoreFrom(ctx));
 
 	pi.on("tool_call", async (event, ctx) => {
@@ -74,7 +64,7 @@ export default function (pi: ExtensionAPI) {
 		const verdict = gate(model, event.toolName);
 		if (verdict.block) return verdict;
 		const counted = toolCalled(model, event.toolName);
-		set(counted.model);
+		model = counted.model;
 		if (counted.hint) hints.set(event.toolCallId, counted.hint);
 		return verdict;
 	});
@@ -88,12 +78,12 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_end", async () => {
 		const { model: next, nudge } = agentEnd(model);
-		set(next);
+		model = next;
 		if (nudge) pi.sendMessage(nudge, { triggerTurn: true });
 	});
 
 	pi.on("input", async () => {
-		set(userInput(model));
+		model = userInput(model);
 		return { action: "continue" as const };
 	});
 
@@ -109,22 +99,8 @@ export default function (pi: ExtensionAPI) {
 			const first = runTool(model, params);
 			const reply =
 				first.kind === "ask" ? runTool(model, params, await ctx.ui.confirm(first.title, first.message, { timeout: first.timeoutMs })) : first;
-			if (reply.next) set(reply.next, ctx);
+			if (reply.next) model = reply.next;
 			return { content: [{ type: "text" as const, text: reply.text }], details: reply.details };
-		},
-
-		renderCall,
-		renderResult,
-	});
-
-	pi.registerCommand(TOOL.name, {
-		description: TOOL.commandDescription,
-		handler: async (_args, ctx) => {
-			if (!ctx.hasUI) {
-				ctx.ui.notify("/tilldone requires interactive mode", "error");
-				return;
-			}
-			await showList(ctx.ui, model.list);
 		},
 	});
 }

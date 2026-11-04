@@ -11,7 +11,7 @@ interface View {
 		options: { id: string; label: string }[];
 		shortcuts: { id: string; label: string; icon: string; selected: boolean }[] };
 	connection: string; error: string; diagnostics: string;
-	status: { model: string; thinking: string; running: boolean; cwd: string; tilldone: string };
+	status: { model: string; thinking: string; running: boolean; cwd: string };
 	poteto: { available: boolean; active: boolean };
 	input: { enabled: boolean; running: boolean; newSession: boolean; images: boolean };
 	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number; filterTitle: string;
@@ -186,7 +186,6 @@ function render(view: View) {
 	setText("model", view.status.model);
 	setText("thinking", `${ui.thinking}: ${view.status.thinking}`);
 	setText("running", view.status.running ? ui.running : ui.idle);
-	setText("tilldone-status", view.status.tilldone);
 	setText("cwd", view.status.cwd);
 	$("alert").hidden = view.connection !== "exited" && !view.error;
 	setText("connection", view.connection === "exited" ? ui.disconnected : ui.reportedError);
