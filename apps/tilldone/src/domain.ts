@@ -699,16 +699,17 @@ function messageEntry(m: Message, ui: Ui): Entry {
 		summary: m.nudge ? ui.nudgeSummary.replace("{n}", String(m.nudge.pending.length)).replace("{ids}", taskIds(m.nudge.pending, ui)) : "",
 		outcome: m.nudge ? nudgeOutcome(m.nudge, ui) : "", outcomeTone: m.nudge?.outcome ?? "" }));
 }
-/** The session's nudges in one line for the task panel, zero included once there is a list; null while there is nothing to nudge about. */
+/** The session's nudges as one plain sentence for the task panel, zero included once there is a list; null while there is nothing to remind about. */
 function nudgesView(state: State, ui: Ui) {
 	const nudges = state.messages.filter((m) => m.nudge);
 	if (!nudges.length && !state.list.tasks.length) return null;
-	if (!nudges.length) return { label: ui.nudgeCountZero, title: ui.nudgeTitleZero, target: "" };
-	const count = (outcome: Nudge["outcome"]) => nudges.filter((m) => m.nudge!.outcome === outcome).length;
-	const parts = ([["done", ui.nudgeCountDone], ["partial", ui.nudgeCountPartial], ["stopped", ui.nudgeCountStopped]] as const)
-		.map(([outcome, label]) => [count(outcome), label] as const).filter(([n]) => n > 0).map(([n, label]) => label.replace("{n}", String(n)));
-	const total = nudges.length === 1 ? ui.nudgeCountOne : ui.nudgeCount.replace("{n}", String(nudges.length));
-	return { label: [total, ...parts].join(" · "), title: ui.nudgeTitle, target: nudges[nudges.length - 1].id };
+	if (!nudges.length) {
+		const finished = state.list.tasks.every((t) => t.status === "done");
+		return { label: finished ? ui.nudgeLineNoneDone : ui.nudgeLineNone, title: ui.nudgeTitleZero, target: "" };
+	}
+	const latest = nudges[nudges.length - 1], n = latest.nudge!;
+	const line = { waiting: ui.nudgeLineWaiting, done: ui.nudgeLineDone, partial: ui.nudgeLinePartial, stopped: nudges.length === 1 ? ui.nudgeLineStoppedOnce : ui.nudgeLineStopped, replaced: ui.nudgeLineReplaced }[n.outcome];
+	return { label: line.replace("{n}", String(nudges.length)).replace("{left}", taskIds(n.left, ui)), title: ui.nudgeTitle, target: latest.id };
 }
 /** Pi has settled with open tasks after its nudge for the latest user message was spent: the shepherd's move. */
 function handoffView(state: State, ui: Ui): string | null {
