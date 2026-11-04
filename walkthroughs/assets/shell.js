@@ -14,6 +14,10 @@
       { title: "一个 turn 的内部", href: "guide-turn.html" },
       { title: "四层架构：设计自定义 Harness", href: "guide-four-layers.html" },
     ],
+    // 互动课件：带演示、自测和 AI 助教的专题课，放在仓库根的 courseware/ 下。
+    courseware: [
+      { n: "课", title: "边牧结构精读", href: "../courseware/tilldone-desk/lessons/index.html" },
+    ],
     walks: [
       { n: "01", title: "minimal.ts", href: "minimal.html" },
       { n: "02", title: "pure-focus.ts", href: "pure-focus.html" },
@@ -97,6 +101,7 @@
         el("nav", { "aria-label": "走读目录" },
           el("h2", {}, "总览"), list([{ title: "目录与阅读方法", href: WALK.home }]),
           el("h2", {}, "阅读指南"), list(WALK.guides),
+          el("h2", {}, "互动课件"), list(WALK.courseware),
           el("h2", {}, "走读"), list(WALK.walks),
           el("h2", {}, "参考课程"), list(WALK.lessons))));
 
