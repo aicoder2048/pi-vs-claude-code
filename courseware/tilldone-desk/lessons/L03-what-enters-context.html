@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>什么进模型的上下文 · L03</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .ctx-cols { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; }
+  @media (max-width: 760px) { .ctx-cols { grid-template-columns: 1fr; } }
+  .ctx-cols h5 { margin: 0 0 8px; font-size: 13.5px; color: var(--ink-3); }
+  .msgs li.new { outline: 2px solid var(--brand-2); }
+  .gate-text { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; }
+  .tasks-now { font-family: var(--mono); font-size: 13px; margin: 6px 0 10px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">L3 原则</a></li>
+    <li><a href="#s2">两个扩展放了什么</a></li>
+    <li><a href="#s3">动手看：上下文组装器</a></li>
+    <li><a href="#s4">不进上下文的东西</a></li>
+    <li><a href="#s5">三个时机与错误即提示词</a></li>
+    <li><a href="#s6">动手看：替模型过门禁</a></li>
+    <li><a href="#s7">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L03 · 上下文管理</div>
+  <h1>什么进模型的上下文</h1>
+  <p>模型每次请求只看到上下文里的东西。这一课列出 TillDone 和 PStack 各往上下文里放了什么、什么时候放。还要列出哪些东西只给界面、不给模型。</p>
+  <div class="meta"><span>原文：§3.1、§3.2、§3.4</span><span>阅读约 15 分钟</span><span>含 2 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>用 <a class="term" href="glossary.html#l3-principle">L3 原则</a>判断一个字段该不该进上下文。</li>
+    <li>说出 TillDone 和 PStack 往上下文里放的每一类内容、进入方式和频率。</li>
+    <li>列出不进上下文的东西，并解释<a class="term" href="glossary.html#ui-channel">界面通道</a>。</li>
+    <li>说出<a class="term" href="glossary.html#three-moments">提示词的三个时机</a>，并解释<a class="term" href="glossary.html#error-as-prompt">错误即提示词</a>。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>L3 原则</h2>
+  <p>先说结论：上下文里每一个字段都要有业务理由。理由来自业务语义，不来自工程便利。</p>
+  <blockquote class="src">上下文管理是手段，业务语义是内容。<cite>四层讨论稿 §3</cite></blockquote>
+  <div class="callout rule"><span class="ttl">检验标准</span>每个进入上下文的字段，都要能回答“它帮模型做哪个决策”。答不上来的字段，不进上下文。</div>
+  <p>TillDone 的业务语义很少：清单、门禁、拆分、督促。但每一条都必须让模型看见，否则规矩不起作用。</p>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>两个扩展放了什么</h2>
+  <p>下表是原文 §3.1 的完整列表。前五行来自 TillDone，后四行来自 PStack。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>来源</th><th>内容</th><th>进入方式</th><th>频率</th></tr>
+    <tr><td>TillDone</td><td><a class="term" href="glossary.html#tool-description">工具说明</a>：九个动作 + “拆小”原则（<code>state.ts</code> 的 <code>TOOL</code>）</td><td>工具声明</td><td>每次请求</td></tr>
+    <tr><td>TillDone</td><td>清单变化</td><td>tilldone 工具结果</td><td>每次调用</td></tr>
+    <tr><td>TillDone</td><td>门禁拒绝理由 <code>GATE_REASON</code></td><td>工具错误</td><td>被拦时</td></tr>
+    <tr><td>TillDone</td><td><a class="term" href="glossary.html#split-cue">SPLIT_CUE</a>；每 15 次工具调用的<a class="term" href="glossary.html#split-hint">拆分提示</a></td><td>追加在工具结果末尾</td><td><code>start</code> 时；每满 15 次</td></tr>
+    <tr><td>TillDone</td><td><a class="term" href="glossary.html#nudge">督促</a> <code>tilldone-nudge</code></td><td>自定义消息，走 steer 队列</td><td>每条用户输入最多一次</td></tr>
+    <tr><td>PStack</td><td>一段 Poteto Mode 说明</td><td><code>before_agent_start</code> 追加到 system prompt</td><td>Poteto 开启后每次请求</td></tr>
+    <tr><td>PStack</td><td>整份 <code>poteto-mode/SKILL.md</code></td><td>首条消息 <code>/skill:poteto-mode …</code> 由 Pi 展开</td><td>一次，之后留在历史里</td></tr>
+    <tr><td>PStack</td><td><code>pstack_todo</code> 清单</td><td>工具结果文本</td><td>每次调用</td></tr>
+    <tr><td>PStack</td><td>子 agent 的产出</td><td>只回传最终文本；并行模式每个子 agent 截断</td><td>每次 <code>subagent</code></td></tr>
+  </table></div>
+  <p>PStack 追加的 system prompt 原文是这样的（<code>pstack/index.ts:272-276</code>）：</p>
+  <blockquote class="src">Pstack Poteto Mode is enabled for this session. Follow its persisted workflow: use pstack_todo for non-trivial work, select and read the matching playbook, delegate through the subagent tool when delegation helps, verify real behavior, and name only principles that changed a decision.<cite>§3.1</cite></blockquote>
+  <div class="callout tip"><span class="ttl">看表要点</span>看“进入方式”一列。TillDone 的五行里没有一行是 system prompt。PStack 的第一行就是。L04 会比较这两种策略。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>动手看：上下文组装器</h2>
+  <p>选一个场景，看这一次请求里模型实际看到哪些块。高亮的块是这个场景新加的。右栏是同一时刻存在、但模型看不到的东西。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">组装器：这一次请求，模型看到什么</div>
+      <label class="ctrl"><input type="checkbox" id="d1-poteto"> Poteto Mode 开启（TILLDONE_PSTACK=1）</label>
+    </div>
+    <div class="demo">
+      <div class="btn-group" id="d1-sc" style="margin-bottom:10px">
+        <button class="btn on" data-sc="plain">普通请求</button>
+        <button class="btn" data-sc="blocked">被门禁拦下</button>
+        <button class="btn" data-sc="start">start 一个任务</button>
+        <button class="btn" data-sc="hint">第 15 次工具调用</button>
+        <button class="btn" data-sc="nudge">run 结束仍有未完成</button>
+        <button class="btn" data-sc="sub">调用 subagent</button>
+      </div>
+      <div class="ctx-cols">
+        <div><h5>模型看到的上下文（按顺序）</h5><ul class="msgs" id="d1-in"></ul></div>
+        <div><h5>同一时刻存在，但不进上下文</h5><ul class="msgs" id="d1-out-list"></ul></div>
+      </div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">先在“普通请求”下勾选 Poteto Mode，看 system prompt 那一块怎样变化。再切到“第 15 次工具调用”：右栏的 <code>spent = 15</code> 模型看不到，模型只看到结果末尾那一行提示。<span class="data-note">简化模型：块的顺序和文字依据原文 §3.1、§3.2 和 <code>state.ts</code>；任务名、命令是演示用例子。英文提示文字照源码原样摘录，长句有截断。</span></div>
+  </div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>不进上下文的东西</h2>
+  <p>先说结论：只帮扩展或界面做决定的东西，不进上下文。原文 §3.2 列了五类。</p>
+  <ul>
+    <li><a class="term" href="glossary.html#spent">spent</a>（当前任务已用工具次数）和 <code>nudged</code>（本条输入是否已督促）。它们只在扩展内部做决策。</li>
+    <li>桌面端全部状态：运行中、待送达队列、弹窗、外观。</li>
+    <li>每个任务的工具次数、模型请求次数。D-L3 从 RPC 事件里数，只给界面。</li>
+    <li><a class="term" href="glossary.html#subagent-tree">子 agent 实时树</a>。<code>src/domain.ts:503</code> 的 <code>parseChild</code> 解析 <code>subagent</code> 的 partial result，只给 L4。</li>
+    <li>API 凭据。Pi 自己解析 <code>auth.json</code>，桌面端不转发。</li>
+  </ul>
+  <div class="callout rule"><span class="ttl">本节核心句</span>这就是“界面通道和上下文通道分离”。界面通道直接来自 L3 状态，不经过模型转述，也不占上下文。</div>
+  <div class="callout note"><span class="ttl">补充：spent 和拆分提示的关系</span><code>spent</code> 本身不进上下文。但它到 15 的倍数时，扩展会生成一行提示，追加到工具结果末尾。所以模型看到的是“结论”（该考虑拆了），不是“计数器”。这正好符合 L3 原则：模型要做的决策是“拆不拆”，不需要知道每一次的计数。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>三个时机与错误即提示词</h2>
+  <p>先说结论：TillDone 在三个时机把规矩送进上下文。它从不改 system prompt。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>时机</th><th>文本</th><th>目的</th></tr>
+    <tr><td>事前（每次请求都在）</td><td>工具说明</td><td>告诉模型规矩和建议</td></tr>
+    <tr><td>事中（触发规矩时）</td><td>门禁理由、<code>SPLIT_CUE</code>、15 次提示、确认被拒</td><td>在决策点给出可执行的下一步</td></tr>
+    <tr><td>事后（run 结束时）</td><td>督促消息，列出未完成任务</td><td>防止半途收工</td></tr>
+  </table></div>
+  <p>“事中”里最省事的一招叫错误即提示词。门禁不在 system prompt 里写“请先建清单”。它等模型真的越过规矩，再用工具错误告诉它下一步该调什么。</p>
+  <blockquote class="src">🚫 No TillDone tasks defined. You MUST use `tilldone new-list` or `tilldone add` to define your tasks before changing anything (bash, edit, write, subagent); every other tool stays available for planning. Plan your work first!<cite>GATE_REASON.noTasks · §3.4</cite></blockquote>
+  <p>门禁按顺序检查三件事。任一不满足就拦下，返回对应的理由：</p>
+  <ol class="steps">
+    <li>清单为空 → <code>noTasks</code>。</li>
+    <li>全部完成 → <code>allDone</code>。</li>
+    <li>没有进行中的任务 → <code>noneActive</code>。</li>
+  </ol>
+  <p>桌面副本只拦四个工具：<code>bash</code>、<code>edit</code>、<code>write</code>、<code>subagent</code>（<code>state.ts:377</code> 的 <code>GATED_TOOLS</code>）。其他工具都放行，例如 <code>read</code> 和 <code>pstack_todo</code>。</p>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>动手看：替模型过门禁</h2>
+  <p>你来当模型。目标是成功执行一次 <code>edit</code>。每一步选一个工具调用，门禁按 <code>state.ts</code> 的规则判定。门禁拦下调用时，你会看到原样的拒绝理由。照着理由做，就能通过。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">走查：照着错误提示，几步能做成第一次 edit</div>
+      <label class="ctrl"><input type="checkbox" id="d2-tui"> 用 TUI 原版门禁（只放行 tilldone 和只读工具）</label>
+    </div>
+    <div class="demo">
+      <div class="btn-group" id="d2-acts" style="margin-bottom:8px"></div>
+      <div class="tasks-now" id="d2-tasks"></div>
+      <ul class="msgs" id="d2-log"></ul>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">先直接点 <code>edit</code>，读拒绝理由，再照着做。最少 3 步：<code>tilldone add</code> → <code>tilldone start</code> → <code>edit</code>。<br>然后勾上“TUI 原版门禁”，点 <code>pstack_todo set</code>，门禁会拦下它。原文说，2026-11-01 Blackjack 运行里，原版门禁这样拦了它 5 次。<span class="data-note">简化模型：判定逻辑照 <code>state.ts</code> 的 <code>gate</code>；任务名是演示用例子；没有模拟计费门和确认弹窗。TUI 原版放行表依据原文 §4.4。</span></div>
+  </div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>自测与速记</h2>
+  <div class="quiz" data-answer="2">
+    <div class="q">TillDone 用哪种方式把规矩送进上下文？</div>
+    <div class="opts"><button>改写 system prompt</button><button>在每条用户消息前加一段</button><button>工具说明、工具结果和自定义消息</button><button>写进会话文件的 custom entry</button></div>
+    <div class="explain">原文 §3.1、§3.4：TillDone 从不改 system prompt。事前靠工具说明，事中靠工具结果和工具错误，事后靠自定义督促消息。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">下面哪一项<b>不</b>进模型的上下文？</div>
+    <div class="opts"><button>门禁拒绝理由</button><button>spent 计数本身</button><button>SPLIT_CUE</button><button>督促消息</button></div>
+    <div class="explain">原文 §3.2：<code>spent</code> 和 <code>nudged</code> 只在扩展内部做决策。模型只在满 15 次时看到一行提示。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">清单为空时，模型直接调用 <code>edit</code>，会收到什么？</div>
+    <div class="opts"><button>什么都不收到，调用被静默丢弃</button><button>一条督促消息</button><button>一个确认弹窗</button><button>工具错误 GATE_REASON.noTasks，里面写着先用 tilldone new-list 或 add</button></div>
+    <div class="explain">这就是错误即提示词：在越过规矩的那一刻，用工具错误给出可执行的下一步。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">PStack 的 <code>poteto-mode/SKILL.md</code> 全文怎样进入上下文？</div>
+    <div class="opts"><button>首条消息 /skill:poteto-mode 由 Pi 展开，之后留在历史里</button><button>每次请求追加到 system prompt</button><button>作为 pstack_todo 的工具结果</button><button>不进上下文</button></div>
+    <div class="explain">原文 §3.1：整份 SKILL.md 只展开一次。每次请求追加到 system prompt 的是另一段短说明。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>L3 原则</td><td>上下文管理是手段，业务语义是内容；说不出用途的字段不进上下文</td></tr>
+    <tr><td>TillDone 五类</td><td>工具说明、清单变化、门禁理由、拆分提示、督促</td></tr>
+    <tr><td>PStack 四类</td><td>system prompt 追加段、SKILL.md 展开、pstack_todo 结果、子 agent 结论</td></tr>
+    <tr><td>不进上下文</td><td>spent / nudged、桌面状态、任务计数、子 agent 树、API 凭据</td></tr>
+    <tr><td>三个时机</td><td>事前工具说明；事中错误与附言；事后督促</td></tr>
+    <tr><td>错误即提示词</td><td>越过规矩时，用工具错误写出下一步</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L02-two-four-layers.html"><small>上一课 · L02</small>两套四层叠在一起</a>
+    <a href="L04-context-strategies.html"><small>下一课 · L04</small>两种注入策略与抗压缩</a>
+    <a href="L05-tilldone-split.html"><small>L05</small>TillDone 的原生拆分</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L03-what-enters-context.html"></nav>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§3.1、§3.2、§3.4（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  const GATE = {
+    noTasks: "🚫 No TillDone tasks defined. You MUST use `tilldone new-list` or `tilldone add` to define your tasks before changing anything (bash, edit, write, subagent); every other tool stays available for planning. Plan your work first!",
+    allDone: "🚫 All TillDone tasks are done. You MUST use `tilldone add` for new tasks or `tilldone new-list` to start a fresh list before changing anything (bash, edit, write, subagent); every other tool stays available for planning.",
+    noneActive: "🚫 No task is in progress. You MUST use `tilldone start` to mark a task as inprogress before doing any work.",
+  };
+  const SPLIT_CUE = "Before you start: if this task holds two or more steps you can verify separately, split it now with `tilldone split`.";
+
+  /* ---- 1. 上下文组装器 ---- */
+  // [来源标签, 文字, 由谁贡献: "pi" | "td" | "ps" | "user"]
+  const BASE = [
+    ["system prompt", "Pi 默认系统提示词 + 技能索引", "pi"],
+    ["工具声明", "Pi 内置工具 + tilldone（TOOL.description：九个动作、“Keep each task small enough to finish and verify in one focused change…”）", "td"],
+    ["用户消息", "“给 README 加一节安装说明，再跑一遍测试。”", "user"],
+    ["工具结果", "tilldone add → “Added 2 tasks” + 清单变化", "td"],
+  ];
+  const SC = {
+    plain: { add: [["工具结果", "read README.md → 文件内容", "pi"]], hidden: ["spent = 0（还没有进行中的任务，toolCalled 不计数）", "nudged = false"], note: "普通请求：TillDone 只占工具声明和 tilldone 自己的结果。" },
+    blocked: { pre: true, add: [["工具错误", "edit 被门禁拦下：" + GATE.noneActive, "td"]], hidden: ["spent = 0（被拦的调用不计数）", "nudged = false"], note: "被拦时，门禁理由作为工具错误进入上下文。它直接写出下一步：tilldone start。" },
+    start: { add: [["工具结果", "tilldone start #1 → “Started #1” + “" + SPLIT_CUE + "”", "td"]], hidden: ["spent = 0（当前任务刚换，清零）", "nudged = false"], note: "start 时，SPLIT_CUE 附在结果末尾。这是模型对任务大小了解最多、还没花成本的时刻。" },
+    hint: { add: [["工具结果", "bash: npm test → 测试输出 + “💡 TillDone: task #1 has taken 15 tool calls so far. If it is bigger than one step, split it with `tilldone split` (id=1) and keep going.”", "td"]], hidden: ["spent = 15", "nudged = false"], note: "第 15 次：模型看到的是结果末尾的一行提示，不是 spent 计数器。提示在 tool_call 时决定，等 tool_result 回来再追加，不多花一个 turn。" },
+    nudge: { add: [["自定义消息", "tilldone-nudge：“⚠️ You still have 1 incomplete task(s): ○ #2 [idle]: 跑一遍测试 … Don't stop until it's done!”", "td"]], hidden: ["nudged = true（本条输入不再督促）", "桌面端：runActive 仍为真"], note: "run 结束时还有未完成任务：督促消息进 steer 队列，外循环再起一个 run。" },
+    sub: { add: [["工具结果", "subagent → 子 agent 的最终文本（并行模式每个截断）", "ps"]], hidden: ["子 agent 的完整过程（留在子进程里，--no-session）", "子 agent 实时树（parseChild，只给界面）", "spent 只 +1"], note: "subagent 只把结论送回父上下文。子 agent 内部做了多少步，父模型看不到。" },
+  };
+  const HIDDEN_ALWAYS = ["桌面状态：待送达队列、弹窗、外观", "每任务工具次数 / 模型请求次数（D-L3 自己数）", "API 凭据（auth.json）"];
+  let sc = "plain";
+  function draw1() {
+    const pot = CL.$("#d1-poteto").checked, s = SC[sc];
+    let blocks = BASE.map((b) => b.slice());
+    if (pot) {
+      blocks[0] = ["system prompt", "Pi 默认系统提示词 + 技能索引 + PStack 追加段：“Pstack Poteto Mode is enabled for this session. Follow its persisted workflow: use pstack_todo …”", "ps"];
+      blocks[1][1] += "；以及 pstack_todo、subagent、pstack_config、pstack_sessions";
+      blocks[2] = ["用户消息", "/skill:poteto-mode 给 README 加一节安装说明…（Pi 展开成整份 SKILL.md）", "ps"];
+      blocks.splice(3, 0, ["工具结果", "pstack_todo set → playbook 步骤列表", "ps"]);
+    }
+    if (sc === "sub" && !pot) blocks[1][1] += "（注意：不开 PStack 时没有 subagent 工具，这里按开启处理）";
+    const added = s.add.map((b) => b.concat(["new"]));
+    const all = blocks.concat(added);
+    const cls = { td: "act", ps: "slow", pi: "fast", user: "fast" };
+    const who = { td: "TillDone", ps: "PStack", pi: "Pi", user: "用户" };
+    CL.$("#d1-in").innerHTML = all.map((b) => '<li class="' + cls[b[2]] + (b[3] ? " new" : "") + '"><span class="src">' + CL.esc(b[0]) + "</span><span>" + CL.esc(b[1]) + '</span><span class="verdict">' + who[b[2]] + "</span></li>").join("");
+    CL.$("#d1-out-list").innerHTML = s.hidden.concat(HIDDEN_ALWAYS).map((h) => '<li class="drop"><span class="src">不进</span><span>' + CL.esc(h) + '</span><span class="verdict"></span></li>').join("");
+    const td = all.filter((b) => b[2] === "td").length, ps = all.filter((b) => b[2] === "ps").length;
+    const sysByPs = all.some((b) => b[0] === "system prompt" && b[2] === "ps");
+    CL.$("#d1-out").textContent = "这次请求共 " + all.length + " 块：TillDone 贡献 " + td + " 块，PStack 贡献 " + ps + " 块。\n" +
+      "TillDone 改 system prompt 的块数：0。PStack " + (sysByPs ? "改了 system prompt（追加一段）。" : "没有加载或没开 Poteto Mode，不改 system prompt。") + "\n" + s.note;
+  }
+  CL.$$("#d1-sc [data-sc]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d1-sc [data-sc]").forEach((x) => x.classList.toggle("on", x === b)); sc = b.dataset.sc;
+    if (sc === "sub") CL.$("#d1-poteto").checked = true;
+    draw1();
+  }));
+  CL.$("#d1-poteto").addEventListener("change", draw1);
+  draw1();
+
+  /* ---- 2. 替模型过门禁 ---- */
+  const GATED = ["bash", "edit", "write", "subagent"];
+  const TUI_ALLOW = ["tilldone", "read", "grep", "find", "ls"];
+  const ACTS = [
+    ["edit", "edit README.md"], ["bash", "bash: npm test"], ["read", "read spec.md"], ["pstack_todo", "pstack_todo set"],
+    ["add", "tilldone add（2 个任务）"], ["start", "tilldone start 下一个"], ["done", "tilldone done 当前"],
+  ];
+  let tasks, nextId, log, steps, firstEdit, blocked;
+  function reset() { tasks = []; nextId = 1; log = []; steps = 0; firstEdit = null; blocked = 0; }
+  function gate(tool) {
+    const tui = CL.$("#d2-tui").checked;
+    const gated = tui ? !TUI_ALLOW.includes(tool) : GATED.includes(tool);
+    if (!gated) return null;
+    if (!tasks.length) return GATE.noTasks;
+    if (tasks.every((t) => t.s === "done")) return GATE.allDone;
+    if (!tasks.some((t) => t.s === "inprogress")) return GATE.noneActive;
+    return null;
+  }
+  function act(k) {
+    steps++;
+    const tool = ["add", "start", "done"].includes(k) ? "tilldone" : k;
+    const reason = gate(tool);
+    const label = ACTS.find((a) => a[0] === k)[1];
+    if (reason) { blocked++; log.push(["drop", label, "被拦", reason]); return; }
+    let res = "放行";
+    if (k === "add") { tasks.push({ id: nextId++, text: "写安装说明", s: "idle" }, { id: nextId++, text: "跑一遍测试", s: "idle" }); res = "Added 2 tasks"; }
+    else if (k === "start") {
+      const t = tasks.find((x) => x.s === "idle");
+      if (!t) res = "没有 idle 任务（演示里不做 reopen）";
+      else { tasks.forEach((x) => { if (x.s === "inprogress") x.s = "idle"; }); t.s = "inprogress"; res = "Started #" + t.id + "\n" + SPLIT_CUE; }
+    } else if (k === "done") {
+      const t = tasks.find((x) => x.s === "inprogress");
+      if (!t) res = "当前没有进行中的任务"; else { t.s = "done"; res = "Done #" + t.id; }
+    } else if (k === "edit" && firstEdit === null) firstEdit = steps;
+    log.push(["fast", label, "通过", res]);
+  }
+  function draw2() {
+    CL.$("#d2-acts").innerHTML = ACTS.map((a) => '<button class="btn" data-k="' + a[0] + '">' + CL.esc(a[1]) + "</button>").join("") + '<button class="btn" data-k="reset">重来</button>';
+    const icon = { idle: "○", inprogress: "●", done: "✓" };
+    CL.$("#d2-tasks").textContent = "清单：" + (tasks.length ? tasks.map((t) => icon[t.s] + " #" + t.id + " " + t.text).join("  ·  ") : "（空）");
+    CL.$("#d2-log").innerHTML = log.map((l, i) => '<li class="' + l[0] + '"><span class="src">' + (i + 1) + "</span><span>" + CL.esc(l[1]) + '<div class="gate-text">' + CL.esc(l[3]) + '</div></span><span class="verdict">' + l[2] + "</span></li>").join("");
+    let msg = "已走 " + steps + " 步，被拦 " + blocked + " 次。";
+    msg += firstEdit ? "\n第 " + firstEdit + " 步做成了第一次 edit。最少需要 3 步（add → start → edit）。" : "\n还没有成功的 edit。";
+    if (CL.$("#d2-tui").checked) msg += "\n当前是 TUI 原版门禁：pstack_todo 这类别的扩展加的工具也会被拦。";
+    CL.$("#d2-out").textContent = msg;
+    CL.$$("#d2-acts [data-k]").forEach((b) => b.addEventListener("click", () => {
+      if (b.dataset.k === "reset") reset(); else act(b.dataset.k);
+      draw2();
+    }));
+  }
+  CL.$("#d2-tui").addEventListener("change", () => { reset(); draw2(); });
+  reset(); draw2();
+});
+</script>
+</body>
+</html>

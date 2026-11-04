@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TillDone 的原生拆分 · L05</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .ctrl-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 10px; font-size: 13.5px; color: var(--ink-3); }
+  .ctrl-row select { font: inherit; font-size: 13.5px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+  .tasklist { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 5px; font-size: 14px; }
+  .tasklist li { display: flex; gap: 10px; align-items: center; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+  .tasklist li.cur { border-color: var(--rule-bd); background: var(--rule-bg); }
+  .tasklist .ic { font-family: var(--mono); width: 1.2em; text-align: center; }
+  .tasklist .id { font-family: var(--mono); color: var(--ink-3); }
+  .tasklist .from { margin-left: auto; font-size: 12px; color: var(--ink-3); font-family: var(--mono); }
+  .tasklist .sb { margin-left: auto; }
+  .reply { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 6px 0; color: var(--ink-2); }
+  .reply.err { border-color: var(--down); }
+  .reply.hint { border-color: var(--note-bd); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">只给时机和账本</a></li>
+    <li><a href="#s2">数据形状与 split 规则</a></li>
+    <li><a href="#s3">动手看：split 游乐场</a></li>
+    <li><a href="#s4">三个触发点</a></li>
+    <li><a href="#s5">动手看：15 次提示与盲区</a></li>
+    <li><a href="#s6">人的入口：细分按钮</a></li>
+    <li><a href="#s7">门禁与督促</a></li>
+    <li><a href="#s8">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L05 · 拆分与分工</div>
+  <h1>TillDone 的原生拆分</h1>
+  <p>TillDone 有一个 split 动作，但它自己从不决定怎么拆。这一课看清它提供了什么：拆分的规则、提醒拆分的时机，以及让人参与的按钮。</p>
+  <div class="meta"><span>原文：§4</span><span>阅读约 20 分钟</span><span>含 3 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>写出 <code>Task</code> 和 <code>Model</code> 的数据形状，说出 <a class="term" href="glossary.html#split">split</a> 的四条规则。</li>
+    <li>说出提醒拆分的三个触发点，以及每个触发点选在那个时刻的理由。</li>
+    <li>解释 <a class="term" href="glossary.html#spent">spent</a> 什么时候清零，以及分派 subagent 时它的盲区。</li>
+    <li>描述<a class="term" href="glossary.html#split-button">细分按钮</a>的完整流程：发什么、何时恢复。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>只给时机和账本</h2>
+  <div class="callout rule"><span class="ttl">本课核心句</span>TillDone 只提供拆分的<b>时机</b>和<b>账本</b>。怎么拆由模型决定。</div>
+  <p>“账本”指清单本身和 <code>split</code> 动作。它保证拆分后的清单仍然合法。“时机”指三个提醒点和一个人的入口。它们告诉模型“现在该想想要不要拆”。</p>
+  <p>TillDone 从不自己生成子任务，桌面端也不。哪几个子任务、每个多大，都由有上下文的模型决定。</p>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>数据形状与 split 规则</h2>
+  <p>先看数据形状（<code>state.ts</code>）：</p>
+  <pre><code>interface Task  { id: number; text: string; status: "idle" | "inprogress" | "done"; from?: number }
+interface Model { list: ListState; nudged: boolean; spent: number }</code></pre>
+  <p>九个动作：<code>new-list</code>、<code>add</code>、<code>start</code>、<code>done</code>、<code>remove</code>、<code>update</code>、<code>list</code>、<code>clear</code>、<code>split</code>。</p>
+  <p><code>split</code> 的规则在 <code>state.ts:345-356</code>。</p>
+  <ol class="steps">
+    <li>参数是 <code>id</code> 加 <code>texts[]</code>。<code>texts</code> 至少 2 个，否则返回 “texts (at least 2) required for split”。</li>
+    <li>子任务<b>原位替换</b>原任务。子任务带 <code>from = 原 id</code>，id 从 <code>nextId</code> 起编。</li>
+    <li>第一个子任务继承原状态，其余为 idle。所以拆分进行中的任务后，仍然只有一个任务在进行。</li>
+    <li>已完成的任务不能拆。</li>
+  </ol>
+  <blockquote class="src">Task #N is already done. Use add for new work instead of splitting it.<cite>state.ts:348</cite></blockquote>
+  <p>还有一条和计数有关。当前任务的 id 变了，<code>spent</code> 就清零（<code>state.ts</code> 的 <code>ok()</code>）。拆分进行中的任务时，第一个子任务是新 id，所以它从 0 开始计数。</p>
+  <div class="callout note"><span class="ttl">补充：为什么是“原位”</span>子任务插在原任务的位置上，不是追加到末尾。清单的顺序因此保持“先做什么、后做什么”的原意。<code>from</code> 字段让你追溯每个子任务来自哪里。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>动手看：split 游乐场</h2>
+  <p>下面是按 <code>state.ts</code> 规则移植的小模型。你扮演模型：选一个任务，调用动作，看清单、<code>spent</code> 和返回文本怎样变化。“模型调 bash”会先过门禁。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">游乐场：start / done / split / add，以及门禁和 spent</div>
+    </div>
+    <div class="demo">
+      <div class="ctrl-row">目标任务：<select id="d1-id"></select>
+        <button class="btn" data-a="start">start</button>
+        <button class="btn" data-a="done">done</button>
+        <button class="btn" data-a="split2">split 成 2 个</button>
+        <button class="btn" data-a="split3">split 成 3 个</button>
+        <button class="btn" data-a="add">add 一个任务</button>
+      </div>
+      <div class="ctrl-row">
+        <button class="btn" data-a="bash">模型调 bash ×1</button>
+        <button class="btn" data-a="bash5">模型调 bash ×5</button>
+        <button class="btn" data-a="reset">重来</button>
+      </div>
+      <ul class="tasklist" id="d1-list"></ul>
+      <div class="reply" id="d1-reply"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">试三件事。一，先不 start，直接调 bash，看门禁理由。二，start #1，调 bash ×5，再 split #1：第一个子任务接过“进行中”，spent 归零。三，done 一个任务后再 split 它，看原文错误。<br><span class="data-note">依据 state.ts 的规则移植，只包含这几个动作；任务文本是演示用例子。返回文本照搬源码的英文格式。</span></div>
+  </div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>三个触发点</h2>
+  <p>先说结论：TillDone 在三个时刻提醒模型考虑拆分。三处文本都定义在 <code>state.ts</code>。</p>
+  <h3>① 工具说明里的原则（每次请求都在）</h3>
+  <blockquote class="src">Keep each task small enough to finish and verify in one focused change. If a task turns out bigger, split it instead of letting it grow; if you find work outside the current task, add it as a new task.<cite>state.ts TOOL.description</cite></blockquote>
+  <h3>② 刚认领时：SPLIT_CUE</h3>
+  <p><a class="term" href="glossary.html#split-cue">SPLIT_CUE</a>（<code>state.ts:114</code>）附在 <code>start</code> 结果的末尾。</p>
+  <blockquote class="src">Before you start: if this task holds two or more steps you can verify separately, split it now with `tilldone split`.<cite>state.ts:114</cite></blockquote>
+  <p>理由写在源码注释里：这是模型对任务大小了解最多、还没花任何成本的时刻。</p>
+  <h3>③ 做了很久时：每 15 次</h3>
+  <p><code>SPLIT_HINT_EVERY = 15</code>（<code>state.ts:117</code>）。<code>toolCalled</code>（<code>state.ts:431</code>）给当前任务的每个非 tilldone 工具调用记 <code>spent + 1</code>。到 15 的倍数时，生成一条<a class="term" href="glossary.html#split-hint">拆分提示</a>：</p>
+  <blockquote class="src">💡 TillDone: task #N has taken 15 tool calls so far. If it is bigger than one step, split it with `tilldone split` (id=N) and keep going.<cite>state.ts:439</cite></blockquote>
+  <p>提示的送达有一个细节。工具调用时，工具还没执行，所以 L2 先把提示暂存进一个 Map，键是 <code>toolCallId</code>。等这次调用的 <code>tool_result</code> 回来，再把提示追加到结果末尾（<code>index.ts</code>）。模型不需要额外的 turn。</p>
+  <div class="diagram">
+    <svg viewBox="0 0 860 150" role="img" aria-label="拆分提示的送达路径">
+      <defs><marker id="ar5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="currentColor"/></marker></defs>
+      <g style="color: var(--ink-3)">
+        <path class="edge" d="M190 50 H245" marker-end="url(#ar5a)"/>
+        <path class="edge" d="M420 50 H475" marker-end="url(#ar5a)"/>
+        <path class="edge" d="M650 50 H700" marker-end="url(#ar5a)"/>
+        <path class="edge dash" d="M332 80 V115 H760 V80" marker-end="url(#ar5a)"/>
+      </g>
+      <rect class="box" x="20" y="20" width="170" height="60" rx="8"/><text x="105" y="46" text-anchor="middle">tool_call</text><text class="sm" x="105" y="66" text-anchor="middle">gate → toolCalled</text>
+      <rect class="box hl" x="250" y="20" width="170" height="60" rx="8"/><text x="335" y="46" text-anchor="middle">hints Map</text><text class="sm" x="335" y="66" text-anchor="middle">toolCallId → 提示</text>
+      <rect class="box" x="480" y="20" width="170" height="60" rx="8"/><text x="565" y="46" text-anchor="middle">工具执行</text><text class="sm" x="565" y="66" text-anchor="middle">bash / edit …</text>
+      <rect class="box" x="705" y="20" width="135" height="60" rx="8"/><text x="772" y="46" text-anchor="middle">tool_result</text><text class="sm" x="772" y="66" text-anchor="middle">结果末尾 + 💡</text>
+      <text class="sm" x="520" y="135">同一个 toolCallId 取出提示</text>
+    </svg>
+    <div class="cap">提示在 tool_call 时决定，在 tool_result 时送达。依据原文 §4.3 与 index.ts 重画。</div>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>动手看：15 次提示与盲区</h2>
+  <p>同一个任务要做很多步工作。比较三种做法：全部自己做、中途拆分、交给 subagent。看提示在第几次工具调用时出现。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">计数器：同样的工作量，spent 和提示怎样变化</div>
+      <label class="ctrl">工作量 = <b id="d2-wv">40</b> 步 <input id="d2-w" type="range" min="5" max="60" value="40"></label>
+    </div>
+    <div class="demo">
+      <div class="ctrl-row">做法：
+        <span class="btn-group" id="d2-mode">
+          <button class="btn on" data-m="self">全部自己做</button>
+          <button class="btn" data-m="split">第 20 步后 split</button>
+          <button class="btn" data-m="sub">分派一个 subagent</button>
+        </span>
+      </div>
+      <div id="d2-chart"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">把工作量拖到 40，切换三种做法。“全部自己做”在第 15、30 次各提示一次。“第 20 步后 split”：第一个子任务是新 id，spent 从 0 重新数。“分派一个 subagent”：子 agent 内部做的几十步，spent 只记 1 次，提示永远不出现。<br><span class="data-note">简化模型：每步工作 = 1 次非 tilldone 工具调用；分派时父 agent 先自己做 2 次 read，再调 1 次 subagent；tilldone 自己的调用不计数。</span></div>
+  </div>
+  <div class="callout warn"><span class="ttl">盲区</span>原文 §7 第 1 条：子进程不加载 TillDone。一次 <code>subagent</code> 调用在 <code>spent</code> 里只算 1 次。分派出去的大任务看起来很“便宜”，不会触发拆分提示。</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>人的入口：细分按钮</h2>
+  <p>先说结论：牧羊人指出任务，模型决定怎么拆。桌面端自己不拆，也不调 <code>split</code>。</p>
+  <blockquote class="src">The shepherd points at a task; the model, which has the context, decides the subtasks.<cite>src/domain.ts:381</cite></blockquote>
+  <p>任务面板上每个未完成任务都有“细分”按钮。点下后：</p>
+  <ol class="steps">
+    <li>桌面端按界面语言取文案 <code>splitRequest</code>，填入 id 和任务文本。</li>
+    <li>如果 Pi 空闲，发 <code>prompt</code>。如果正在运行，发 <a class="term" href="glossary.html#steer">steer</a>。</li>
+    <li>桌面端记一条 <code>desk_split_requested</code>，把 id 放进 <a class="term" href="glossary.html#pending-split">pendingSplits</a>。按钮变成“细分中…”。</li>
+  </ol>
+  <p>按钮在两种情况下恢复。第一，下一次 tilldone 结果里，这个任务已经不在或已经完成。模型 split 了它，或者把它标为 done。第二，这次 settle 结束了。第二种覆盖了“模型决定不拆”。</p>
+
+  <div class="chart-card" id="demo3">
+    <div class="chart-head">
+      <div class="chart-title">流程：点“细分”之后，按钮何时恢复</div>
+    </div>
+    <div class="demo">
+      <div class="ctrl-row">
+        <label class="ctrl"><input type="checkbox" id="d3-run" checked> Pi 正在运行</label>
+        <label class="ctrl">界面语言 <select id="d3-lang"><option value="zh">中文</option><option value="en">English</option></select></label>
+      </div>
+      <div class="ctrl-row">
+        <button class="btn" id="d3-click">点 #2 的“细分”</button>
+        <span class="btn-group">
+          <button class="btn" data-o="split">结局 A：模型 split #2</button>
+          <button class="btn" data-o="done">结局 B：模型 done #2</button>
+          <button class="btn" data-o="other">结局 C：模型不拆，继续别的</button>
+          <button class="btn" data-o="settle">agent_settled</button>
+        </span>
+        <button class="btn" id="d3-reset">重来</button>
+      </div>
+      <ul class="tasklist" id="d3-list"></ul>
+      <div class="reply" id="d3-msg"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d3-out"></div></div>
+    <div class="chart-foot">先点“细分”，再点一次。桌面端忽略第二次，因为 #2 已在 pendingSplits 里。然后分别试三种结局。结局 C 之后按钮仍是“细分中…”，直到 agent_settled。再取消“Pi 正在运行”重来：命令从 steer 变成 prompt。<br><span class="data-note">依据 src/domain.ts 的 planIntent 与 reduce 移植；消息文案照搬 appearance.ts。任务是演示用例子。</span></div>
+  </div>
+  <div class="callout note"><span class="ttl">补充：一处语言耦合</span><code>splitRequest</code> 是模型能读到的文本，却跟着界面语言变。白皮书 8.5 节把它列为风险 R6：回归测试时，界面设置会成为模型输入的一个变量。</div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>门禁与督促</h2>
+  <p>账本还需要两只手：门禁保证“先认领再动手”，督促保证“没做完不收工”。</p>
+  <h3>门禁</h3>
+  <p><a class="term" href="glossary.html#gate">门禁</a> <code>gate</code>（<code>state.ts:379</code>）只拦 <code>GATED_TOOLS = ["bash", "edit", "write", "subagent"]</code>（<code>state.ts:377</code>）。它依次检查三件事：</p>
+  <ol class="steps">
+    <li>清单为空 → <code>noTasks</code>。</li>
+    <li>全部完成 → <code>allDone</code>。</li>
+    <li>没有 inprogress 任务 → <code>noneActive</code>。</li>
+  </ol>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>版本</th><th>门禁做法</th><th>后果</th></tr>
+    <tr><td>TUI 原版</td><td>只放行 tilldone 和只读工具 read / grep / find / ls，其他全拦</td><td>不认识别的扩展加的工具。2026-11-01 Blackjack 运行里，<code>pstack_todo</code> 在 Poteto 会话开头撞上门禁 5 次</td></tr>
+    <tr><td>桌面副本（<code>7437421</code>）</td><td>只拦会改东西的四个工具</td><td>规划类工具都能通过</td></tr>
+  </table></div>
+  <p>原文的理由是：门禁是工作纪律，不是安全边界。详见 <a href="L06-pstack-meshing.html">L06</a> 的<a class="term" href="glossary.html#inverted-gate">反转门禁</a>。</p>
+  <h3>督促</h3>
+  <p><a class="term" href="glossary.html#nudge">督促</a> <code>agentEnd</code>（<code>state.ts:451</code>）在 run 结束时检查清单。有未完成任务且 <code>nudged</code> 为假时，它返回 <code>tilldone-nudge</code> 消息，并把 <code>nudged</code> 置真。L2 用 <code>sendMessage(nudge, { triggerTurn: true })</code> 发出。</p>
+  <blockquote class="src">Either continue working on them or mark them done with `tilldone done`. Don't stop until it's done!<cite>state.ts agentEnd</cite></blockquote>
+  <p><code>input</code> 事件复位<a class="term" href="glossary.html#nudge-latch">闩锁</a>。所以每条用户输入最多督促一次。督促之后模型仍然停下，说明它可能真卡住了，该交还给人。L01 的播放器演示了这个过程。</p>
+</section>
+
+<!-- ============ 8 ============ -->
+<section class="lesson-sec" id="s8">
+  <h2><span class="num">08</span>自测与速记</h2>
+  <div class="quiz" data-answer="1">
+    <div class="q">拆分一个进行中的任务 #3 成 3 个子任务后，清单里有几个任务是 inprogress？</div>
+    <div class="opts"><button>0 个</button><button>1 个：第一个子任务</button><button>3 个：全部子任务</button><button>1 个：仍是 #3</button></div>
+    <div class="explain">子任务原位替换原任务。第一个子任务继承原状态 inprogress，其余为 idle。#3 不再存在。</div>
+  </div>
+  <div class="quiz" data-answer="2">
+    <div class="q">为什么 SPLIT_CUE 附在 start 的结果上？</div>
+    <div class="opts"><button>start 是最常调用的动作</button><button>start 之后门禁才放行</button><button>刚认领时，模型对任务大小了解最多，还没花任何成本</button><button>start 会清零 spent</button></div>
+    <div class="explain">源码注释原意：the moment the model knows most about its size and has spent nothing on it。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">一个任务里，模型自己做了 2 次 read，再调 1 次 subagent，子 agent 内部做了 50 次工具调用。spent 是多少？</div>
+    <div class="opts"><button>53</button><button>52</button><button>50</button><button>3</button></div>
+    <div class="explain">子进程不加载 TillDone。父进程只看到 2 次 read 和 1 次 subagent，共 3 次。15 次提示不会出现。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">点了“细分”后，模型决定不拆，只继续做别的。按钮什么时候恢复？</div>
+    <div class="opts"><button>这次 settle 结束（agent_settled）时</button><button>下一次 tilldone 结果到达时</button><button>30 秒超时后</button><button>永远不恢复，要重启</button></div>
+    <div class="explain">只要 #2 仍未完成，tilldone 结果不会把它移出 pendingSplits。agent_settled 时整个 pendingSplits 清空。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>定位</td><td>TillDone 只给时机和账本，怎么拆由模型决定</td></tr>
+    <tr><td>split 规则</td><td>≥ 2 个子任务；原位替换；带 from；第一个继承状态；已完成不能拆</td></tr>
+    <tr><td>三个触发点</td><td>工具说明原则；start 时 SPLIT_CUE；每 15 次非 tilldone 工具调用</td></tr>
+    <tr><td>spent</td><td>当前任务 id 一变就清零；不持久化；看不见 subagent 内部</td></tr>
+    <tr><td>细分按钮</td><td>空闲发 prompt、运行中发 steer；任务已拆分或完成，或 settle 结束时恢复</td></tr>
+    <tr><td>门禁与督促</td><td>只拦 bash / edit / write / subagent；每条用户输入最多督促一次</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L04-context-strategies.html"><small>上一课 · L04</small>两种注入策略与抗压缩</a>
+    <a href="L06-pstack-meshing.html"><small>下一课 · L06</small>PStack 与 TillDone 的咬合</a>
+    <a href="L01-overview.html#s5"><small>L01</small>督促让外循环多转一圈</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L05-tilldone-split.html"></nav>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§4（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  const ICON = { idle: "○", inprogress: "●", done: "✓" };
+  const LABEL = { idle: "idle", inprogress: "in progress", done: "done" };
+  const SPLIT_CUE = "\nBefore you start: if this task holds two or more steps you can verify separately, split it now with `tilldone split`.";
+  const GATE = {
+    noTasks: "🚫 No TillDone tasks defined. You MUST use `tilldone new-list` or `tilldone add` to define your tasks before changing anything (bash, edit, write, subagent); every other tool stays available for planning. Plan your work first!",
+    allDone: "🚫 All TillDone tasks are done. You MUST use `tilldone add` for new tasks or `tilldone new-list` to start a fresh list before changing anything (bash, edit, write, subagent); every other tool stays available for planning.",
+    noneActive: "🚫 No task is in progress. You MUST use `tilldone start` to mark a task as inprogress before doing any work.",
+  };
+  const current = (tasks) => tasks.find((t) => t.status === "inprogress");
+  const hintText = (id, spent) => "💡 TillDone: task #" + id + " has taken " + spent + " tool calls so far. If it is bigger than one step, split it with `tilldone split` (id=" + id + ") and keep going.";
+
+  /* ---- 1. split 游乐场 ---- */
+  const INIT = () => ({ tasks: [{ id: 1, text: "加导出按钮", status: "idle" }, { id: 2, text: "写导出测试", status: "idle" }], nextId: 3, spent: 0, adds: 0 });
+  let m = INIT(), reply = { text: "清单有 2 个任务，还没有任务在进行。", cls: "" }, log = [];
+  // 与 state.ts 的 ok() 相同：当前任务 id 不变就保留 spent，否则清零
+  function commit(tasks, nextId, text) {
+    const keep = current(tasks)?.id === current(m.tasks)?.id;
+    m = Object.assign({}, m, { tasks, nextId, spent: keep ? m.spent : 0 });
+    reply = { text, cls: "" };
+  }
+  function act(a) {
+    const id = +CL.$("#d1-id").value, task = m.tasks.find((t) => t.id === id);
+    if (a === "reset") { m = INIT(); reply = { text: "重来。", cls: "" }; log = []; return; }
+    if (a === "add") { m.adds++; const t = { id: m.nextId, text: "新任务 " + m.adds, status: "idle" }; commit(m.tasks.concat([t]), m.nextId + 1, "Added task #" + t.id + ": " + t.text); return; }
+    if (a === "bash" || a === "bash5") {
+      const times = a === "bash5" ? 5 : 1, out = [];
+      for (let i = 0; i < times; i++) {
+        const tasks = m.tasks;
+        let reason = null;
+        if (!tasks.length) reason = GATE.noTasks;
+        else if (tasks.every((t) => t.status === "done")) reason = GATE.allDone;
+        else if (!tasks.some((t) => t.status === "inprogress")) reason = GATE.noneActive;
+        if (reason) { reply = { text: "bash 被门禁拦下：\n" + reason, cls: "err" }; log.push("bash 被拦"); return; }
+        m.spent++;
+        if (m.spent % 15 === 0) out.push(hintText(current(tasks).id, m.spent));
+      }
+      reply = out.length ? { text: "bash 放行 " + times + " 次。spent 到 15 的倍数的那次，结果末尾追加：\n" + out.join("\n"), cls: "hint" } : { text: "bash 放行 " + times + " 次，spent 现在是 " + m.spent + "。", cls: "" };
+      return;
+    }
+    if (!task) { reply = { text: "Task #" + id + " not found", cls: "err" }; return; }
+    if (a === "start" || a === "done") {
+      const next = a === "start" ? "inprogress" : "done";
+      if (task.status === next) { reply = { text: "Task #" + id + " is already " + LABEL[next] + ".", cls: "" }; return; }
+      const demoted = [];
+      const tasks = m.tasks.map((t) => {
+        if (t === task) return Object.assign({}, t, { status: next });
+        if (next === "inprogress" && t.status === "inprogress") { demoted.push(t.id); return Object.assign({}, t, { status: "idle" }); }
+        return t;
+      });
+      let text = "Task #" + id + ": " + task.status + " → " + next;
+      if (demoted.length) text += "\n(Auto-paused " + demoted.map((d) => "#" + d).join(", ") + " → idle. Only one task can be in progress at a time.)";
+      if (next === "inprogress") text += SPLIT_CUE;
+      commit(tasks, m.nextId, text); return;
+    }
+    if (a === "split2" || a === "split3") {
+      if (task.status === "done") { reply = { text: "Task #" + id + " is already done. Use add for new work instead of splitting it.", cls: "err" }; return; }
+      const n = a === "split2" ? 2 : 3;
+      const parts = Array.from({ length: n }, (_, i) => ({ id: m.nextId + i, text: task.text + " · 第 " + (i + 1) + " 步", status: i === 0 ? task.status : "idle", from: task.id }));
+      const tasks = m.tasks.flatMap((t) => (t === task ? parts : [t]));
+      let text = "Split #" + task.id + " into " + parts.map((t) => "#" + t.id).join(", ");
+      if (task.status === "inprogress") text += "\n#" + parts[0].id + " is now in progress.";
+      commit(tasks, m.nextId + n, text);
+    }
+  }
+  function draw1() {
+    const sel = CL.$("#d1-id"), prev = +sel.value;
+    sel.innerHTML = m.tasks.map((t) => '<option value="' + t.id + '"' + (t.id === prev ? " selected" : "") + ">#" + t.id + " " + CL.esc(t.text) + "</option>").join("");
+    const cur = current(m.tasks);
+    CL.$("#d1-list").innerHTML = m.tasks.map((t) => '<li class="' + (t === cur ? "cur" : "") + '"><span class="ic">' + ICON[t.status] + '</span><span class="id">#' + t.id + "</span><span>" + CL.esc(t.text) + '</span><span class="from">' + (t.from !== undefined ? "from #" + t.from : "") + "</span></li>").join("") || "<li>清单为空</li>";
+    const r = CL.$("#d1-reply"); r.textContent = reply.text; r.className = "reply " + reply.cls;
+    const c = { idle: 0, inprogress: 0, done: 0 }; m.tasks.forEach((t) => c[t.status]++);
+    CL.$("#d1-out").textContent = "当前任务：" + (cur ? "#" + cur.id + " " + cur.text : "无") + "；spent = " + m.spent + "；nextId = " + m.nextId + "。\n" +
+      "计数：○ " + c.idle + "　● " + c.inprogress + "　✓ " + c.done + "。距离下一次拆分提示还差 " + (cur ? 15 - (m.spent % 15) : "—") + " 次工具调用。";
+  }
+  CL.$$("#demo1 [data-a]").forEach((b) => b.addEventListener("click", () => { act(b.dataset.a); draw1(); }));
+  draw1();
+
+  /* ---- 2. 15 次计数器 ---- */
+  let mode = "self";
+  function simulate(w, md) {
+    // 返回每次父进程工具调用：{n: 第几次, spent, task, hint, label}
+    const calls = []; let spent = 0, task = 1, n = 0;
+    const push = (label) => { n++; spent++; const hint = spent % 15 === 0; calls.push({ n, spent, task, hint, label }); };
+    if (md === "sub") { push("read"); push("read"); push("subagent（子 agent 内部 " + Math.max(0, w - 2) + " 步）"); return { calls, childSteps: Math.max(0, w - 2) }; }
+    for (let i = 0; i < w; i++) {
+      if (md === "split" && i === 20) { task = 3; spent = 0; calls.push({ split: true, n, task }); }
+      push("bash / edit");
+    }
+    return { calls, childSteps: 0 };
+  }
+  function draw2() {
+    const w = +CL.$("#d2-w").value; CL.$("#d2-wv").textContent = w;
+    const { calls, childSteps } = simulate(w, mode);
+    const real = calls.filter((c) => !c.split), W = 760, X0 = 20, step = Math.min(12, (W - 40) / Math.max(real.length, 1));
+    let svg = '<svg viewBox="0 0 ' + W + ' 120" style="width:100%;height:auto" role="img" aria-label="工具调用与提示">';
+    let x = X0;
+    for (const c of calls) {
+      if (c.split) { svg += '<line x1="' + (x - 2) + '" y1="20" x2="' + (x - 2) + '" y2="80" style="stroke:var(--brand-2);stroke-width:2;stroke-dasharray:4 3"></line><text class="sm" x="' + x + '" y="16">split #1 → #3, #4</text>'; continue; }
+      const isSub = c.label.startsWith("subagent");
+      svg += '<rect x="' + x + '" y="40" width="' + Math.max(3, step - 3) + '" height="24" rx="2" style="fill:' + (isSub ? "var(--note-bd)" : c.hint ? "var(--down)" : "var(--ink-3)") + ';opacity:' + (c.hint || isSub ? 1 : 0.45) + '"></rect>';
+      if (c.hint) svg += '<text class="sm" x="' + x + '" y="98">💡 第 ' + c.n + ' 次</text>';
+      if (isSub) svg += '<text class="sm" x="' + (x + 8) + '" y="98">subagent：内部 ' + childSteps + ' 步，spent 只 +1</text>';
+      x += step;
+    }
+    CL.$("#d2-chart").innerHTML = svg + "</svg>";
+    const hints = real.filter((c) => c.hint);
+    const last = real[real.length - 1];
+    let msg = "父进程共 " + real.length + " 次非 tilldone 工具调用；任务结束时 spent = " + (last ? last.spent : 0) + "。\n";
+    msg += hints.length ? "拆分提示出现 " + hints.length + " 次：第 " + hints.map((h) => h.n + " 次（任务 #" + h.task + "，spent " + h.spent + "）").join("、") + "。\n提示文本：" + hintText(hints[0].task, hints[0].spent) : "拆分提示没有出现。";
+    if (mode === "sub") msg += "\n盲区：子 agent 做了 " + childSteps + " 步，TillDone 看不见。";
+    if (mode === "split") msg += "\nsplit 后当前任务从 #1 变成 #3，spent 清零重新数。";
+    CL.$("#d2-out").textContent = msg;
+  }
+  CL.$$("#d2-mode [data-m]").forEach((b) => b.addEventListener("click", () => { CL.$$("#d2-mode [data-m]").forEach((x) => x.classList.toggle("on", x === b)); mode = b.dataset.m; draw2(); }));
+  CL.$("#d2-w").addEventListener("input", draw2);
+  draw2();
+
+  /* ---- 3. 细分按钮 ---- */
+  const REQ = {
+    zh: "请把任务 #{id}「{text}」细分成更小的子任务：用 tilldone split（id={id}）原位替换，然后继续。",
+    en: "Split task #{id} \"{text}\" into smaller subtasks with tilldone split (id={id}), then continue.",
+  };
+  const INIT3 = () => ({ tasks: [{ id: 1, text: "加导出按钮", status: "done" }, { id: 2, text: "导出为 CSV 和 PDF", status: "inprogress" }, { id: 3, text: "写导出测试", status: "idle" }], pending: [], settled: false });
+  let s3 = INIT3(), msg3 = "点“细分”开始。", log3 = [];
+  // 与 domain.ts reduce 相同：tilldone 结果到达后，只保留仍存在且未完成的 pending id
+  function tilldoneResult(tasks) { s3.tasks = tasks; s3.pending = s3.pending.filter((id) => tasks.some((t) => t.id === id && t.status !== "done")); }
+  function draw3() {
+    CL.$("#d3-list").innerHTML = s3.tasks.map((t) => {
+      const pending = s3.pending.includes(t.id);
+      const btn = t.status === "done" ? "" : '<button class="btn sb" disabled>' + (pending ? "细分中…" : "细分") + "</button>";
+      return '<li><span class="ic">' + ICON[t.status] + '</span><span class="id">#' + t.id + "</span><span>" + CL.esc(t.text) + (t.from !== undefined ? ' <small class="from">from #' + t.from + "</small>" : "") + "</span>" + btn + "</li>";
+    }).join("");
+    CL.$("#d3-msg").textContent = msg3;
+    CL.$("#d3-out").textContent = "pendingSplits = [" + s3.pending.join(", ") + "]。" + (log3.length ? "\n" + log3.join("\n") : "");
+  }
+  CL.$("#d3-click").addEventListener("click", () => {
+    const t = s3.tasks.find((x) => x.id === 2 && x.status !== "done");
+    if (!t || s3.pending.includes(2)) { log3.push("再点一次：被忽略（#2 不存在、已完成，或已在 pendingSplits 里）。"); draw3(); return; }
+    const running = CL.$("#d3-run").checked, lang = CL.$("#d3-lang").value;
+    const text = REQ[lang].replaceAll("{id}", "2").replace("{text}", t.text);
+    msg3 = (running ? "steer" : "prompt") + " → " + text;
+    s3.pending.push(2); s3.settled = false;
+    log3.push("点细分：发 " + (running ? "steer（运行中，下一次 LLM 请求前送达）" : "prompt（空闲，开始一次新的 settle）") + "；记 desk_split_requested。");
+    draw3();
+  });
+  CL.$$("#demo3 [data-o]").forEach((b) => b.addEventListener("click", () => {
+    const o = b.dataset.o;
+    if (o === "split") {
+      const t = s3.tasks.find((x) => x.id === 2);
+      if (!t) { log3.push("#2 已经不在清单里。"); draw3(); return; }
+      const parts = [{ id: 4, text: "导出 CSV", status: t.status, from: 2 }, { id: 5, text: "导出 PDF", status: "idle", from: 2 }];
+      tilldoneResult(s3.tasks.flatMap((x) => (x === t ? parts : [x])));
+      log3.push("结局 A：tilldone split 结果到达。#2 不再存在，移出 pendingSplits。#4 接过“进行中”。");
+    } else if (o === "done") {
+      tilldoneResult(s3.tasks.map((x) => (x.id === 2 ? Object.assign({}, x, { status: "done" }) : x)));
+      log3.push("结局 B：tilldone done #2 结果到达。#2 已完成，移出 pendingSplits，按钮消失。");
+    } else if (o === "other") {
+      tilldoneResult(s3.tasks.slice());
+      log3.push("结局 C：模型调了别的 tilldone 动作，#2 仍未完成。pendingSplits 不变，按钮仍是“细分中…”。");
+    } else {
+      s3.pending = []; s3.settled = true;
+      log3.push("agent_settled：pendingSplits 整个清空，所有按钮恢复。");
+    }
+    draw3();
+  }));
+  CL.$("#d3-reset").addEventListener("click", () => { s3 = INIT3(); msg3 = "点“细分”开始。"; log3 = []; draw3(); });
+  draw3();
+});
+</script>
+</body>
+</html>

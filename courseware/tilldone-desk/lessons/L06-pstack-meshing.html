@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PStack 与 TillDone 的咬合 · L06</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .player-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13.5px; color: var(--ink-3); }
+  .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 10px 0; }
+  .lst { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; min-height: 110px; }
+  .lst h5 { margin: 0 0 6px; font-size: 13.5px; color: var(--brand); font-family: var(--mono); }
+  .lst ol { margin: 0; padding-left: 20px; font-size: 13.5px; color: var(--ink-2); }
+  .lst .empty { font-size: 13px; color: var(--ink-3); }
+  .lst .done { color: var(--ink-3); text-decoration: line-through; }
+  .lst .cur { color: var(--ink); font-weight: 700; }
+  .gates { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+  .callbox { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; color: var(--ink-2); margin: 6px 0; }
+  .ent { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 13.5px; }
+  .ent b { font-family: var(--mono); font-size: 12.5px; color: var(--ink-3); min-width: 64px; }
+  .seam [data-part] { transition: opacity .2s; cursor: pointer; }
+  .map-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; font-size: 13.5px; color: var(--ink-3); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">PStack 在 Pi 里注册了什么</a></li>
+    <li><a href="#s2">两份清单的分工</a></li>
+    <li><a href="#s3">动手看：一次 Poteto 会话的咬合</a></li>
+    <li><a href="#s4">动手看：计费门</a></li>
+    <li><a href="#s5">代码里只有三个接缝</a></li>
+    <li><a href="#s6">“大脑 / 手脚”只对一半</a></li>
+    <li><a href="#s7">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L06 · 拆分与分工</div>
+  <h1>PStack 与 TillDone 的咬合</h1>
+  <p>Poteto Mode 下，模型同时维护两份清单，并要穿过两道门。这一课逐步看它们怎样咬合，以及代码里真正相接的地方只有三处。</p>
+  <div class="meta"><span>原文：§5–6</span><span>阅读约 20 分钟</span><span>含 3 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>列出 <a class="term" href="glossary.html#pstack">PStack</a> 在 Pi 里注册的命令、钩子和工具。</li>
+    <li>说出<a class="term" href="glossary.html#two-lists">两份清单</a>各放什么，以及只有哪一份驱动面板、门禁和督促。</li>
+    <li>按顺序讲出一次 Poteto 会话的 6 步咬合，指出每一步经过哪道门。</li>
+    <li>用 <a class="term" href="glossary.html#requested-models">requestedModels</a> 的规则判断计费门会不会拦下一个 subagent 调用（<a class="term" href="glossary.html#billing-gate">计费门</a>）。</li>
+    <li>说出<a class="term" href="glossary.html#three-seams">三个接缝</a>，并解释为什么“大脑 / 手脚”之说只对一半。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>PStack 在 Pi 里注册了什么</h2>
+  <p>先说结论：PStack 的 Pi 版本是 npm 包 <code>pi-pstack</code>。它在 Pi 里注册两个命令、三个事件钩子和四个工具。全部写在 <code>pi-pstack/extensions/pstack/index.ts</code> 一个文件里。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>名称</th><th>类型</th><th>作用</th></tr>
+    <tr><td><code>/poteto-mode</code>、<code>/setup-pstack</code></td><td>命令</td><td>开关 <a class="term" href="glossary.html#poteto-mode">Poteto Mode</a>；交互配置角色 → 模型</td></tr>
+    <tr><td><code>input</code> 钩子</td><td>事件</td><td>看到 <code>/skill:poteto-mode</code> 开头的输入，就开启 mode，并写 <a class="term" href="glossary.html#custom-entry">custom entry</a></td></tr>
+    <tr><td><code>before_agent_start</code> 钩子</td><td>事件</td><td>mode 开启时，给每次请求追加 system prompt</td></tr>
+    <tr><td><code>tool_call</code> 钩子</td><td>事件</td><td>对部署、递归删除等外部写操作的 bash 命令，要求确认</td></tr>
+    <tr><td><a class="term" href="glossary.html#pstack-todo"><code>pstack_todo</code></a></td><td>工具</td><td><code>get/set/add/complete</code> 一份字符串清单；写 custom entry <code>pstack-todo</code></td></tr>
+    <tr><td><code>pstack_sessions</code></td><td>工具</td><td>列出当前工作目录的会话文件</td></tr>
+    <tr><td><a class="term" href="glossary.html#pstack-config"><code>pstack_config</code></a></td><td>工具</td><td>读写 <a class="term" href="glossary.html#models-json">models.json</a> 的角色 → 模型映射</td></tr>
+    <tr><td><a class="term" href="glossary.html#subagent"><code>subagent</code></a></td><td>工具</td><td>单个 / 并行（有上限）/ 链式分派子 agent</td></tr>
+  </table></div>
+  <p><code>poteto-mode/SKILL.md</code> 对清单有两条要求，原文如下：</p>
+  <blockquote class="src">Start every multi-step task with `pstack_todo`; its first item is to read the Principles section below in full.<cite>SKILL.md</cite></blockquote>
+  <blockquote class="src">Your first `pstack_todo` actions are the matched playbook's steps, copied in verbatim, before any task-specific todos and before you reason about the task.<cite>SKILL.md</cite></blockquote>
+  <p>子 agent 的命令行（<code>pstack/index.ts:145-148</code>）：</p>
+  <pre><code>pi --mode json --print --no-session --append-system-prompt &lt;agent 提示文件&gt;
+   [--model &lt;m&gt;] [--tools &lt;列表&gt;] "Delegated task:\n&lt;task&gt;"</code></pre>
+  <div class="callout warn"><span class="ttl">注意</span>子进程不加载 TillDone。命令行里也没有 <code>--no-extensions</code>。L07 会讲这两点带来的坑。</div>
+  <p>边牧怎样开启 Poteto Mode：<code>TILLDONE_PSTACK=1</code> 时，桌面端把会话的第一条空闲 prompt 改写成 <code>/skill:poteto-mode &lt;你的话&gt;</code>（<code>src/domain.ts:397-404</code>）。pstack 的 <code>input</code> 钩子看到它，就开启 mode。之后的消息照原样发送。</p>
+  <div class="callout note"><span class="ttl">为什么不用 /poteto-mode 命令</span>原文说明：<code>/poteto-mode</code> 在 RPC 下会失败，报错 <code>ctx.sendUserMessage is not a function</code>。这是 pstack 的 bug。所以桌面端改用 <code>/skill:poteto-mode</code>。</div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>两份清单的分工</h2>
+  <p>先说结论：Poteto Mode 下模型维护两份清单。<code>tilldone</code> 放工作项，<code>pstack_todo</code> 放流程步骤。只有 <code>tilldone</code> 有约束力。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>维度</th><th>TillDone（<code>tilldone</code>）</th><th>PStack（<code>pstack_todo</code> + <code>subagent</code>）</th></tr>
+    <tr><td>清单里装什么</td><td>工作项（羊）</td><td>流程步骤（playbook 的步骤，逐字抄）</td></tr>
+    <tr><td>谁看得见</td><td>任务面板、门禁、督促都靠它</td><td>只有模型（和工具卡片）</td></tr>
+    <tr><td>约束力</td><td><span class="pill hot">硬</span> <code>bash/edit/write/subagent</code> 必须有进行中的任务；没做完催一次</td><td><span class="pill">软</span> 只有提示词，没有门禁，没有督促</td></tr>
+    <tr><td>怎么“拆”</td><td><code>split</code> 把任务拆成更小的任务</td><td>不拆任务；把一个任务<b>分派</b>给子 agent（并行或链式）</td></tr>
+    <tr><td>持久化</td><td>工具结果里的 <code>details</code> 快照</td><td>custom entry</td></tr>
+    <tr><td>改 system prompt</td><td>从不</td><td>每次请求追加一段</td></tr>
+  </table></div>
+  <p>README 的原话：</p>
+  <blockquote class="src">In Poteto Mode the model keeps two lists: `pstack_todo` for pstack's process steps … and `tilldone` for the work items shown in the task panel. Only `tilldone` drives the panel, the gate, and the nudge.<cite>apps/tilldone/README.md</cite></blockquote>
+  <div class="callout warn"><span class="ttl">关键限制</span>这条分工只写在 README 里。TillDone 的工具说明和 PStack 的 SKILL.md 都没有提到另一份清单。所以模型看不到它，要自己摸索。§5 和 L07 会展开。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>动手看：一次 Poteto 会话的咬合</h2>
+  <p>原文 §6.2 把一次 Poteto 会话分成 6 步。下面的播放器逐步展示两份清单怎样变化，以及每次工具调用经过了哪道门。</p>
+  <p>边牧的 <code>tool_call</code> 钩子先查计费门，再查门禁。计费门只看 <code>subagent</code> 和 <code>pstack_config</code>。门禁只看 <code>GATED_TOOLS</code>。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">逐步播放：两份清单、两道门</div>
+      <label class="ctrl">门禁版本
+        <select id="d1-gate"><option value="desk">桌面反转门禁（只拦 4 个工具）</option><option value="tui">TUI 原版门禁（只放行 tilldone 和只读工具）</option></select>
+      </label>
+    </div>
+    <div class="demo">
+      <div class="player-bar"><button class="btn" id="d1-prev">上一步</button><button class="btn" id="d1-next">下一步</button><button class="btn" id="d1-all">播完</button><button class="btn" id="d1-reset">重来</button><span id="d1-pos"></span></div>
+      <div class="callbox" id="d1-call"></div>
+      <div class="gates" id="d1-gates"></div>
+      <div class="two-col">
+        <div class="lst"><h5>pstack_todo（流程步骤）</h5><div id="d1-ps"></div></div>
+        <div class="lst"><h5>tilldone（工作项 · 驱动面板）</h5><div id="d1-td"></div></div>
+      </div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">先用“桌面反转门禁”播完，再切到“TUI 原版门禁”播完。对比门禁拦下的次数。原版不认识 <code>pstack_todo</code>，清单为空时拦它，工作项全部完成后又拦它。<span class="data-note">简化模型：步骤依据原文 §6.2；任务文本、playbook 步骤、调用次数是演示用例子。原文记录的 2026-11-01 Blackjack 运行里，原版门禁拦了 <code>pstack_todo</code> 5 次。这里只模拟一次会话。</span></div>
+  </div>
+  <div class="callout tip"><span class="ttl">看播放器要点</span>第 5 步的 <code>subagent</code> 同时经过两道门。计费门先查，它是硬规则，有没有任务都生效。门禁后查，它要求有进行中的任务。第 6 步结束时，督促只看右栏。</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>动手看：计费门</h2>
+  <p>先说结论：计费门拒绝任何会落到 <code>anthropic/*</code> 的子 agent 调用。原因是用户的 Anthropic API 按量计费，没有充值。它在 <code>state.ts:423</code> 的 <code>billingGate</code>，先于门禁执行。</p>
+  <p><code>requestedModels</code> 的规则：</p>
+  <ul>
+    <li><code>subagent</code>：检查顶层参数、<code>tasks[]</code> 和 <code>chain[]</code> 的每一项。</li>
+    <li>某一项有显式 <code>model</code>，就只看这个 model。</li>
+    <li>没有显式 model，就按 <code>role</code> 查 models.json。模型池里的每个模型都算。</li>
+    <li><code>pstack_config</code>：只看 <code>set</code> 动作的 <code>model</code> 和 <code>models</code>。</li>
+  </ul>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">游乐场：拼一个调用，看计费门怎样判</div>
+      <label class="ctrl">工具
+        <select id="d2-mode"><option value="single">subagent · 单个</option><option value="tasks">subagent · 并行 tasks</option><option value="chain">subagent · 链式 chain</option><option value="config">pstack_config set</option></select>
+      </label>
+    </div>
+    <div class="demo">
+      <div class="callbox" id="d2-roles"></div>
+      <div id="d2-ents"></div>
+      <div class="callbox" id="d2-json"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">试三件事：给一项选 <code>anthropic/…</code> 的显式 model；只选 role “judgment and prose”；选 role “arena runners”，它的模型池里混着一个 anthropic 模型。<span class="data-note">判定逻辑照抄 <code>state.ts</code> 的 <code>requestedModels</code> 和 <code>billingGate</code>；拒绝文本照抄 <code>BILLING_REASON</code>。上方的 models.json 是演示用例子，不是用户的真实配置。</span></div>
+  </div>
+  <div class="callout warn"><span class="ttl">覆盖范围</span>计费门只覆盖第一层。子 agent 不加载 TillDone，所以子 agent 再派的子 agent 不经过它。README 已经说明这一点。</div>
+  <div class="callout note"><span class="ttl">补充：计费门比实际选模型更严</span>pstack 真正启动子 agent 时，只从模型池里按序号取一个（<code>childModel</code>）。计费门却检查池里的全部模型。所以模型池里只要混着一个 <code>anthropic/*</code>，计费门就拒绝整次调用。这是课程作者读代码的观察，原文没有讨论。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>代码里只有三个接缝</h2>
+  <p>先说结论：TillDone 和 PStack 在代码里只有三处结合。除此之外，两边互不认识。</p>
+  <ol class="steps">
+    <li><b>反转的门禁</b>（<code>state.ts:377</code>）：让 pstack 的工具能通过，只把 <code>subagent</code> 算作“会改东西”的工具。</li>
+    <li><b>计费门</b>（<code>state.ts:423</code>，在 <code>index.ts</code> 的 <code>tool_call</code> 里先于门禁执行）：检查 <code>subagent</code> 和 <code>pstack_config set</code> 的模型。</li>
+    <li><b>子 agent 进度显示</b>（<code>src/domain.ts:503</code> 的 <code>parseChild</code>）：桌面 D-L3 解析 <code>subagent</code> 的 partial result，显示<a class="term" href="glossary.html#subagent-tree">子 agent 实时树</a>。只给界面。</li>
+  </ol>
+  <p>原文的证据是 grep：<code>state.ts</code> 只在计费部分提到 pstack；pi-pstack 的 <code>SKILL.md</code> 完全没有提到 tilldone。</p>
+
+  <div class="chart-card" id="demo3">
+    <div class="chart-head"><div class="chart-title">动手看：三个接缝在哪，哪里没有接缝</div></div>
+    <div class="demo">
+      <div class="map-row">看：
+        <button class="btn" data-s="1">① 反转门禁</button><button class="btn" data-s="2">② 计费门</button><button class="btn" data-s="3">③ 子 agent 进度</button><button class="btn" data-s="none">没有接缝的地方</button><button class="btn" data-s="">全部</button>
+      </div>
+      <svg class="seam" viewBox="0 0 900 300" role="img" aria-label="TillDone 与 PStack 的接缝">
+        <defs><marker id="ar6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="currentColor"/></marker></defs>
+        <g data-part="td"><rect class="box" x="30" y="30" width="250" height="110" rx="8"/><text x="155" y="56" text-anchor="middle" style="font-weight:700">TillDone 扩展</text><text class="sm" x="155" y="80" text-anchor="middle">gate · GATED_TOOLS</text><text class="sm" x="155" y="100" text-anchor="middle">billingGate · requestedModels</text><text class="sm" x="155" y="120" text-anchor="middle">tilldone 清单 · 督促</text></g>
+        <g data-part="ps"><rect class="box" x="620" y="30" width="250" height="110" rx="8"/><text x="745" y="56" text-anchor="middle" style="font-weight:700">PStack 扩展</text><text class="sm" x="745" y="80" text-anchor="middle">pstack_todo 清单</text><text class="sm" x="745" y="100" text-anchor="middle">subagent · pstack_config</text><text class="sm" x="745" y="120" text-anchor="middle">SKILL.md · system prompt</text></g>
+        <g data-part="desk"><rect class="box" x="30" y="200" width="250" height="70" rx="8"/><text x="155" y="228" text-anchor="middle">桌面 D-L3</text><text class="sm" x="155" y="250" text-anchor="middle">parseChild · 子 agent 实时树</text></g>
+        <g data-part="child"><rect class="box" x="620" y="200" width="250" height="70" rx="8" stroke-dasharray="5 4"/><text x="745" y="228" text-anchor="middle">subagent 子进程</text><text class="sm" x="745" y="250" text-anchor="middle">partial result</text></g>
+        <g data-part="e1" style="color: var(--ink-3)"><path class="edge" d="M280 60 H620" marker-end="url(#ar6)"/><text class="sm" x="450" y="52" text-anchor="middle">① 放行 pstack_todo 等；只拦 subagent</text></g>
+        <g data-part="e2" style="color: var(--ink-3)"><path class="edge" d="M280 105 H620" marker-end="url(#ar6)"/><text class="sm" x="450" y="97" text-anchor="middle">② 查 subagent / pstack_config 的模型</text></g>
+        <g data-part="e3" style="color: var(--ink-3)"><path class="edge" d="M620 235 H280" marker-end="url(#ar6)"/><text class="sm" x="450" y="227" text-anchor="middle">③ 进度只给界面</text></g>
+        <g data-part="gap" style="color: var(--ink-3)"><path class="edge dash" d="M450 140 V185"/><text class="sm" x="450" y="170" text-anchor="middle" style="fill: var(--down)">两份清单之间：无连接</text></g>
+      </svg>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d3-out"></div></div>
+    <div class="chart-foot">点“没有接缝的地方”。两份清单之间没有任何代码连接，模型看不到它们的分工。<span class="data-note">此图依据原文 §6.3 重画，方框位置是示意。</span></div>
+  </div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>“大脑 / 手脚”只对一半</h2>
+  <p>讨论稿给过一个分工说法：</p>
+  <blockquote class="src">Tilldone 是大脑：管任务拆解和分工。PStack 是手脚：管任务的落实和执行。<cite>discussions/2026-11-01-traing-agent-tilldone-pstack-claudetraingskills.md</cite></blockquote>
+  <p>原文按代码检查后认为，这个说法只对一半。</p>
+  <div class="vs">
+    <div><h4>TillDone 不是“大脑”</h4><p>它自己不拆任务。它是<b>账本 + 闸门 + 督促</b>。拆的决定由模型在它给的时机上做出（见 <a href="L05-tilldone-split.html">L05</a>）。</p></div>
+    <div><h4>PStack 不只是“手脚”</h4><p>它带着自己的计划清单（playbook 步骤）。它还有另一种“拆”：把工作分派给子 agent。</p></div>
+  </div>
+  <div class="callout rule"><span class="ttl">原文的结论</span>TillDone 管“做什么、做完没”，用硬约束守住。PStack 管“怎么做”，只靠提示词引导。</div>
+  <p>原文还给了一个判断：“两份清单各管什么”只写在 README 一行里，模型看不到。所以现在的“有机结合”是模型每次自己摸索出来的，不是设计保证的。</p>
+  <div class="callout warn"><span class="ttl">限定语</span>这是推断。依据是 §6.3 的 grep 结果，没有对模型行为做实验。</div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>自测与速记</h2>
+  <div class="quiz" data-answer="2">
+    <div class="q">Poteto Mode 下，哪份清单驱动任务面板、门禁和督促？</div>
+    <div class="opts"><button>pstack_todo</button><button>两份都驱动</button><button>tilldone</button><button>都不驱动，靠 system prompt</button></div>
+    <div class="explain">README：“Only `tilldone` drives the panel, the gate, and the nudge.” pstack_todo 只有提示词约束。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">在 TUI 原版门禁下，Poteto 会话开头的 <code>pstack_todo set</code> 会怎样？</div>
+    <div class="opts"><button>正常通过</button><button>被拦下，因为原版只放行 tilldone 和只读工具</button><button>被计费门拦下</button><button>触发督促</button></div>
+    <div class="explain">原版不认识别的扩展加的工具。Blackjack 运行里，原版门禁拦了 pstack_todo 5 次。桌面副本把门禁反转成只拦 bash/edit/write/subagent（提交 7437421）。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">一次并行 subagent 调用：task A 显式 <code>model</code> 是 openai-codex/gpt-6.1-sol，role 是 “judgment and prose”（映射到 anthropic/…）；task B 没有 model，role 是 “swarm workers”（inherit-parent）。计费门怎样判？</div>
+    <div class="opts"><button>拒绝，因为 A 的 role 映射到 anthropic</button><button>拒绝，因为 B 会继承父模型</button><button>只拒绝 task A</button><button>放行，因为 A 的显式 model 优先于 role</button></div>
+    <div class="explain">requestedModels：某一项有显式 model 就只看它。A 只算 openai-codex；B 的 inherit-parent 不匹配 anthropic/。所以放行。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">下面哪一项<b>不是</b>原文列出的三个接缝之一？</div>
+    <div class="opts"><button>TillDone 的工具说明里写明两份清单的分工</button><button>反转的门禁</button><button>计费门</button><button>桌面 D-L3 解析子 agent 进度</button></div>
+    <div class="explain">原文：两份清单的分工只写在 README 里，模型看不到。TillDone 的工具说明没有提到 pstack_todo。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>PStack 注册</td><td>2 个命令、3 个钩子、4 个工具，全在一个 index.ts</td></tr>
+    <tr><td>两份清单</td><td>tilldone = 工作项（硬约束）；pstack_todo = 流程步骤（软约束）</td></tr>
+    <tr><td>咬合 6 步</td><td>改写首条消息 → pstack_todo set → read → tilldone start → subagent 过两道门 → done / complete，督促只看 tilldone</td></tr>
+    <tr><td>计费门</td><td>显式 model 优先；否则查 role 的整个模型池；只覆盖第一层</td></tr>
+    <tr><td>三个接缝</td><td>反转门禁、计费门、子 agent 进度显示</td></tr>
+    <tr><td>判断</td><td>“大脑 / 手脚”只对一半；“有机结合”靠模型摸索（推断）</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L07-pitfalls-review.html"><small>下一课 · L07</small>坑、开放问题与全课复盘</a>
+    <a href="L05-tilldone-split.html"><small>L05</small>TillDone 的原生拆分</a>
+    <a href="L04-context-strategies.html"><small>L04</small>两种注入策略与抗压缩</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L06-pstack-meshing.html"></nav>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§5–6（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 门禁：两个版本 ---- */
+  const GATED = ["bash", "edit", "write", "subagent"];
+  const TUI_FREE = ["tilldone", "read", "grep", "find", "ls"];
+  function gateVerdict(version, tool, tasks) {
+    const gated = version === "desk" ? GATED.includes(tool) : !TUI_FREE.includes(tool);
+    if (!gated) return { block: false, why: version === "desk" ? "不在 GATED_TOOLS 里，直接放行" : "原版白名单内，直接放行" };
+    if (tasks.length === 0) return { block: true, why: "noTasks：清单为空" };
+    if (tasks.every((t) => t.s === "done")) return { block: true, why: "allDone：全部完成" };
+    if (!tasks.some((t) => t.s === "inprogress")) return { block: true, why: "noneActive：没有进行中的任务" };
+    return { block: false, why: "有进行中的任务，放行" };
+  }
+
+  /* ---- 1. 咬合播放器 ---- */
+  const PB = ["读 Principles", "Feature 步骤：命名数据形状", "Feature 步骤：实现", "Feature 步骤：验证真实行为"];
+  // 每步：说明、若干调用 [工具, 参数文本, 对清单的影响 fn(ps, td)]
+  const STEPS = [
+    { t: "第 1 步：首条消息被改写成 /skill:poteto-mode <你的话>。pstack 的 input 钩子开启 mode；Pi 把 SKILL.md 展开进这条消息。", calls: [] },
+    { t: "第 2 步：模型按 SKILL 先调 pstack_todo set，抄入 playbook 步骤。", calls: [["pstack_todo", 'action: "set", items: [4 条 playbook 步骤]', (ps) => { ps.items = PB.map((x) => ({ x, d: false })); }]] },
+    { t: "第 3 步：模型用 read 读 playbook 和原则，然后勾掉第 1 项。read 不受门禁限制。", calls: [
+      ["read", 'path: "skills/poteto-mode/playbooks/feature.md"', () => {}],
+      ["pstack_todo", 'action: "complete", item: "读 Principles"', (ps) => { ps.items[0].d = true; }],
+    ] },
+    { t: "第 4 步：动手前，模型 tilldone add，再 start。start 的结果带 SPLIT_CUE，模型在这里决定工作项的粒度。", calls: [
+      ["tilldone", 'action: "add", texts: ["数据模型与 reducer", "接入渲染"]', (ps, td) => { td.items = [{ id: 1, x: "数据模型与 reducer", s: "idle" }, { id: 2, x: "接入渲染", s: "idle" }]; }],
+      ["tilldone", 'action: "start", id: 1', (ps, td) => { td.items[0].s = "inprogress"; }],
+      ["pstack_todo", 'action: "complete", item: "Feature 步骤：命名数据形状"', (ps) => { ps.items[1].d = true; }],
+      ["edit", 'path: "src/domain.ts"', () => {}],
+    ] },
+    { t: "第 5 步：任务进行中，模型调 subagent 做并行评审。它先过计费门，再过门禁。", calls: [
+      ["subagent", 'tasks: [{ agent: "reviewer", role: "swarm workers" }, …]', () => {}],
+      ["pstack_todo", 'action: "complete", item: "Feature 步骤：实现"', (ps) => { ps.items[2].d = true; }],
+    ] },
+    { t: "第 6 步：收尾。tilldone done 完成工作项，pstack_todo complete 勾掉验证步骤。agent_end 的督促只看 tilldone 清单。", calls: [
+      ["tilldone", 'action: "done", id: 1', (ps, td) => { td.items[0].s = "done"; }],
+      ["tilldone", 'action: "start", id: 2', (ps, td) => { td.items[1].s = "inprogress"; }],
+      ["tilldone", 'action: "done", id: 2', (ps, td) => { td.items[1].s = "done"; }],
+      ["pstack_todo", 'action: "complete", item: "Feature 步骤：验证真实行为"', (ps) => { ps.items[3].d = true; }],
+    ] },
+  ];
+  let pos = 0;
+  function run1(upto, version) {
+    const ps = { items: [] }, td = { items: [] };
+    let blocks = 0, calls = 0; const log = [];
+    for (let i = 0; i < upto; i++) {
+      for (const c of STEPS[i].calls) {
+        calls++;
+        const billing = c[0] === "subagent" || c[0] === "pstack_config" ? "计费门：role swarm workers → inherit-parent，放行" : "计费门：不检查这个工具";
+        const v = gateVerdict(version, c[0], td.items.map((t) => ({ s: t.s })));
+        const entry = { tool: c[0], args: c[1], billing, gate: v, step: i };
+        if (v.block) { blocks++; entry.retry = true; }
+        c[2](ps, td); // 被拦后模型会改顺序重试；演示里仍按最终结果更新清单
+        log.push(entry);
+      }
+    }
+    return { ps, td, blocks, calls, log };
+  }
+  function draw1() {
+    const version = CL.$("#d1-gate").value, r = run1(pos, version);
+    CL.$("#d1-pos").textContent = "第 " + pos + " / " + STEPS.length + " 步";
+    const cur = r.log.filter((e) => e.step === pos - 1);
+    CL.$("#d1-call").textContent = pos ? STEPS[pos - 1].t + (cur.length ? "\n" + cur.map((e) => "→ " + e.tool + "(" + e.args + ")").join("\n") : "\n（这一步没有工具调用）") : "点“下一步”开始。";
+    CL.$("#d1-gates").innerHTML = cur.map((e) => '<span class="pill">' + CL.esc(e.tool) + " · " + CL.esc(e.billing) + '</span><span class="pill ' + (e.gate.block ? "slow" : "fast") + '">门禁：' + (e.gate.block ? "拦下 · " : "") + CL.esc(e.gate.why) + "</span>").join("");
+    CL.$("#d1-ps").innerHTML = r.ps.items.length ? "<ol>" + r.ps.items.map((i) => '<li class="' + (i.d ? "done" : "") + '">' + (i.d ? "[done] " : "") + CL.esc(i.x) + "</li>").join("") + "</ol>" : '<div class="empty">空</div>';
+    const icon = { idle: "○", inprogress: "●", done: "✓" };
+    CL.$("#d1-td").innerHTML = r.td.items.length ? "<ol>" + r.td.items.map((t) => '<li class="' + (t.s === "done" ? "done" : t.s === "inprogress" ? "cur" : "") + '">' + icon[t.s] + " #" + t.id + " " + CL.esc(t.x) + "</li>").join("") + "</ol>" : '<div class="empty">空（门禁会拦下 bash/edit/write/subagent）</div>';
+    let msg = "到第 " + pos + " 步：共 " + r.calls + " 次工具调用，门禁拦下 " + r.blocks + " 次（" + (version === "desk" ? "桌面反转门禁" : "TUI 原版门禁") + "）。";
+    if (r.blocks) msg += "\n每次被拦，模型都要多一个来回：读拒绝理由，改顺序再试。";
+    if (pos === STEPS.length) {
+      const tdLeft = r.td.items.filter((t) => t.s !== "done").length, psLeft = r.ps.items.filter((i) => !i.d).length;
+      msg += "\nagent_end：tilldone 未完成 " + tdLeft + " 项，pstack_todo 未勾 " + psLeft + " 项 → " + (tdLeft ? "督促" : "不督促") + "。督促只看 tilldone。";
+    }
+    CL.$("#d1-out").textContent = msg;
+  }
+  CL.$("#d1-next").addEventListener("click", () => { pos = Math.min(pos + 1, STEPS.length); draw1(); });
+  CL.$("#d1-prev").addEventListener("click", () => { pos = Math.max(pos - 1, 0); draw1(); });
+  CL.$("#d1-all").addEventListener("click", () => { pos = STEPS.length; draw1(); });
+  CL.$("#d1-reset").addEventListener("click", () => { pos = 0; draw1(); });
+  CL.$("#d1-gate").addEventListener("change", draw1);
+  draw1();
+
+  /* ---- 2. 计费门游乐场（照 state.ts 的 requestedModels / billingGate） ---- */
+  const ROLES = {
+    "swarm workers": "inherit-parent",
+    "judgment and prose": "anthropic/claude-opus-5-5",
+    "arena runners": ["openai-codex/gpt-6.1-sol", "anthropic/claude-sonnet-5-5"],
+    "bug-fix": "deepseek/deepseek-v4-flash",
+  };
+  const MODELS = ["", "openai-codex/gpt-6.1-sol", "deepseek/deepseek-v4-flash", "anthropic/claude-opus-5-5"];
+  const METERED = /^\s*anthropic\//i;
+  const strings = (v) => typeof v === "string" ? [v] : Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  const record = (v) => v && typeof v === "object" ? v : {};
+  function requestedModels(toolName, input, roles) {
+    const params = record(input);
+    if (toolName === "pstack_config") return params.action === "set" ? [...strings(params.model), ...strings(params.models)] : [];
+    if (toolName !== "subagent") return [];
+    const entries = [params, ...(Array.isArray(params.tasks) ? params.tasks : []), ...(Array.isArray(params.chain) ? params.chain : [])].map(record);
+    return entries.flatMap((e) => { const ex = strings(e.model); if (ex.length) return ex; return typeof e.role === "string" ? strings(roles[e.role]) : []; });
+  }
+  const BILLING_REASON = (models) => "🚫 Refusing subagent model " + models.join(", ") + ": anthropic/* uses a metered API without funded credit. " +
+    "Omit `model` to inherit the session model, or use an openai-codex/* model such as openai-codex/gpt-6.1-sol. Do not retry with another anthropic/* model.";
+  const ents = [{ model: "", role: "swarm workers" }, { model: "", role: "bug-fix" }, { model: "", role: "" }];
+  function opt(list, sel, blank) { return list.map((v) => '<option value="' + v + '"' + (v === sel ? " selected" : "") + ">" + (v || blank) + "</option>").join(""); }
+  function drawEnts() {
+    const mode = CL.$("#d2-mode").value, n = mode === "single" || mode === "config" ? 1 : 3;
+    CL.$("#d2-ents").innerHTML = ents.slice(0, n).map((e, i) => '<div class="ent"><b>' + (mode === "single" ? "顶层" : mode === "config" ? "set" : (mode === "tasks" ? "tasks[" : "chain[") + i + "]") + "</b>" +
+      '<label class="ctrl">model <select data-i="' + i + '" data-k="model">' + opt(MODELS, e.model, "（不写）") + "</select></label>" +
+      '<label class="ctrl">role <select data-i="' + i + '" data-k="role">' + opt([""].concat(Object.keys(ROLES)), e.role, "（不写）") + "</select></label></div>").join("");
+    CL.$$("#d2-ents select").forEach((s) => s.addEventListener("change", () => { ents[+s.dataset.i][s.dataset.k] = s.value; draw2(); }));
+  }
+  function build() {
+    const mode = CL.$("#d2-mode").value;
+    const clean = (e, extra) => { const o = Object.assign({}, extra); if (e.model) o.model = e.model; if (e.role) o.role = e.role; return o; };
+    if (mode === "config") return ["pstack_config", Object.assign({ action: "set" }, clean(ents[0], {}))];
+    if (mode === "single") return ["subagent", clean(ents[0], { agent: "worker", task: "…" })];
+    const list = ents.map((e, i) => clean(e, { agent: "worker" + (i + 1), task: "…" }));
+    return ["subagent", mode === "tasks" ? { tasks: list } : { chain: list }];
+  }
+  function draw2() {
+    const [tool, input] = build();
+    CL.$("#d2-roles").textContent = "示例 models.json 的 roles（演示用例子）：\n" + JSON.stringify(ROLES, null, 1);
+    CL.$("#d2-json").textContent = tool + "(" + JSON.stringify(input) + ")";
+    const req = requestedModels(tool, input, ROLES);
+    const metered = [...new Set(req.filter((m) => METERED.test(m)))];
+    let msg = "requestedModels → [" + req.join(", ") + "]\n";
+    if (tool === "pstack_config" && !input.model) msg += "（pstack_config set 没写 model 时 pstack 自己会报错；计费门这里没有要查的模型。）\n";
+    msg += metered.length ? "判定：拦下。" + (tool === "pstack_config" ? "这个模型不会写进 models.json。" : "整次调用不启动任何子 agent。") + "\n拒绝理由（模型看到的原文）：\n" + BILLING_REASON(metered) : "判定：放行。接着由门禁检查是否有进行中的任务" + (tool === "pstack_config" ? "（pstack_config 不在 GATED_TOOLS 里，门禁也放行）" : "") + "。";
+    if (req.some((m) => m === "inherit-parent")) msg += "\ninherit-parent 表示用父会话的模型；父会话的模型在边牧启动前已经检查过。";
+    CL.$("#d2-out").textContent = msg;
+  }
+  CL.$("#d2-mode").addEventListener("change", () => { drawEnts(); draw2(); });
+  drawEnts(); draw2();
+
+  /* ---- 3. 三个接缝 ---- */
+  const SEAM = {
+    "1": [["td", "ps", "e1"], "① 反转的门禁（state.ts:377）：GATED_TOOLS = bash、edit、write、subagent。pstack_todo、pstack_config、read 都直接放行；subagent 要有进行中的任务。"],
+    "2": [["td", "ps", "e2"], "② 计费门（state.ts:423 billingGate）：在 tool_call 里先于门禁执行。检查 subagent 的显式 model、tasks/chain 的 model、role 查到的模型，以及 pstack_config set。"],
+    "3": [["desk", "child", "e3"], "③ 子 agent 进度显示（src/domain.ts:503 parseChild）：桌面 D-L3 读 subagent 的 partial result，画实时树。只给界面，不进模型上下文。"],
+    "none": [["td", "ps", "gap"], "没有接缝：tilldone 清单和 pstack_todo 清单之间没有任何代码连接。state.ts 只在计费部分提到 pstack；pi-pstack 的 SKILL.md 没有提到 tilldone。分工只写在 README 一行里。"],
+  };
+  const parts = CL.$$("#demo3 [data-part]");
+  function show3(on, label) {
+    parts.forEach((g) => { const lit = !on || on.includes(g.dataset.part); const r = g.querySelector("rect"); if (r) r.classList.toggle("hl", !!on && lit); const pth = g.querySelector("path"); if (pth) pth.classList.toggle("hl", !!on && lit); g.style.opacity = lit ? 1 : 0.25; });
+    CL.$("#d3-out").textContent = label;
+  }
+  CL.$$("#demo3 [data-s]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#demo3 [data-s]").forEach((x) => x.classList.toggle("on", x === b));
+    const s = SEAM[b.dataset.s]; if (!s) return show3(null, "三条实线是三个接缝；中间的虚线表示两份清单之间没有连接。点一个按钮看说明。");
+    show3(s[0], s[1]);
+  }));
+  show3(null, "三条实线是三个接缝；中间的虚线表示两份清单之间没有连接。点一个按钮看说明。");
+});
+</script>
+</body>
+</html>

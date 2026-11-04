@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>坑、开放问题与全课复盘 · L07</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .map-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; font-size: 13.5px; color: var(--ink-3); }
+  .pit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 10px 0; }
+  .pit-box { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; font-size: 13.5px; color: var(--ink-2); }
+  .pit-box h5 { margin: 0 0 6px; font-size: 13.5px; color: var(--brand); }
+  .pit-box ol, .pit-box ul { margin: 0; padding-left: 20px; }
+  .pit-box .fake { color: var(--down); }
+  .pit-box .done { color: var(--ink-3); text-decoration: line-through; }
+  .pit-ctrl { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 6px 0 10px; }
+  .cmap [data-c] { cursor: pointer; transition: opacity .2s; }
+  .verdict-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">六条坑一览</a></li>
+    <li><a href="#s2">动手看：坑的走查</a></li>
+    <li><a href="#s3">子 agent 的边界</a></li>
+    <li><a href="#s4">开放问题</a></li>
+    <li><a href="#s5">代码在哪</a></li>
+    <li><a href="#s6">全课复盘</a></li>
+    <li><a href="#s7">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L07 · 拆分与分工</div>
+  <h1>坑、开放问题与全课复盘</h1>
+  <p>前六课讲了边牧怎样工作。这一课讲它在哪里会出问题：哪些工作逃过了 TillDone 的约束，哪些分工没有写进提示词。最后把全课串成一张图。</p>
+  <div class="meta"><span>原文：§7–8</span><span>阅读约 20 分钟</span><span>含 2 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>说出原文列出的六条坑，以及每条的后果。</li>
+    <li>解释为什么分派给子 agent 的工作不会触发拆分提示。</li>
+    <li>区分原文的事实、推断和尚未做的建议。</li>
+    <li>按四层、上下文、拆分与分工三条线复述全课。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>六条坑一览</h2>
+  <p>先说结论：六条坑分成两类。前四条是约束的漏洞：有些工作或步骤不在 TillDone 的视野里。后两条是文档和文本的问题。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>#</th><th>坑</th><th>性质</th></tr>
+    <tr><td>1</td><td>子 agent 不受 TillDone 管</td><td>事实（命令行可证）</td></tr>
+    <tr><td>2</td><td>子进程很可能加载<a class="term" href="glossary.html#global-extensions">全局扩展</a>；计费门只覆盖第一层</td><td>前半是<b>推断</b>，没有实际运行验证；后半 README 已说明</td></tr>
+    <tr><td>3</td><td>督促不管 PStack 的流程步骤</td><td>事实（<code>agentEnd</code> 只看 tilldone 清单）</td></tr>
+    <tr><td>4</td><td>两份清单可能重复或错位</td><td>风险；最小修正<b>尚未做</b></td></tr>
+    <tr><td>5</td><td><a class="term" href="glossary.html#whitepaper-v1">白皮书</a>过时</td><td>事实；用户决定等设计固定再更新</td></tr>
+    <tr><td>6</td><td>细分请求的语言随界面变化</td><td>事实（白皮书 8.5 / R6 已记录）</td></tr>
+  </table></div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>动手看：坑的走查</h2>
+  <p>下面是一次模拟的 Poteto 会话。选一条坑，调参数，看后果出现在哪里。每条都给出原文定位和最小修正。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">走查：四个约束漏洞</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">选一条坑：
+        <span class="btn-group" id="d1-pick">
+          <button class="btn on" data-p="sub">① 子 agent 不受管</button>
+          <button class="btn" data-p="ext">② 全局扩展与嵌套</button>
+          <button class="btn" data-p="nudge">③ 督促不管流程步骤</button>
+          <button class="btn" data-p="mix">④ 两份清单错位</button>
+        </span>
+      </div>
+      <div class="pit-ctrl" id="d1-ctrl"></div>
+      <div class="pit-grid" id="d1-view"></div>
+      <div class="verdict-row" id="d1-pills"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">先看 ①：把“子 agent 内部工具调用”拉到 40。然后对比“自己做”和“分派给子 agent”两栏。再看 ③：只取消“验证”那一项的勾，看督促是否发生。<span class="data-note">简化模型：spent 规则照 <code>state.ts</code> 的 <code>toolCalled</code>（每个非 tilldone 调用 +1，每满 15 提示一次）；督促规则照 <code>agentEnd</code>。任务和步骤文本是演示用例子。② 的“大概会加载”是原文推断，没有实际运行验证。</span></div>
+  </div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>子 agent 的边界</h2>
+  <p>先说结论：TillDone 的约束只到父进程为止。子 agent 是 TillDone 的盲区。</p>
+  <ul>
+    <li>子进程命令是 <code>pi --mode json --print --no-session …</code>，里面没有 <code>-e tilldone</code>。</li>
+    <li>一次 <code>subagent</code> 调用在 <a class="term" href="glossary.html#spent">spent</a> 里只算 1 次。子 agent 内部做了多少工作，15 次提示和面板计数都看不到。</li>
+    <li>所以分派出去的大任务看起来很“便宜”，不会触发拆分提示。</li>
+  </ul>
+  <div class="callout warn"><span class="ttl">推断，未验证</span>子命令行里也没有 <code>--no-extensions</code>。原文推断：<code>~/.pi/agent/extensions</code> 里的扩展大概会进子 agent。主子进程用 <code>--no-extensions</code> 挡住它们，子 agent 却没有这道挡板。</div>
+  <p>计费门也有同样的边界。它只检查父进程发出的 <code>subagent</code> 调用。子 agent 再派的子 agent 不经过它。README 原话：</p>
+  <blockquote class="src">Subagents spawned by subagents do not load this extension, so the rule covers the first level only.<cite>apps/tilldone/README.md</cite></blockquote>
+  <div class="callout note"><span class="ttl">补充：为什么这条坑值得注意</span>L05 讲过，15 次提示用来发现太粗的任务。分派给子 agent 恰好是处理大任务的常见做法。所以最需要提醒的任务，反而最难触发提醒。这是课程作者的推论，原文没有这样表述。</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>开放问题</h2>
+  <p>原文留下三个没有解决的问题。</p>
+  <div class="grid-3">
+    <div class="kp"><div class="k">问题 1 · 分工</div><div class="v">两份清单怎样告诉模型</div><p>原文建议的最小修正：在 <code>TOOL.description</code> 里加一句，说明 tilldone 只放工作项，流程步骤放 <code>pstack_todo</code>。这一步需要改代码，<b>尚未做</b>。</p></div>
+    <div class="kp"><div class="k">问题 2 · 文档</div><div class="v">白皮书过时</div><p>白皮书 v1.0（2026-10-31）的 0.1 节和第 3 章仍写“桌面端只加载 tilldone”。pstack、反转门禁、计费门、子 agent 树都没写。用户决定<b>等设计固定后再更新</b>，避免白做。</p></div>
+    <div class="kp"><div class="k">问题 3 · 文本</div><div class="v">细分请求的语言</div><p><code>splitRequest</code> 按界面语言取中文或英文。它是一段模型可见的文本。所以界面设置会影响模型的输入。</p></div>
+  </div>
+  <div class="callout tip"><span class="ttl">读课程时的提醒</span>本课程只对提交 <code>f112eb9</code> 负责。边牧还在变化。遇到和代码不一致的地方，以源码为准。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>代码在哪</h2>
+  <p>想在边牧里动手，从下面这些文件开始。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>文件</th><th>内容</th></tr>
+    <tr><td><code>apps/tilldone/extensions/tilldone/state.ts</code></td><td>E-L3：门禁、计费门、拆分提示、督促、所有模型可见文案</td></tr>
+    <tr><td><code>apps/tilldone/extensions/tilldone/index.ts</code></td><td>E-L2：挂 <code>tool_call</code>、<code>tool_result</code>、<code>agent_end</code>、<code>input</code>、<code>session_start</code>；注册 <code>tilldone</code> 工具（串行执行）</td></tr>
+    <tr><td><code>apps/tilldone/src/domain.ts</code></td><td>D-L3：RPC 投影 <code>reduce</code>、意图 <code>planIntent</code>、Poteto 前缀、细分按钮、子 agent 树、<code>toViewModel</code></td></tr>
+    <tr><td><code>apps/tilldone/src/config.ts</code></td><td>拼子进程命令行；处理 <code>TILLDONE_PSTACK</code>；拒绝 <code>anthropic/*</code></td></tr>
+    <tr><td><code>apps/tilldone/src/desk.ts</code></td><td>D-L2：唯一可变状态，<code>this.state = reduce(this.state, record)</code></td></tr>
+    <tr><td><code>.pi/npm/node_modules/pi-pstack/extensions/pstack/index.ts</code></td><td>pstack：<code>pstack_todo</code>、<code>subagent</code>、system prompt 注入、bash 确认</td></tr>
+    <tr><td><code>.pi/npm/node_modules/pi-pstack/skills/poteto-mode/SKILL.md</code></td><td>Poteto Mode 技能全文</td></tr>
+    <tr><td><code>apps/tilldone/README.md</code></td><td>运行、配置、门禁、pstack、RPC 细节</td></tr>
+    <tr><td><code>apps/tilldone/docs/tilldone-desk-whitepaper.md</code></td><td>白皮书 v1.0（不含 pstack）</td></tr>
+    <tr><td><code>discussions/2026-10-28-four-layer-harness.md</code></td><td>四层定义与 L3 原则</td></tr>
+  </table></div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>全课复盘</h2>
+  <p>全课沿三条线展开：四层、上下文、拆分与分工。下面的概念图把每个关键概念连到讲它的那一课。点一个概念，看一句话复述和课程链接。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head"><div class="chart-title">概念地图：点概念，跳到讲它的课</div></div>
+    <div class="demo">
+      <div class="map-row">按主线看：
+        <button class="btn" data-line="arch">四层</button><button class="btn" data-line="ctx">上下文</button><button class="btn" data-line="split">拆分与分工</button><button class="btn" data-line="pit">坑</button><button class="btn" data-line="">全部</button>
+      </div>
+      <svg class="cmap" viewBox="0 0 900 340" role="img" aria-label="全课概念地图"></svg>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div><div id="d2-link" style="margin:0 0 10px"></div></div>
+    <div class="chart-foot">每个方框是一个概念，方框右上角是讲它的课号。按主线按钮看一条线上的概念。<span class="data-note">概念的归类是课程作者的整理，不是原文结构。</span></div>
+  </div>
+
+  <div class="callout rule"><span class="ttl">一句话复盘</span>边牧用两套四层把规矩和显示分开；TillDone 用工具说明、工具结果和督促消息管上下文，PStack 改 system prompt 并用子 agent 隔离；TillDone 管“做什么、做完没”，PStack 管“怎么做”，两者只有三个接缝。</div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>自测与速记</h2>
+  <div class="quiz" data-answer="1">
+    <div class="q">模型把一个大任务分派给子 agent，子 agent 内部用了 40 次工具调用。父进程里这个任务的 spent 增加多少？</div>
+    <div class="opts"><button>40</button><button>1</button><button>0</button><button>15</button></div>
+    <div class="explain">一次 subagent 调用在 spent 里只算 1 次。子进程不加载 TillDone，内部调用看不到。所以不会触发 15 次拆分提示。</div>
+  </div>
+  <div class="quiz" data-answer="2">
+    <div class="q">tilldone 清单全部完成，但 pstack_todo 里“验证真实行为”没勾。run 结束时会怎样？</div>
+    <div class="opts"><button>督促一次，提醒验证</button><button>门禁拦下下一次调用</button><button>不督促，模型可以停</button><button>计费门拦下</button></div>
+    <div class="explain">agentEnd 只看 tilldone 清单。PStack 的流程步骤没有督促，也没有门禁。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">“子 agent 大概会加载全局扩展”这条，原文给的是什么性质的结论？</div>
+    <div class="opts"><button>测试验证过的事实</button><button>README 写明的规则</button><button>pstack 文档的说明</button><button>根据命令行缺少 --no-extensions 做出的推断，没有实际运行验证</button></div>
+    <div class="explain">原文 §7 第 2 条明确标为推断。依据是 pstack/index.ts:145 的子进程命令行。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">为什么白皮书现在不更新？</div>
+    <div class="opts"><button>设计还在变；用户决定等设计固定后再更新，避免白做</button><button>白皮书内容是对的</button><button>白皮书已经删除</button><button>pstack 不属于边牧</button></div>
+    <div class="explain">白皮书 v1.0 不含 pstack 部分。用户 2026-11-03 决定等设计彻底固定再更新。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>子 agent</td><td>不加载 TillDone；spent 只 +1；拆分提示看不到</td></tr>
+    <tr><td>全局扩展</td><td>子命令行缺 <code>--no-extensions</code>，大概会加载（推断）</td></tr>
+    <tr><td>计费门</td><td>只覆盖第一层子 agent</td></tr>
+    <tr><td>督促</td><td>只看 tilldone 清单，不管 pstack_todo</td></tr>
+    <tr><td>两份清单</td><td>分工只在 README；最小修正是改 TOOL.description（尚未做）</td></tr>
+    <tr><td>白皮书</td><td>v1.0 过时；等设计固定再更新</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L01-overview.html"><small>从头复习 · L01</small>边牧全景：羊、边牧与双循环</a>
+    <a href="L05-tilldone-split.html"><small>L05</small>TillDone 的原生拆分</a>
+    <a href="L06-pstack-meshing.html"><small>上一课 · L06</small>PStack 与 TillDone 的咬合</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L07-pitfalls-review.html"></nav>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§7–8（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容、概念地图和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 坑的走查 ---- */
+  const HINT = 15;
+  const state = { inner: 40, own: 5, verify: false, others: true, tdDone: true, mixed: true, nested: true };
+  let pick = "sub";
+  function spentRun(calls) { let spent = 0, hints = 0; for (let i = 0; i < calls; i++) { spent++; if (spent % HINT === 0) hints++; } return { spent, hints }; }
+  const CTRL = {
+    sub: () => '<label class="ctrl">子 agent 内部工具调用 = <b>' + state.inner + '</b> <input type="range" min="0" max="80" value="' + state.inner + '" data-k="inner"></label>' +
+      '<label class="ctrl">父进程自己的其他调用 = <b>' + state.own + '</b> <input type="range" min="0" max="20" value="' + state.own + '" data-k="own"></label>',
+    ext: () => '<label class="ctrl"><input type="checkbox" data-k="nested"' + (state.nested ? " checked" : "") + "> 子 agent 再派一层子 agent，并指定 anthropic/… 模型</label>",
+    nudge: () => '<label class="ctrl"><input type="checkbox" data-k="tdDone"' + (state.tdDone ? " checked" : "") + '> tilldone 全部 done</label>' +
+      '<label class="ctrl"><input type="checkbox" data-k="others"' + (state.others ? " checked" : "") + '> pstack_todo 前 3 项已勾</label>' +
+      '<label class="ctrl"><input type="checkbox" data-k="verify"' + (state.verify ? " checked" : "") + "> pstack_todo “验证真实行为”已勾</label>",
+    mix: () => '<label class="ctrl"><input type="checkbox" data-k="mixed"' + (state.mixed ? " checked" : "") + "> 模型把 playbook 步骤也抄进了 tilldone</label>",
+  };
+  function box(title, body) { return '<div class="pit-box"><h5>' + title + "</h5>" + body + "</div>"; }
+  function pills(list) { return list.map((p) => '<span class="pill ' + (p[1] || "") + '">' + CL.esc(p[0]) + "</span>").join(""); }
+  const VIEW = {
+    sub() {
+      const own = spentRun(state.own + state.inner), del = spentRun(state.own + 1);
+      return {
+        html: box("自己做（父进程里调用）", "<ul><li>spent = " + own.spent + "</li><li>15 次拆分提示 = " + own.hints + " 次</li><li>面板上本任务工具调用 = " + own.spent + "</li></ul>") +
+              box("分派给子 agent", "<ul><li>spent = " + del.spent + "（subagent 只算 1）</li><li>15 次拆分提示 = " + del.hints + " 次</li><li>子 agent 内部 " + state.inner + " 次调用：TillDone 看不到</li></ul>"),
+        pills: [["同样的工作量：" + (state.own + state.inner) + " 次调用", ""], [own.hints > del.hints ? "分派后少了 " + (own.hints - del.hints) + " 次拆分提示" : "两种做法提示次数相同", own.hints > del.hints ? "slow" : "fast"]],
+        out: "后果：工作量相同，自己做时 spent = " + own.spent + "，提示 " + own.hints + " 次；分派后 spent = " + del.spent + "，提示 " + del.hints + " 次。\n原文定位：§7 第 1 条。子进程不加载 tilldone；一次 subagent 调用在 spent 里只算 1 次。\n最小修正：原文没有给出。",
+      };
+    },
+    ext() {
+      return {
+        html: box("父进程：pi --mode rpc", "<ul><li><code>--no-extensions</code>：挡住全局扩展</li><li>加载 tilldone（门禁、计费门）</li><li>加载 pstack</li></ul>") +
+              box("第一层子 agent：pi --mode json --print --no-session", "<ul><li>没有 <code>--no-extensions</code> → 全局扩展<b>大概会加载</b>（推断）</li><li>不加载 tilldone</li><li>它发出的调用：<b>不经过</b>计费门</li></ul>") +
+              box("第二层子 agent", state.nested ? '<ul><li class="fake">指定 anthropic/… → 没有计费门拦它</li><li>会走 Anthropic API 按量计费</li></ul>' : "<ul><li>（未模拟嵌套分派）</li></ul>"),
+        pills: [["父进程的 subagent 调用：经过计费门", "fast"], [state.nested ? "子 agent 再派：不经过计费门" : "没有嵌套分派", state.nested ? "slow" : ""]],
+        out: "后果：计费门只覆盖第一层。" + (state.nested ? "嵌套的 anthropic/… 调用不会被拦。" : "") + "全局扩展是否进入子 agent，原文只是推断，没有实际运行验证。\n原文定位：§7 第 2 条；README “the rule covers the first level only”。\n最小修正：原文没有给出。",
+      };
+    },
+    nudge() {
+      const ps = ["读 Principles", "命名数据形状", "实现", "验证真实行为"];
+      const done = [state.others, state.others, state.others, state.verify];
+      const td = state.tdDone ? 0 : 1;
+      const nudge = td > 0;
+      const left = done.filter((d) => !d).length;
+      return {
+        html: box("tilldone（agentEnd 看这份）", "<ol><li" + (state.tdDone ? ' class="done"' : "") + ">#1 数据模型与 reducer</li><li" + (state.tdDone ? ' class="done"' : "") + ">#2 接入渲染</li></ol>") +
+              box("pstack_todo（agentEnd 不看）", "<ol>" + ps.map((x, i) => "<li" + (done[i] ? ' class="done"' : "") + ">" + x + "</li>").join("") + "</ol>"),
+        pills: [["agent_end → " + (nudge ? "督促" : "不督促"), nudge ? "hot" : ""], [!nudge && left ? "有 " + left + " 个流程步骤没勾，模型照样可以停" : "无漏洞", !nudge && left ? "slow" : "fast"]],
+        out: "后果：tilldone 未完成 " + (state.tdDone ? 0 : 2) + " 项，pstack_todo 未勾 " + left + " 项 → " + (nudge ? "督促一次" : "不督促") + "。\n原文定位：§7 第 3 条。agentEnd 只看 tilldone 清单。\n最小修正：原文没有给出。",
+      };
+    },
+    mix() {
+      const real = ["数据模型与 reducer", "接入渲染"], fake = ["读 Principles", "命名数据形状", "验证真实行为"];
+      const list = state.mixed ? fake.slice(0, 2).concat(real, fake.slice(2)) : real;
+      return {
+        html: box("任务面板（tilldone）", "<ol>" + list.map((x) => "<li" + (fake.includes(x) ? ' class="fake"' : "") + ">" + x + (fake.includes(x) ? "（伪任务）" : "") + "</li>").join("") + "</ol>") +
+              box("pstack_todo", "<ol>" + ["读 Principles", "命名数据形状", "实现", "验证真实行为"].map((x) => "<li>" + x + "</li>").join("") + "</ol>"),
+        pills: [[state.mixed ? "面板上 " + fake.length + " 个伪任务 / " + list.length + " 项" : "面板只有工作项", state.mixed ? "slow" : "fast"]],
+        out: (state.mixed ? "后果：面板出现“读原则”这类伪任务。牧羊人看到的进度不再等于工作进度。" : "后果：分工正确时，面板只显示工作项。") +
+          "\n原文定位：§7 第 4 条。也可能反过来：工作项被写进 pstack_todo，逃过门禁和督促。\n最小修正（原文建议，尚未做）：在 TOOL.description 里加一句，说明 tilldone 只放工作项，流程步骤放 pstack_todo。",
+      };
+    },
+  };
+  function drawCtrl() {
+    CL.$("#d1-ctrl").innerHTML = CTRL[pick]();
+    CL.$$("#d1-ctrl input").forEach((inp) => inp.addEventListener("input", () => {
+      state[inp.dataset.k] = inp.type === "checkbox" ? inp.checked : +inp.value;
+      if (inp.type === "range") inp.parentElement.querySelector("b").textContent = inp.value;
+      draw1();
+    }));
+  }
+  function draw1() {
+    const v = VIEW[pick]();
+    CL.$("#d1-view").innerHTML = v.html;
+    CL.$("#d1-pills").innerHTML = pills(v.pills);
+    CL.$("#d1-out").textContent = v.out;
+  }
+  CL.$$("#d1-pick [data-p]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d1-pick [data-p]").forEach((x) => x.classList.toggle("on", x === b)); pick = b.dataset.p; drawCtrl(); draw1();
+  }));
+  drawCtrl(); draw1();
+
+  /* ---- 2. 概念地图 ---- */
+  const C = [
+    ["arch", "进程全景", "L01", "L01-overview.html#s3", "Electron 主进程驱动 pi --mode rpc 子进程；subagent 子进程不加载 TillDone。"],
+    ["arch", "双循环与 agent_settled", "L01", "L01-overview.html#s4", "settle 外循环套 run 内循环；督促让外循环多转一圈，所以只认 agent_settled。"],
+    ["arch", "两套四层", "L02", "L02-two-four-layers.html#s1", "扩展四层和桌面四层只在 D-L3 → E-L3 一处相接；任务格式只定义一次。"],
+    ["arch", "谁是权威", "L02", "L02-two-four-layers.html#s1", "清单的权威在扩展里；桌面端只从 tilldone 的 tool_execution_end 取快照。"],
+    ["ctx", "三个时机", "L03", "L03-what-enters-context.html#s1", "事前工具说明、事中门禁理由和拆分提示、事后督促消息。"],
+    ["ctx", "错误即提示词", "L03", "L03-what-enters-context.html#s1", "门禁在越界那一刻用工具错误给出下一步。"],
+    ["ctx", "两种注入策略", "L04", "L04-context-strategies.html#s1", "TillDone 从不改 system prompt；PStack 每次请求追加一段。"],
+    ["ctx", "上下文隔离与抗压缩", "L04", "L04-context-strategies.html#s1", "子 agent 只回传结论；两者都把状态放在会话文件里。"],
+    ["split", "split 与三个触发点", "L05", "L05-tilldone-split.html#s1", "TillDone 只给时机和账本；工具说明、SPLIT_CUE、每 15 次提示。"],
+    ["split", "细分按钮", "L05", "L05-tilldone-split.html#s1", "牧羊人指出任务，有上下文的模型决定怎么拆。"],
+    ["split", "两份清单", "L06", "L06-pstack-meshing.html#s2", "tilldone 放工作项（硬），pstack_todo 放流程步骤（软）。"],
+    ["split", "三个接缝", "L06", "L06-pstack-meshing.html#s5", "反转门禁、计费门、子 agent 进度显示；其余互不认识。"],
+    ["pit", "子 agent 盲区", "L07", "L07-pitfalls-review.html#s3", "spent 只 +1；计费门只覆盖第一层；全局扩展大概会加载（推断）。"],
+    ["pit", "开放问题", "L07", "L07-pitfalls-review.html#s4", "分工未写进提示词；白皮书等设计固定再更新；splitRequest 语言耦合。"],
+  ];
+  const LINES = { arch: "四层", ctx: "上下文", split: "拆分与分工", pit: "坑" };
+  const COLS = { arch: 20, ctx: 245, split: 470, pit: 695 };
+  const svg = CL.$("#demo2 svg");
+  let h = "";
+  for (const k of Object.keys(LINES)) h += '<text x="' + (COLS[k] + 92) + '" y="24" text-anchor="middle" style="font-weight:700">' + LINES[k] + "</text>";
+  const row = { arch: 0, ctx: 0, split: 0, pit: 0 };
+  C.forEach((c, i) => {
+    const x = COLS[c[0]], y = 40 + row[c[0]]++ * 72;
+    h += '<g data-c="' + i + '" data-line="' + c[0] + '"><rect class="box" x="' + x + '" y="' + y + '" width="185" height="58" rx="8"/><text x="' + (x + 92) + '" y="' + (y + 34) + '" text-anchor="middle">' + c[1] + '</text><text class="sm" x="' + (x + 178) + '" y="' + (y + 15) + '" text-anchor="end">' + c[2] + "</text></g>";
+  });
+  svg.innerHTML = h;
+  const gs = CL.$$("#demo2 [data-c]");
+  function show2(filter, label, link) {
+    gs.forEach((g) => { const on = filter(g); g.querySelector("rect").classList.toggle("hl", on && filter !== ALL); g.style.opacity = on ? 1 : 0.25; });
+    CL.$("#d2-out").textContent = label;
+    CL.$("#d2-link").innerHTML = link || "";
+  }
+  const ALL = () => true;
+  gs.forEach((g) => g.addEventListener("click", () => {
+    const c = C[+g.dataset.c];
+    show2((x) => x === g, c[1] + "（" + c[2] + "）\n" + c[4], '<a class="btn" href="' + c[3] + '">去 ' + c[2] + " 看这一节 →</a>");
+  }));
+  CL.$$("#demo2 [data-line]").forEach((b) => { if (b.tagName !== "BUTTON") return; b.addEventListener("click", () => {
+    CL.$$("#demo2 button[data-line]").forEach((x) => x.classList.toggle("on", x === b));
+    const l = b.dataset.line;
+    if (!l) return show2(ALL, "全课 14 个关键概念，分在 4 条主线上。点一个方框看复述。");
+    const items = C.filter((c) => c[0] === l);
+    show2((g) => g.dataset.line === l, LINES[l] + "：\n" + items.map((c) => "· " + c[1] + "（" + c[2] + "）：" + c[4]).join("\n"));
+  }); });
+  show2(ALL, "全课 14 个关键概念，分在 4 条主线上。点一个方框看复述。");
+});
+</script>
+</body>
+</html>

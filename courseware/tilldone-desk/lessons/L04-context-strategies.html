@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>两种注入策略与抗压缩 · L04</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .ctrl-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 10px; font-size: 13.5px; color: var(--ink-3); }
+  .rule-tbl td.ok { color: var(--up); font-weight: 600; white-space: nowrap; }
+  .rule-tbl td.risk { color: var(--note-bd); font-weight: 600; white-space: nowrap; }
+  .rule-tbl td.lost { color: var(--down); font-weight: 600; white-space: nowrap; }
+  .rule-tbl td.why { font-size: 13px; color: var(--ink-2); }
+  .cols3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  .cols3 > div { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--surface); font-size: 13.5px; }
+  .cols3 h5 { margin: 0 0 6px; font-size: 13.5px; color: var(--brand); }
+  .cols3 ul { margin: 0; padding-left: 18px; }
+  .cols3 li.gone { text-decoration: line-through; color: var(--ink-3); }
+  .cols3 li.sum { color: var(--note-bd); }
+  .cols3 li.reset { color: var(--down); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">两种策略，一句话</a></li>
+    <li><a href="#s2">TillDone：不碰 system prompt</a></li>
+    <li><a href="#s3">PStack：每次追加一段</a></li>
+    <li><a href="#s4">动手看：外部变化时谁还到得了模型</a></li>
+    <li><a href="#s5">subagent：上下文隔离</a></li>
+    <li><a href="#s6">动手看：父上下文涨多少</a></li>
+    <li><a href="#s7">抗压缩：状态不放在对话里</a></li>
+    <li><a href="#s8">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L04 · 上下文管理</div>
+  <h1>两种注入策略与抗压缩</h1>
+  <p>TillDone 和 PStack 都要把话说给模型听，但走的路不同。这一课比较两条路，再看 subagent 怎样隔离上下文，以及状态怎样扛住压缩。</p>
+  <div class="meta"><span>原文：§3.3、§3.5</span><span>阅读约 18 分钟</span><span>含 3 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>说出 TillDone 用哪三条通道把规矩送进上下文，以及为什么它不改 system prompt。</li>
+    <li>说出 PStack 的两处注入：<a class="term" href="glossary.html#system-prompt-injection">system prompt 注入</a>和首条消息里展开的 SKILL.md。</li>
+    <li>解释 <a class="term" href="glossary.html#subagent">subagent</a> 怎样做到<a class="term" href="glossary.html#context-isolation">上下文隔离</a>，以及它的代价。</li>
+    <li>说出清单、pstack_todo、Poteto 开关各从哪里恢复，哪些状态不持久化。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>两种策略，一句话</h2>
+  <p>先说结论。两个扩展选了相反的注入策略。</p>
+  <div class="vs">
+    <div><h4>TillDone</h4><p><span class="good">从不改 system prompt</span>。规矩全部通过“工具说明 + 工具结果 + 自定义消息”送进去。</p></div>
+    <div><h4>PStack</h4><p><span class="bad">每次请求都改 system prompt</span>。它还在首条消息里展开整份技能。</p></div>
+  </div>
+  <blockquote class="src">TillDone 从不改 system prompt。规矩全部通过“工具说明 + 工具结果 + 自定义消息”送进去。所以它对 Pi 升级和别的扩展改 system prompt 都不敏感。<cite>§3.3</cite></blockquote>
+  <p>两条路各有用处。TillDone 的规矩只在触发它的时刻出现。PStack 的工作方式要贯穿整个会话，所以它占据每次请求的开头。</p>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>TillDone：不碰 system prompt</h2>
+  <p>TillDone 没有挂 <code>before_agent_start</code>。它只用 Pi 本来就会送给模型的三种东西。</p>
+  <div class="diagram">
+    <svg viewBox="0 0 860 200" role="img" aria-label="TillDone 的三条通道">
+      <defs><marker id="ar4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="currentColor"/></marker></defs>
+      <g style="color: var(--ink-3)">
+        <path class="edge" d="M210 40 H600" marker-end="url(#ar4a)"/>
+        <path class="edge" d="M210 100 H600" marker-end="url(#ar4a)"/>
+        <path class="edge" d="M210 160 H600" marker-end="url(#ar4a)"/>
+      </g>
+      <rect class="box" x="20" y="15" width="190" height="170" rx="8"/>
+      <text x="115" y="90" text-anchor="middle" style="font-weight:700">TillDone</text>
+      <text class="sm" x="115" y="110" text-anchor="middle">state.ts 定义全部文案</text>
+      <text class="sm" x="405" y="32" text-anchor="middle">① 工具声明：TOOL.description（每次请求）</text>
+      <text class="sm" x="405" y="92" text-anchor="middle">② 工具结果 / 工具错误：清单、门禁理由、拆分提示</text>
+      <text class="sm" x="405" y="152" text-anchor="middle">③ 自定义消息：tilldone-nudge（run 结束时）</text>
+      <rect class="box hl" x="605" y="15" width="235" height="170" rx="8"/>
+      <text x="722" y="80" text-anchor="middle" style="font-weight:700">模型的上下文</text>
+      <text class="sm" x="722" y="102" text-anchor="middle">system prompt：TillDone 不写</text>
+      <text class="sm" x="722" y="122" text-anchor="middle">tools / messages：TillDone 写</text>
+    </svg>
+    <div class="cap">三条通道都不经过 system prompt。依据原文 §3.1 与 §3.3 重画。</div>
+  </div>
+  <p>这样做有两个好处。</p>
+  <ul>
+    <li>规矩跟着工具走。只要 <code>tilldone</code> 工具还注册着，工具说明就在每次请求里。</li>
+    <li>别人改 system prompt 碰不到它。Pi 升级换默认提示词，或者别的扩展改写提示词，TillDone 的规矩都照样到达。</li>
+  </ul>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>PStack：每次追加一段</h2>
+  <p>PStack 有两处注入。一处每次都在，一处只发生一次。</p>
+  <ol class="steps">
+    <li><b>system prompt 追加</b>。Poteto Mode 开启后，<code>before_agent_start</code> 钩子在每次请求的 system prompt 末尾加一段说明（<code>pstack/index.ts:272-276</code>）。</li>
+    <li><b>首条消息展开技能</b>。首条消息是 <code>/skill:poteto-mode …</code>。Pi 把整份 <code>poteto-mode/SKILL.md</code> 展开进这条消息。之后它留在历史里，不再重复发送。</li>
+  </ol>
+  <blockquote class="src">Pstack Poteto Mode is enabled for this session. Follow its persisted workflow: use pstack_todo for non-trivial work, select and read the matching playbook, delegate through the subagent tool when delegation helps, verify real behavior, and name only principles that changed a decision.<cite>§3.1，pstack/index.ts:272-276</cite></blockquote>
+  <p>源码里，这段说明后面还跟着 SKILL.md 的完整路径。模型忘了细节时，可以用 <code>read</code> 重读技能文件。</p>
+  <div class="callout note"><span class="ttl">补充：追加，而不是替换</span>源码写的是 <code>`${event.systemPrompt}\n\n…`</code>。它在已有提示词后面追加，不会丢掉 Pi 的默认提示词。这一点读源码可以确认。</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>动手看：外部变化时谁还到得了模型</h2>
+  <p>下面的表列出两个扩展送给模型的内容。勾选一种外部变化，看每一项还能不能到达模型，靠什么到达。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">对比：三种外部变化下，规矩和说明的到达情况</div>
+    </div>
+    <div class="demo">
+      <div class="ctrl-row">
+        <label class="ctrl"><input type="checkbox" id="d1-up"> Pi 升级，换了默认 system prompt</label>
+        <label class="ctrl"><input type="checkbox" id="d1-ext"> 另一个扩展整段替换 system prompt</label>
+        <label class="ctrl"><input type="checkbox" id="d1-cmp"> 对话被压缩</label>
+      </div>
+      <div class="tbl-wrap"><table class="tbl rule-tbl" id="d1-tbl"></table></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">先只勾“另一个扩展整段替换 system prompt”。TillDone 的五项都不受影响，PStack 的说明段落有风险。再只勾“对话被压缩”。这次两边都有项目变成“有风险”。其中多数能用工具拿回。<br><span class="data-note">简化模型。标“推断”的判断来自读源码，没有实际运行验证。边牧用 <code>--no-extensions</code> 启动，只加载 TillDone 和 PStack，所以“另一个扩展”在边牧里目前不会出现；这一项用来说明策略差异。</span></div>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>subagent：上下文隔离</h2>
+  <p>先说结论：<code>subagent</code> 让子 agent 在自己的进程里干活，父上下文只收到结论。原文把它归为 <a class="term" href="glossary.html#delegation">Delegation</a>。</p>
+  <blockquote class="src"><code>subagent</code> 本身是上下文隔离：子进程带 <code>--no-session</code>，完整过程留在子进程里，父上下文只拿结论。这是 Delegation。<cite>§3.3</cite></blockquote>
+  <p>源码里有三个细节决定了父上下文收到多少。</p>
+  <ul>
+    <li>工具结果的 <code>content</code> 只放结论文本。子 agent 的完整消息放在 <code>details.results</code> 里，见 <a class="term" href="glossary.html#content-vs-details">content 与 details</a>。<code>details</code> 不进模型上下文。</li>
+    <li>并行模式下，每个子 agent 的结果截断到 50 KB（<code>MAX_MODEL_OUTPUT_BYTES = 50 * 1024</code>）。</li>
+    <li>并行模式最多 8 个任务（<code>MAX_PARALLEL_TASKS = 8</code>），同时最多跑 4 个（<code>MAX_CONCURRENCY = 4</code>）。</li>
+  </ul>
+  <p>桌面端的<a class="term" href="glossary.html#subagent-tree">子 agent 实时树</a>读的就是 <code>details.results</code>。所以你在界面上看到的过程，模型看不到。</p>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>动手看：父上下文涨多少</h2>
+  <p>同一批工作，可以自己内联做，也可以分派给 subagent。拖动滑块，比较父上下文的增长和总花费。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">模拟：内联做 vs 分派 subagent，父上下文的增长</div>
+      <label class="ctrl">子任务数 = <b id="d2-kv">4</b> <input id="d2-k" type="range" min="1" max="8" value="4"></label>
+      <label class="ctrl">每个子任务的工具调用 = <b id="d2-nv">20</b> <input id="d2-n" type="range" min="2" max="60" value="20"></label>
+      <label class="ctrl">每个工具结果 = <b id="d2-tv">800</b> token <input id="d2-t" type="range" min="100" max="3000" step="100" value="800"></label>
+      <label class="ctrl">子 agent 回传结论 = <b id="d2-sv">500</b> token <input id="d2-s" type="range" min="100" max="3000" step="100" value="500"></label>
+    </div>
+    <div class="demo" id="d2-chart"></div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">把“每个工具结果”往大拖。内联做时父上下文跟着线性涨，分派时父上下文几乎不动。再看“分派：总新增 token”一行：分派并不省总 token。每个子进程有自己的上下文和固定开销。隔离买到的是父上下文的干净，不是更低的总成本。<br><span class="data-note">简化模型，数字是假设，不是原文结论。假设：每次工具调用的参数 80 token；分派时每个子任务的任务说明 200 token；每个子进程固定开销 3000 token（system prompt 与 agent 提示）；50 KB 截断按约 12,800 token 计。只计入新增上下文，不计模型的累计重复读取。</span></div>
+  </div>
+  <div class="callout warn"><span class="ttl">代价</span>子 agent 内部做了什么，父 agent 只能从结论里知道。TillDone 也看不见它：一次 <code>subagent</code> 调用在 <a class="term" href="glossary.html#spent">spent</a> 里只算 1 次。L05 和 L07 会讲这个盲区。</div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>抗压缩：状态不放在对话里</h2>
+  <p>先说结论：两个扩展都不依赖对话记忆。<a class="term" href="glossary.html#compaction">压缩</a>只改模型看到的历史，碰不到扩展内存和会话文件。</p>
+  <blockquote class="src">两者都把状态放在会话文件里，不依赖对话记忆。<cite>§3.5</cite></blockquote>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>状态</th><th>运行中的权威</th><th>重启后从哪恢复</th></tr>
+    <tr><td>TillDone 清单</td><td>扩展内存 <code>model.list</code></td><td>会话分支里最后一个有效的 tilldone <code>details</code>（<code>state.ts:181</code> <code>restore</code>，经 <code>parseDetails</code> 校验）</td></tr>
+    <tr><td><code>pstack_todo</code> 清单</td><td>扩展内存 <code>todos</code></td><td>custom entry <code>pstack-todo</code>（<code>pstack/index.ts:250-262</code>）</td></tr>
+    <tr><td>Poteto 开关</td><td>扩展内存 <code>potetoMode</code></td><td>custom entry <code>pstack-mode</code></td></tr>
+    <tr><td><code>spent</code>、<code>nudged</code></td><td>扩展内存</td><td>不持久化，重启后归零</td></tr>
+  </table></div>
+  <p>TillDone 在 <code>session_start</code> 和 <code>session_tree</code> 时恢复。<code>parseDetails</code>（<code>state.ts:168</code>）把读到的快照当不可信数据，逐字段校验。</p>
+
+  <div class="chart-card" id="demo3">
+    <div class="chart-head">
+      <div class="chart-title">逐步看：压缩与重启时，三处状态各变成什么</div>
+    </div>
+    <div class="demo">
+      <div class="ctrl-row">
+        <button class="btn" id="d3-cmp">压缩</button>
+        <button class="btn" id="d3-rst">重启并恢复会话</button>
+        <button class="btn" id="d3-reset">重来</button>
+      </div>
+      <div class="cols3" id="d3-cols"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d3-out"></div></div>
+    <div class="chart-foot">先点“压缩”：模型上下文里的早期消息变成摘要，扩展内存和会话文件不变。再点“重启并恢复会话”：内存从会话文件重建，spent 和 nudged 归零。<br><span class="data-note">简化模型：会话内容是演示用例子。“压缩后 SKILL.md 全文可能变成摘要”是推断，没有实际运行验证。</span></div>
+  </div>
+  <div class="callout note"><span class="ttl">补充：压缩后怎样拿回全貌</span>清单的权威在扩展内存里。压缩后，模型调一次 <code>tilldone list</code> 或 <code>pstack_todo get</code>，就能拿回完整清单。这一条来自白皮书 8.4 节对 TillDone 的描述；PStack 部分按源码推断。</div>
+</section>
+
+<!-- ============ 8 ============ -->
+<section class="lesson-sec" id="s8">
+  <h2><span class="num">08</span>自测与速记</h2>
+  <div class="quiz" data-answer="2">
+    <div class="q">TillDone 不用下面哪条通道把规矩送给模型？</div>
+    <div class="opts"><button>工具声明里的工具说明</button><button>工具结果和工具错误</button><button>before_agent_start 改写 system prompt</button><button>tilldone-nudge 自定义消息</button></div>
+    <div class="explain">原文 §3.3：TillDone 从不改 system prompt。它只用工具说明、工具结果和自定义消息。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">PStack 的 Poteto Mode 说明多久注入一次？</div>
+    <div class="opts"><button>只在首条消息里一次</button><button>开启后每次请求都追加到 system prompt</button><button>每次调用 pstack_todo 时</button><button>只在压缩之后</button></div>
+    <div class="explain"><code>before_agent_start</code> 在每次请求时追加这段说明。首条消息里展开的是另一样东西：整份 SKILL.md，只发一次。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">subagent 跑完后，父 agent 的上下文里有什么？</div>
+    <div class="opts"><button>子 agent 的全部消息</button><button>子 agent 的全部工具结果</button><button>什么都没有</button><button>子 agent 的结论文本（并行时每个截断到 50 KB）</button></div>
+    <div class="explain">结论放在工具结果的 content 里。完整消息放在 details.results 里，只给界面和会话文件，不进模型上下文。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">重启并恢复会话后，下面哪个状态会归零？</div>
+    <div class="opts"><button>spent</button><button>TillDone 清单</button><button>pstack_todo 清单</button><button>Poteto 开关</button></div>
+    <div class="explain">spent 和 nudged 不持久化。清单从 details 快照恢复，pstack_todo 和 Poteto 开关从 custom entry 恢复。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>TillDone 策略</td><td>不碰 system prompt；工具说明 + 工具结果 + 自定义消息</td></tr>
+    <tr><td>PStack 策略</td><td>每次请求追加 system prompt；首条消息展开 SKILL.md</td></tr>
+    <tr><td>subagent 隔离</td><td><code>--no-session</code> 子进程；content 只放结论；并行 ≤ 8、并发 4、单个 ≤ 50 KB</td></tr>
+    <tr><td>隔离的代价</td><td>不省总 token；父 agent 和 TillDone 看不见子 agent 内部</td></tr>
+    <tr><td>抗压缩</td><td>清单 ← details 快照；pstack_todo、Poteto ← custom entry；spent、nudged 不持久化</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L03-what-enters-context.html"><small>上一课 · L03</small>什么进模型的上下文</a>
+    <a href="L05-tilldone-split.html"><small>下一课 · L05</small>TillDone 的原生拆分</a>
+    <a href="L07-pitfalls-review.html"><small>L07</small>坑、开放问题与全课复盘</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L04-context-strategies.html"></nav>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§3.3、§3.5（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 外部变化下的到达情况 ---- */
+  // 每项：[扩展, 内容, 通道, {up, ext, cmp}: [状态 ok|risk|lost, 理由]]
+  const ROWS = [
+    ["TillDone", "工具说明（九个动作 + 拆小原则）", "工具声明", {
+      cmp: ["ok", "工具声明每次请求都重新发送，压缩不碰它。"] }],
+    ["TillDone", "清单变化", "工具结果", {
+      cmp: ["risk", "早期的工具结果可能变成摘要。清单权威在扩展内存里，模型调 tilldone list 就能拿回。"] }],
+    ["TillDone", "门禁理由 GATE_REASON", "工具错误", {
+      cmp: ["ok", "被拦的那一刻现场生成，不依赖历史。"] }],
+    ["TillDone", "SPLIT_CUE 与 15 次提示", "工具结果末尾", {
+      cmp: ["ok", "在触发时刻现场追加，不依赖历史。"] }],
+    ["TillDone", "督促 tilldone-nudge", "自定义消息", {
+      cmp: ["ok", "run 结束时从扩展内存现算未完成任务。"] }],
+    ["PStack", "Poteto Mode 说明段落", "system prompt 追加", {
+      up: ["ok", "源码追加在新的默认提示词后面，照样到达。推断：措辞可能和新默认提示词冲突。"],
+      ext: ["lost", "推断：如果那个扩展的钩子在 PStack 之后执行，并且整段替换，这段说明会丢。"],
+      cmp: ["ok", "每次请求都重新追加，压缩不碰它。"] }],
+    ["PStack", "SKILL.md 全文", "首条消息展开", {
+      cmp: ["risk", "推断：首条消息可能变成摘要。system prompt 段落给出了 SKILL.md 路径，模型可以重读。"] }],
+    ["PStack", "pstack_todo 清单", "工具结果", {
+      cmp: ["risk", "早期结果可能变成摘要。清单在扩展内存里，模型调 pstack_todo get 就能拿回。"] }],
+    ["PStack", "subagent 结论", "工具结果", {
+      cmp: ["risk", "早期结论可能变成摘要。推断：没有工具能重新取回，只剩会话文件里的 details。"] }],
+  ];
+  const LABEL = { ok: "能到达", risk: "有风险", lost: "可能丢失" };
+  const RANK = { ok: 0, risk: 1, lost: 2 };
+  function draw1() {
+    const on = { up: CL.$("#d1-up").checked, ext: CL.$("#d1-ext").checked, cmp: CL.$("#d1-cmp").checked };
+    const names = { up: "Pi 升级", ext: "扩展替换提示词", cmp: "压缩" };
+    const tally = { TillDone: { ok: 0, risk: 0, lost: 0 }, PStack: { ok: 0, risk: 0, lost: 0 } };
+    let h = "<tr><th>扩展</th><th>内容</th><th>通道</th><th>结果</th><th>理由</th></tr>";
+    for (const [ext, what, via, eff] of ROWS) {
+      let st = "ok", why = [];
+      for (const k of ["up", "ext", "cmp"]) {
+        if (!on[k]) continue;
+        const e = eff[k] || ["ok", via === "system prompt 追加" ? "" : "不经过 system prompt，不受影响。"];
+        if (k === "cmp" && !eff.cmp) e[1] = "不受压缩影响。";
+        if (RANK[e[0]] > RANK[st]) st = e[0];
+        if (e[1]) why.push(names[k] + "：" + e[1]);
+      }
+      if (!why.length) why.push("没有选择外部变化。");
+      tally[ext][st]++;
+      h += "<tr><td>" + ext + "</td><td>" + CL.esc(what) + "</td><td>" + CL.esc(via) + '</td><td class="' + st + '">' + LABEL[st] + '</td><td class="why">' + CL.esc(why.join(" ")) + "</td></tr>";
+    }
+    CL.$("#d1-tbl").innerHTML = h;
+    const any = on.up || on.ext || on.cmp;
+    const line = (x) => x + " 共 " + (tally[x].ok + tally[x].risk + tally[x].lost) + " 项：能到达 " + tally[x].ok + "，有风险 " + tally[x].risk + "，可能丢失 " + tally[x].lost + "。";
+    CL.$("#d1-out").textContent = (any ? "当前外部变化：" + Object.keys(on).filter((k) => on[k]).map((k) => names[k]).join("、") + "。" : "没有选择外部变化，所有内容都能到达。") +
+      "\n" + line("TillDone") + "\n" + line("PStack") +
+      (on.ext ? "\nTillDone 不受 system prompt 改写影响，因为它的规矩都不在 system prompt 里。" : "");
+  }
+  ["#d1-up", "#d1-ext", "#d1-cmp"].forEach((id) => CL.$(id).addEventListener("change", draw1));
+  draw1();
+
+  /* ---- 2. 上下文隔离预算 ---- */
+  const CALL = 80, BRIEF = 200, CHILD_FIXED = 3000, CAP = 12800;
+  function draw2() {
+    const k = +CL.$("#d2-k").value, n = +CL.$("#d2-n").value, t = +CL.$("#d2-t").value, s = +CL.$("#d2-s").value;
+    CL.$("#d2-kv").textContent = k; CL.$("#d2-nv").textContent = n; CL.$("#d2-tv").textContent = t; CL.$("#d2-sv").textContent = s;
+    const inline = k * n * (t + CALL);
+    const sEff = Math.min(s, CAP);
+    const parentDel = k * (BRIEF + sEff);
+    const childPeak = CHILD_FIXED + BRIEF + n * (t + CALL);
+    const totalDel = parentDel + k * childPeak;
+    const max = Math.max(inline, totalDel, 1);
+    const W = 760, X0 = 170, bar = (v) => Math.max(2, (W - X0 - 80) * v / max);
+    const rows = [
+      ["内联：父上下文增长", inline, "var(--down)"],
+      ["分派：父上下文增长", parentDel, "var(--up)"],
+      ["分派：单个子进程峰值", childPeak, "var(--note-bd)"],
+      ["分派：总新增 token", totalDel, "var(--ink-3)"],
+    ];
+    let svg = '<svg viewBox="0 0 ' + W + ' ' + (rows.length * 42 + 10) + '" style="width:100%;height:auto" role="img" aria-label="上下文增长对比">';
+    rows.forEach(([name, v, c], i) => {
+      const y = 10 + i * 42;
+      svg += '<text class="sm" x="0" y="' + (y + 18) + '">' + name + "</text>";
+      svg += '<rect x="' + X0 + '" y="' + (y + 4) + '" width="' + bar(v) + '" height="20" rx="3" style="fill:' + c + '"></rect>';
+      svg += '<text class="sm" x="' + (X0 + bar(v) + 6) + '" y="' + (y + 18) + '">' + CL.fmt(v, 0) + "</text>";
+    });
+    CL.$("#d2-chart").innerHTML = svg + "</svg>";
+    CL.$("#d2-out").textContent =
+      "在这个模拟里：内联做时父上下文增长 " + CL.fmt(inline, 0) + " token；分派时父上下文只增长 " + CL.fmt(parentDel, 0) + " token，约为内联的 " + CL.fmt(100 * parentDel / inline, 1) + "%。\n" +
+      "分派时每个子进程峰值上下文 " + CL.fmt(childPeak, 0) + " token；总新增 token " + CL.fmt(totalDel, 0) + "，是内联的 " + CL.fmt(totalDel / inline, 2) + " 倍。\n" +
+      (k > 4 ? "并行 " + k + " 个子任务，但最多同时跑 4 个（MAX_CONCURRENCY = 4），其余排队。\n" : "") +
+      (s > CAP ? "回传结论超过 50 KB，按截断上限约 12,800 token 计入父上下文。\n" : "") +
+      "结论：隔离让父上下文保持干净，但不减少总花费。";
+  }
+  ["#d2-k", "#d2-n", "#d2-t", "#d2-s"].forEach((id) => CL.$(id).addEventListener("input", draw2));
+  draw2();
+
+  /* ---- 3. 压缩与重启 ---- */
+  const CTX = ["/skill:poteto-mode 加一个导出按钮（SKILL.md 全文）", "pstack_todo set：7 个 playbook 步骤", "tilldone new-list + add #1 #2 #3", "tilldone start #1（带 SPLIT_CUE）", "read / edit / bash × 12", "tilldone done #1；start #2", "edit / bash × 6"];
+  let compacted = false, restarted = false;
+  function draw3() {
+    const ctx = !compacted ? CTX.map((x) => ["", x])
+      : [["sum", "摘要：前 5 条消息被压缩（推断：SKILL.md 全文也在其中）"]].concat(CTX.slice(5).map((x) => ["", x]));
+    if (restarted) ctx.unshift(["", "Pi 从会话文件重建上下文"]);
+    const mem = restarted
+      ? [["", "清单：#1 ✓，#2 ●，#3 ○（从 details 恢复）"], ["", "todos：7 个步骤（从 custom entry 恢复）"], ["", "potetoMode = true（从 custom entry 恢复）"], ["reset", "spent = 0（不持久化）"], ["reset", "nudged = false（不持久化）"]]
+      : [["", "清单：#1 ✓，#2 ●，#3 ○"], ["", "todos：7 个步骤"], ["", "potetoMode = true"], ["", "spent = 6"], ["", "nudged = false"]];
+    const file = [["", "pstack-mode entry"], ["", "pstack-todo entry"], ["", "tilldone details × 4"], ["", "全部原始消息（压缩不删除）"]];
+    const col = (title, items) => "<div><h5>" + title + "</h5><ul>" + items.map(([c, x]) => '<li class="' + c + '">' + CL.esc(x) + "</li>").join("") + "</ul></div>";
+    CL.$("#d3-cols").innerHTML = col("模型上下文", ctx) + col("扩展内存", mem) + col("会话文件", file);
+    CL.$("#d3-out").textContent = restarted
+      ? "重启并恢复会话后：扩展内存从会话文件重建。清单、todos、Poteto 开关都回来了。\nspent 从 6 归零，nudged 复位。所以下一次 15 次提示要从头数。"
+      : compacted
+      ? "压缩后：模型上下文里前 5 条消息变成摘要。扩展内存和会话文件都没变，清单和 todos 仍完整，spent 仍是 6。\n模型需要全貌时，调 tilldone list 或 pstack_todo get 即可。"
+      : "初始状态：三处都有完整信息。点“压缩”。";
+    CL.$("#d3-cmp").disabled = compacted || restarted; CL.$("#d3-rst").disabled = restarted;
+  }
+  CL.$("#d3-cmp").addEventListener("click", () => { compacted = true; draw3(); });
+  CL.$("#d3-rst").addEventListener("click", () => { restarted = true; draw3(); });
+  CL.$("#d3-reset").addEventListener("click", () => { compacted = restarted = false; draw3(); });
+  draw3();
+});
+</script>
+</body>
+</html>

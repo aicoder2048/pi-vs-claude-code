@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>边牧全景：羊、边牧与双循环 · L01</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .proc [data-part] { cursor: pointer; transition: opacity .2s; }
+  .proc .tag { font-family: var(--mono); font-size: 11px; fill: var(--accent); font-weight: 700; }
+  .map-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; font-size: 13.5px; color: var(--ink-3); }
+  .player-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13.5px; color: var(--ink-3); }
+  .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+  .msgs li.future { opacity: .25; }
+  .msgs li.now { outline: 2px solid var(--brand-2); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">边牧放羊</a></li>
+    <li><a href="#s2">两个扩展，两种职责</a></li>
+    <li><a href="#s3">进程全景</a></li>
+    <li><a href="#s4">Pi 的双循环</a></li>
+    <li><a href="#s5">动手看：督促让外循环多转一圈</a></li>
+    <li><a href="#s6">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L01 · 全景与双循环</div>
+  <h1>边牧全景：羊、边牧与双循环</h1>
+  <p>边牧是一个桌面应用。它让编码 agent 先列清单再动手，没做完不许停。这一课先建立全景：谁在哪个进程里，谁管什么，以及“停没停”由什么决定。</p>
+  <div class="meta"><span>原文：§0–1</span><span>阅读约 15 分钟</span><span>含 2 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>用<a class="term" href="glossary.html#border-collie-metaphor">边牧放羊比喻</a>说出用户、AI、任务各是什么。</li>
+    <li>说出 <a class="term" href="glossary.html#tilldone">TillDone</a> 和 <a class="term" href="glossary.html#pstack">PStack</a> 各管什么，以及约束力的区别。</li>
+    <li>画出边牧的进程结构，指出哪个进程不受 TillDone 管。</li>
+    <li>解释为什么桌面端只把 <a class="term" href="glossary.html#agent-settled">agent_settled</a> 当作空闲。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>边牧放羊</h2>
+  <p>先说结论：<a class="term" href="glossary.html#tilldone-desk">边牧</a>（TillDone Desk）是 <code>apps/tilldone</code> 里的 Electron 应用。它用桌面界面替代 Pi 的终端界面，来跑 TillDone 扩展。</p>
+  <p>项目给它取中文名“边牧”，来自一个比喻。这个比喻是项目唯一认可的映射。</p>
+  <div class="grid-3">
+    <div class="kp"><div class="k">羊</div><div class="v">任务</div><p>清单里的每一项工作。羊要一只一只赶进圈。</p></div>
+    <div class="kp"><div class="k">边牧</div><div class="v">装了 TillDone 的 AI</div><p>它负责赶羊。羊没进圈，它就不歇。</p></div>
+    <div class="kp"><div class="k">牧羊人</div><div class="v">用户</div><p>牧羊人指方向。他可以指着一只羊，让边牧把它拆小。</p></div>
+  </div>
+  <div class="callout rule"><span class="ttl">口号</span>羊不进圈，边牧不歇。英文是 Don't stop until it's done。</div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>两个扩展，两种职责</h2>
+  <p>边牧的 Pi 子进程里加载两个扩展。TillDone 一直加载。PStack 是可选的，用 <code>TILLDONE_PSTACK=1</code> 启动时才加载。</p>
+  <div class="vs">
+    <div><h4>TillDone：立规矩</h4>
+      <ul>
+        <li><a class="term" href="glossary.html#gate">门禁</a>：先列清单、认领一个任务，才许动手。</li>
+        <li><a class="term" href="glossary.html#nudge">督促</a>：清单没做完，run 结束时催一次。</li>
+      </ul>
+      <p><span class="good">硬约束</span>。模型绕不过去。</p>
+    </div>
+    <div><h4>PStack：给做法</h4>
+      <ul>
+        <li><a class="term" href="glossary.html#playbook">Playbook</a> 和原则。</li>
+        <li><a class="term" href="glossary.html#subagent">subagent</a> 分派。</li>
+        <li>按角色选模型。</li>
+      </ul>
+      <p><span class="bad">软约束</span>。只靠提示词引导。</p>
+    </div>
+  </div>
+  <div class="callout rule"><span class="ttl">本课程的核心句</span>TillDone 管“做什么、做完没”，用硬约束守住。PStack 管“怎么做”，只靠提示词引导。</div>
+  <p>原文还有一个判断：两者在代码里只有三个接缝。“两份清单怎么配合”没有写进任何模型能看到的提示词。L06 会展开这一点。</p>
+  <div class="callout warn"><span class="ttl">常见误解</span>讨论稿说“TillDone 是大脑，管任务拆解；PStack 是手脚，管落实执行”。原文认为这只对一半。TillDone 自己不拆任务，拆的决定由模型做出。详见 <a href="L06-pstack-meshing.html">L06</a>。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>进程全景</h2>
+  <p>边牧不把 Pi 嵌进自己的进程。它用 <a class="term" href="glossary.html#rpc-mode">RPC 模式</a>起一个 Pi 子进程，用 <a class="term" href="glossary.html#jsonl">JSONL</a> 收发命令和事件。</p>
+  <p>子进程的命令行（<code>src/config.ts:26-28</code>）：</p>
+  <pre><code>pi --mode rpc --no-extensions --model &lt;model&gt; -e &lt;app&gt;/extensions/tilldone
+   [-e &lt;cwd&gt;/.pi/npm/node_modules/pi-pstack/extensions/pstack -a] [--session &lt;file&gt;]</code></pre>
+  <ul>
+    <li><code>--no-extensions</code> 让全局扩展不加载。子进程里只有这两个扩展。</li>
+    <li><code>-a</code> 信任工作目录里的项目本地文件。PStack 的技能需要它。</li>
+  </ul>
+  <p>下面的图把进程结构画出来。点按钮或方框，看每一块的职责。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">动手看：谁在哪个进程里，谁受 TillDone 管</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">按问题看：
+        <button class="btn" data-q="rules">TillDone 的规矩在哪执行</button>
+        <button class="btn" data-q="pstack">PStack 在哪</button>
+        <button class="btn" data-q="free">哪里不受 TillDone 管</button>
+        <button class="btn" data-q="">全部</button>
+      </div>
+      <svg class="proc" viewBox="0 0 900 360" role="img" aria-label="边牧进程结构">
+        <defs><marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="currentColor"/></marker></defs>
+        <g style="color: var(--ink-3)">
+          <path class="edge" d="M190 70 H235" marker-end="url(#ar1)"/>
+          <path class="edge" d="M235 90 H190" marker-end="url(#ar1)"/>
+          <path class="edge" d="M420 80 H475" marker-end="url(#ar1)"/>
+          <path class="edge dash" d="M690 270 V300" marker-end="url(#ar1)"/>
+        </g>
+        <text class="sm" x="430" y="70">JSONL</text>
+        <g data-part="renderer"><rect class="box" x="20" y="40" width="170" height="70" rx="8"/><text x="105" y="70" text-anchor="middle">渲染页面</text><text class="sm" x="105" y="90" text-anchor="middle">renderer/ · D-L4</text></g>
+        <g data-part="main"><rect class="box" x="240" y="30" width="180" height="90" rx="8"/><text x="330" y="62" text-anchor="middle" style="font-weight:700">Electron 主进程</text><text class="sm" x="330" y="82" text-anchor="middle">D-L2 胶水 + D-L3 纯函数</text><text class="sm" x="330" y="100" text-anchor="middle">只投影，不执行规矩</text></g>
+        <rect class="box dim" x="480" y="20" width="400" height="255" rx="10" stroke-dasharray="6 4"/>
+        <text x="500" y="44" style="font-weight:700">pi --mode rpc 子进程</text>
+        <g data-part="pi"><rect class="box" x="500" y="58" width="360" height="50" rx="8"/><text x="680" y="80" text-anchor="middle">Pi 运行时（双循环、工具调度）</text><text class="sm" x="680" y="98" text-anchor="middle">L1，不改动</text></g>
+        <g data-part="tilldone"><rect class="box" x="500" y="122" width="170" height="70" rx="8"/><text x="585" y="150" text-anchor="middle">TillDone 扩展</text><text class="sm" x="585" y="170" text-anchor="middle">门禁 · 计费门 · 督促</text></g>
+        <g data-part="pstack"><rect class="box" x="690" y="122" width="170" height="70" rx="8"/><text x="775" y="150" text-anchor="middle">PStack 扩展</text><text class="sm" x="775" y="170" text-anchor="middle">可选 · TILLDONE_PSTACK=1</text></g>
+        <g data-part="tools"><rect class="box" x="500" y="205" width="360" height="55" rx="8"/><text x="680" y="228" text-anchor="middle">模型调用的工具</text><text class="sm" x="680" y="246" text-anchor="middle">tilldone · bash · edit · pstack_todo · subagent …</text></g>
+        <g data-part="child"><rect class="box" x="560" y="305" width="260" height="45" rx="8" stroke-dasharray="5 4"/><text x="690" y="324" text-anchor="middle">subagent 子进程</text><text class="sm" x="690" y="341" text-anchor="middle">pi --mode json --print --no-session</text></g>
+        <text class="sm" x="700" y="292">spawn</text>
+      </svg>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">先点“TillDone 的规矩在哪执行”，再点“哪里不受 TillDone 管”。对比两次高亮：规矩只在 Pi 子进程里执行；subagent 子进程不加载 TillDone。<span class="data-note">此图依据原文 §2 的进程图重画。框的位置是示意，不代表代码结构。</span></div>
+  </div>
+  <div class="callout tip"><span class="ttl">看图要点</span>桌面端从不调用 <code>gate</code> 或 <code>runTool</code>。规矩只在 Pi 子进程里执行一次，桌面端只读结果。L02 会讲为什么这样分。</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>Pi 的双循环</h2>
+  <p>先说结论：Pi 有两层循环。TillDone 的督促利用外层循环“再转一圈”。所以“run 结束”不等于“停下来”。</p>
+  <div class="grid-2">
+    <div class="kp"><div class="k">外层</div><div class="v"><a class="term" href="glossary.html#settle-loop">settle 外循环</a></div><p>源码在 <code>AgentSession._startRun()</code> 的 <code>while</code>。一个 run 结束后，如果有重试、压缩或排队消息，就再起一个 run。停稳时发出 <code>agent_settled</code>。</p></div>
+    <div class="kp"><div class="k">内层</div><div class="v"><a class="term" href="glossary.html#run-loop">run 内循环</a></div><p>源码在 <code>agent-loop.js</code> 的 <code>runLoop()</code>。它反复执行 <a class="term" href="glossary.html#turn">turn</a>。一个 turn 是一次 LLM 请求，加上这条回复里所有的工具调用。</p></div>
+  </div>
+  <ul>
+    <li>用户一句话 = 一次 settle。</li>
+    <li>一次 settle 通常只有 1 个 run。督促发生时有 2 个 run。</li>
+    <li>督促每条用户输入最多一次。所以 run 数不超过 2。</li>
+  </ul>
+  <p>督促的路径是这样的。run 1 结束时，TillDone 的 <code>agentEnd</code> 检查清单。如果还有未完成任务，它发一条 <code>tilldone-nudge</code> 消息。这时 run 仍算活跃，所以消息进入 <a class="term" href="glossary.html#steer">steer</a> 队列。外循环看到排队消息，就再起 run 2。</p>
+  <div class="callout rule"><span class="ttl">本节核心句</span>桌面端只把 <code>agent_settled</code> 当作“空闲”。<code>agent_end</code> 不算空闲，因为督促可能让外循环再转一圈。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>动手看：督促让外循环多转一圈</h2>
+  <p>下面的播放器按顺序列出桌面端在 RPC 线上看到的事件。先选一个场景，再点“下一步”。注意每一步的“界面状态”。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">逐步播放：一次 settle 里的事件，和桌面端怎样判断“停没停”</div>
+    </div>
+    <div class="demo">
+      <div class="player-bar">场景：
+        <span class="btn-group" id="d2-sc">
+          <button class="btn on" data-sc="done">run 1 就做完了</button>
+          <button class="btn" data-sc="nudge">run 1 没做完，督促后做完</button>
+          <button class="btn" data-sc="stuck">督促后仍没做完</button>
+        </span>
+      </div>
+      <div class="player-bar">
+        <button class="btn" id="d2-next">下一步</button><button class="btn" id="d2-all">播完</button><button class="btn" id="d2-reset">重来</button>
+        <label class="ctrl"><input type="checkbox" id="d2-end"> 假设桌面端把 agent_end 当空闲（错误做法）</label>
+      </div>
+      <div class="status-row" id="d2-status"></div>
+      <ul class="msgs" id="d2-list"></ul>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">选“run 1 没做完，督促后做完”，勾上“错误做法”，再播完。你会看到 run 2 还在跑，界面却报“空闲”。再选“督促后仍没做完”：第二次 <code>agent_end</code> 不再督促，settle 停下，清单留着未完成任务，交还给人。<span class="data-note">简化模型：事件顺序依据原文 §1 和白皮书 4.5 节的时间线；省略了 message_update、get_state 等事件。工具调用是演示用例子。</span></div>
+  </div>
+  <div class="callout note"><span class="ttl">补充：为什么督促只发一次</span>如果督促之后模型仍然停下，它可能真的卡住了。再催下去只会空转，所以要把控制权交还给人。这个判断来自 <code>nudged</code> 闩锁的设计（<code>state.ts</code> 的 <code>agentEnd</code> 与 <code>userInput</code>），L05 会展开。</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>自测与速记</h2>
+  <div class="quiz" data-answer="2">
+    <div class="q">在边牧的比喻里，“牧羊人”指什么？</div>
+    <div class="opts"><button>TillDone 扩展</button><button>PStack 扩展</button><button>用户</button><button>Pi 运行时</button></div>
+    <div class="explain">任务是羊，装了 TillDone 的 AI 是边牧，用户是牧羊人。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">下面哪一项最准确地描述了 TillDone 和 PStack 的分工？</div>
+    <div class="opts"><button>TillDone 拆任务，PStack 执行任务</button><button>TillDone 管“做什么、做完没”，用硬约束；PStack 管“怎么做”，靠提示词</button><button>两者都用门禁约束模型</button><button>PStack 驱动任务面板，TillDone 驱动 subagent</button></div>
+    <div class="explain">原文 §0：TillDone 管“做什么、做完没”，用硬约束守住。PStack 管“怎么做”，只靠提示词引导。TillDone 自己不拆任务。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">桌面端为什么不把 <code>agent_end</code> 当作空闲？</div>
+    <div class="opts"><button>agent_end 事件经常丢失</button><button>agent_end 只在出错时发出</button><button>Pi 不会发出 agent_end</button><button>督促可能让 settle 外循环再起一个 run</button></div>
+    <div class="explain">run 1 结束时还有未完成任务，督促消息进入 steer 队列，外循环再起 run 2。只有 agent_settled 表示真正停稳。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">哪个进程不加载 TillDone？</div>
+    <div class="opts"><button>subagent 子进程</button><button>pi --mode rpc 子进程</button><button>两者都加载</button><button>两者都不加载</button></div>
+    <div class="explain">subagent 子进程的命令是 <code>pi --mode json --print --no-session …</code>，里面没有 <code>-e tilldone</code>。所以子 agent 不受门禁和督促管。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>比喻</td><td>任务 = 羊，AI = 边牧，用户 = 牧羊人；羊不进圈，边牧不歇</td></tr>
+    <tr><td>分工</td><td>TillDone 管做什么、做完没（硬）；PStack 管怎么做（软）</td></tr>
+    <tr><td>进程</td><td>Electron 主进程 → <code>pi --mode rpc</code> 子进程（TillDone + 可选 PStack）→ subagent 子进程（无 TillDone）</td></tr>
+    <tr><td>双循环</td><td>settle 外循环套 run 内循环；一句话一次 settle，run 数 ≤ 2</td></tr>
+    <tr><td>空闲信号</td><td>只认 <code>agent_settled</code>，不认 <code>agent_end</code></td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L02-two-four-layers.html"><small>下一课 · L02</small>两套四层叠在一起</a>
+    <a href="L05-tilldone-split.html"><small>L05</small>TillDone 的原生拆分</a>
+    <a href="L06-pstack-meshing.html"><small>L06</small>PStack 与 TillDone 的咬合</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L01-overview.html"></nav>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§0–1（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 进程全景 ---- */
+  const PART = {
+    renderer: ["渲染页面（D-L4）", "只画 JSON 视图，只发意图。不解析 RPC，不存业务状态。"],
+    main: ["Electron 主进程（D-L2 + D-L3）", "D-L2 持有唯一的可变状态，管子进程和 IPC。D-L3 用纯函数把 RPC 事件投影成视图。它从不调用 gate 或 runTool。"],
+    pi: ["Pi 运行时（L1）", "双循环、工具调度、会话文件。边牧不改动它。"],
+    tilldone: ["TillDone 扩展", "门禁、计费门、拆分提示、督促都在这里执行。规矩只执行这一次。"],
+    pstack: ["PStack 扩展（可选）", "注册 pstack_todo、subagent、pstack_config；Poteto Mode 开启后每次请求追加 system prompt。"],
+    tools: ["模型调用的工具", "每次工具调用都先经过 TillDone 的 tool_call 钩子：计费门、门禁、计数。"],
+    child: ["subagent 子进程", "PStack 用 pi --mode json --print --no-session 起它。它不加载 TillDone，所以门禁、督促、拆分计数都管不到它。"],
+  };
+  const Q = {
+    rules: [["tilldone", "tools"], "TillDone 的规矩在 Pi 子进程里执行：每次工具调用先经过它的 tool_call 钩子。桌面端只投影结果，不重新执行规矩。"],
+    pstack: [["pstack", "tools", "child"], "PStack 和 TillDone 并列在同一个 Pi 子进程里。它的 subagent 工具会再起独立的子进程。"],
+    free: [["child", "renderer", "main"], "不受 TillDone 管的有三处：subagent 子进程（不加载 TillDone），以及桌面端的两层（它们只投影，不调用模型）。其中只有 subagent 子进程会真正干活。"],
+  };
+  const groups = CL.$$("#demo1 [data-part]"), out1 = CL.$("#d1-out");
+  const DEFAULT1 = "点一个问题，或直接点图里的方框。";
+  function show1(parts, label) {
+    groups.forEach((g) => { const on = !parts || parts.includes(g.dataset.part); g.querySelector("rect").classList.toggle("hl", !!parts && on); g.style.opacity = on ? 1 : 0.3; });
+    out1.textContent = label;
+  }
+  CL.$$("#demo1 [data-q]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#demo1 [data-q]").forEach((x) => x.classList.toggle("on", x === b));
+    const q = Q[b.dataset.q];
+    if (!q) return show1(null, DEFAULT1);
+    show1(q[0], q[1] + "\n" + q[0].map((p) => "· " + PART[p][0] + "：" + PART[p][1]).join("\n"));
+  }));
+  groups.forEach((g) => g.addEventListener("click", () => {
+    CL.$$("#demo1 [data-q]").forEach((x) => x.classList.remove("on"));
+    const p = g.dataset.part; show1([p], PART[p][0] + "\n" + PART[p][1]);
+  }));
+  show1(null, DEFAULT1);
+
+  /* ---- 2. settle 播放器 ---- */
+  // 每个事件：[来源, 文字, 类型, 对运行状态的影响]
+  // run: 1 = 进入运行；0 = agent_end；-1 = agent_settled
+  const RUN1 = [
+    ["出", "prompt：用户发一句话", "fast", 0],
+    ["入", "agent_start", "act", 1],
+    ["turn 1", "模型调用 tilldone new-list / add", "slow", 0],
+    ["turn 2", "模型调用 tilldone start #1（结果带 SPLIT_CUE）", "slow", 0],
+    ["turn 3", "模型调用 read / edit / bash（门禁放行）", "slow", 0],
+  ];
+  const SC = {
+    done: RUN1.concat([
+      ["turn 4", "模型调用 tilldone done #1、done #2", "slow", 0],
+      ["入", "agent_end：清单全部完成，不督促", "act", "end"],
+      ["入", "agent_settled", "act", "settled"],
+    ]),
+    nudge: RUN1.concat([
+      ["turn 4", "模型只回文本，#2 还没做", "slow", 0],
+      ["入", "agent_end：还有 1 个未完成任务 → 督促进 steer 队列", "act", "end-nudge"],
+      ["入", "message_start(custom, tilldone-nudge)：run 2 开始", "act", "run2"],
+      ["turn 5", "模型调用 tilldone start #2，继续干活", "slow", 0],
+      ["turn 6", "模型调用 tilldone done #2", "slow", 0],
+      ["入", "agent_end：清单全部完成；nudged 已为真，不再督促", "act", "end"],
+      ["入", "agent_settled", "act", "settled"],
+    ]),
+    stuck: RUN1.concat([
+      ["turn 4", "模型只回文本，#2 还没做", "slow", 0],
+      ["入", "agent_end：还有 1 个未完成任务 → 督促进 steer 队列", "act", "end-nudge"],
+      ["入", "message_start(custom, tilldone-nudge)：run 2 开始", "act", "run2"],
+      ["turn 5", "模型回复“#2 需要你确认接口”，没有继续", "slow", 0],
+      ["入", "agent_end：仍有未完成任务；nudged 已为真，不再督促", "act", "end"],
+      ["入", "agent_settled：清单留着未完成任务，交还给人", "act", "settled"],
+    ]),
+  };
+  let sc = "done", step = 0;
+  function evalState(evs, wrongEnd) {
+    // 返回到第 step 个事件为止的：真实是否在跑、界面显示、run 数、督促数、误报空闲次数
+    let running = false, shown = false, runs = 0, nudges = 0, falseIdle = 0, settled = false;
+    for (const e of evs) {
+      const k = e[3];
+      if (k === 1) { running = true; shown = true; runs = 1; }
+      else if (k === "end" || k === "end-nudge") { if (k === "end-nudge") nudges++; if (wrongEnd) shown = false; if (k === "end-nudge" && wrongEnd) falseIdle++; }
+      else if (k === "run2") { runs = 2; if (wrongEnd) shown = true; }
+      else if (k === "settled") { running = false; shown = false; settled = true; }
+    }
+    return { running, shown, runs, nudges, falseIdle, settled };
+  }
+  function draw2() {
+    const evs = SC[sc], wrongEnd = CL.$("#d2-end").checked;
+    CL.$("#d2-list").innerHTML = evs.map((e, i) => '<li class="' + e[2] + (i >= step ? " future" : "") + (i === step - 1 ? " now" : "") + '"><span class="src">' + CL.esc(e[0]) + "</span><span>" + CL.esc(e[1]) + '</span><span class="verdict">' + (i < step ? "✓" : "") + "</span></li>").join("");
+    const st = evalState(evs.slice(0, step), wrongEnd);
+    // 误报：真实还在跑（或 run 2 即将开始），界面却显示空闲
+    const mismatch = step > 0 && !st.settled && st.running && !st.shown;
+    CL.$("#d2-status").innerHTML =
+      '<span class="pill ' + (st.running ? "hot" : "") + '">Pi 真实状态：' + (st.running ? "运行中" : step ? "已停稳" : "空闲") + "</span>" +
+      '<span class="pill ' + (mismatch ? "slow" : st.shown ? "hot" : "") + '">界面显示：' + (st.shown ? "运行中" : "空闲") + (mismatch ? "（误报）" : "") + "</span>" +
+      '<span class="pill">run 数：' + st.runs + "</span><span class=\"pill\">督促次数：" + st.nudges + "</span>";
+    let msg = "已播放 " + step + " / " + evs.length + " 个事件。";
+    if (step === evs.length) {
+      const fin = evalState(evs, wrongEnd);
+      msg += "\n这次 settle 共 " + fin.runs + " 个 run，督促 " + fin.nudges + " 次。";
+      if (sc === "stuck") msg += "\n清单仍有 1 个未完成任务。督促闩锁已用掉，Pi 停稳，控制权交还给人。";
+      msg += wrongEnd ? "\n按错误做法（agent_end 当空闲），界面误报空闲 " + fin.falseIdle + " 次。" : "\n按正确做法（只认 agent_settled），界面没有误报空闲。";
+    } else if (mismatch && evs[step - 1][3] === "end-nudge") msg += "\n界面现在报“空闲”，但督促消息已经在 steer 队列里，外循环马上会起 run 2。这就是误报。";
+    else if (mismatch) msg += "\n界面先报“空闲”，下一个事件就是 agent_settled。这次提前量很小，危害不大。";
+    CL.$("#d2-out").textContent = msg;
+  }
+  CL.$$("#d2-sc [data-sc]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d2-sc [data-sc]").forEach((x) => x.classList.toggle("on", x === b)); sc = b.dataset.sc; step = 0; draw2();
+  }));
+  CL.$("#d2-next").addEventListener("click", () => { step = Math.min(step + 1, SC[sc].length); draw2(); });
+  CL.$("#d2-all").addEventListener("click", () => { step = SC[sc].length; draw2(); });
+  CL.$("#d2-reset").addEventListener("click", () => { step = 0; draw2(); });
+  CL.$("#d2-end").addEventListener("change", draw2);
+  draw2();
+});
+</script>
+</body>
+</html>

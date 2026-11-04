@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>两套四层叠在一起 · L02</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .layers [data-layer] { cursor: pointer; transition: opacity .2s; }
+  .layers .tag { font-family: var(--mono); font-size: 11px; fill: var(--accent); font-weight: 700; }
+  .layers .seam { stroke: var(--accent); stroke-width: 2.5; fill: none; stroke-dasharray: 6 4; opacity: .35; transition: opacity .2s; }
+  .layers .seam.on { opacity: 1; stroke-width: 3.5; }
+  .map-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; font-size: 13.5px; color: var(--ink-3); }
+  .path-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .path-steps li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 14px; }
+  .path-steps li b { color: var(--brand); font-size: 13px; }
+  .path-steps li.bad { border-color: var(--rule-bd); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">四层是什么</a></li>
+    <li><a href="#s2">两套四层</a></li>
+    <li><a href="#s3">动手看：点一层看职责</a></li>
+    <li><a href="#s4">唯一的接缝</a></li>
+    <li><a href="#s5">谁是权威</a></li>
+    <li><a href="#s6">动手看：依赖规则检查</a></li>
+    <li><a href="#s7">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L02 · 两套四层</div>
+  <h1>两套四层叠在一起</h1>
+  <p>边牧里有两套四层结构。一套在 Pi 扩展里，一套在桌面端。两套只在一个地方相接。这一课讲清每一层管什么，以及每个事实由谁说了算。</p>
+  <div class="meta"><span>原文：§2、§2.1</span><span>阅读约 15 分钟</span><span>含 3 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>说出<a class="term" href="glossary.html#four-layer">四层架构</a>每一层的职责和“不做什么”。</li>
+    <li>把扩展（E-）和桌面（D-）的文件放进正确的层。</li>
+    <li>指出<a class="term" href="glossary.html#two-four-layers">两套四层</a>唯一的接缝，并解释“格式只定义一次”。</li>
+    <li>对任务清单、运行状态等事实，说出它的<a class="term" href="glossary.html#authority">权威</a>和到达界面的路径。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>四层是什么</h2>
+  <p>先说结论：四层自下而上编号。下层不知道上层。每一层都有一条“不做什么”的边界。</p>
+  <p>定义来自讨论稿 <code>discussions/2026-10-28-four-layer-harness.md</code>。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>层</th><th>名称</th><th>做什么</th><th>不做什么</th></tr>
+    <tr><td>L1</td><td>Pi 运行时</td><td>搬运和累积上下文</td><td>不判断内容好坏</td></tr>
+    <tr><td>L2</td><td>ExtensionAPI 胶水</td><td>在 L1 的固定插入点上挂回调</td><td>不放业务规则</td></tr>
+    <tr><td>L3</td><td>业务逻辑</td><td>决定什么信息进上下文</td><td>不碰渲染</td></tr>
+    <tr><td>L4</td><td>界面</td><td>独立的数据通道</td><td>不占上下文</td></tr>
+  </table></div>
+  <div class="callout tip"><span class="ttl">怎样记</span>L1 搬运，L2 接线，L3 拿主意，L4 给人看。</div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>两套四层</h2>
+  <p>边牧把这套分法用了两次。扩展一套，编号加前缀 E-。桌面一套，编号加前缀 D-。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>层</th><th>扩展（E-，在 Pi 子进程里）</th><th>桌面（D-，在 Electron 里）</th></tr>
+    <tr><td>L1</td><td>Pi 本身，不改</td><td>外部 <code>pi</code> 子进程 + Electron 运行时</td></tr>
+    <tr><td>L2 胶水</td><td><code>extensions/tilldone/index.ts</code>：持有唯一的 <code>model</code> 单元，把 Pi 事件翻译成 L3 调用</td><td><code>src/desk.ts</code>、<code>rpc.ts</code>、<code>jsonl.ts</code>、<code>main.ts</code>、<code>config.ts</code>、<code>credentials.ts</code>：唯一持有可变状态</td></tr>
+    <tr><td>L3 领域</td><td><code>extensions/tilldone/state.ts</code>：零 import；模型能看到的所有字符串都定义在这里</td><td><code>src/domain.ts</code>、<code>appearance.ts</code>、<code>api-domain.ts</code>：纯函数 <a class="term" href="glossary.html#reduce">reduce(state, record)</a>、<code>planIntent</code>、<code>toViewModel</code></td></tr>
+    <tr><td>L4 渲染</td><td><code>ui.ts</code>：TUI；RPC 下大多不起作用</td><td><code>renderer/</code>：只画 JSON 视图，只发意图</td></tr>
+  </table></div>
+  <p>桌面 D-L2 的核心只有一行：<code>this.state = reduce(this.state, record)</code>（<code>src/desk.ts:30</code>）。所有 RPC 事件都走这一行。</p>
+  <p>D-L2 还会自己生成 <a class="term" href="glossary.html#desk-records">desk_* 记录</a>，例如时钟和进程退出。所以 D-L3 里没有 <code>Date.now()</code>，也没有 I/O。</p>
+  <div class="callout note"><span class="ttl">补充：E-L4 为什么“大多不起作用”</span>扩展的 <code>ui.ts</code> 负责终端界面：状态栏、widget 和浮层。RPC 模式下没有终端界面，所以这些画法大多落空。桌面端用 D-L4 重新画任务面板，数据来自工具结果，不来自 <code>ui.ts</code>。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>动手看：点一层看职责</h2>
+  <p>左列是扩展四层，右列是桌面四层。点一个方框，看它的文件、职责和边界。再点“唯一接缝”，看两套结构在哪里相接。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">两套四层：每层管什么，哪里相接</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">
+        <button class="btn" data-v="seam">唯一接缝</button>
+        <button class="btn" data-v="state">谁持有可变状态</button>
+        <button class="btn" data-v="rules">规矩在哪执行</button>
+        <button class="btn" data-v="">全部</button>
+      </div>
+      <svg class="layers" viewBox="0 0 900 380" role="img" aria-label="两套四层结构图">
+        <text x="210" y="24" text-anchor="middle" style="font-weight:700">扩展四层（Pi 子进程里）</text>
+        <text x="690" y="24" text-anchor="middle" style="font-weight:700">桌面四层（Electron 里）</text>
+        <g data-layer="E4"><rect class="box" x="40" y="40" width="340" height="66" rx="8"/><text class="tag" x="50" y="56">E-L4</text><text x="210" y="70" text-anchor="middle">ui.ts</text><text class="sm" x="210" y="92" text-anchor="middle">TUI 渲染；RPC 下大多不起作用</text></g>
+        <g data-layer="E3"><rect class="box" x="40" y="120" width="340" height="66" rx="8"/><text class="tag" x="50" y="136">E-L3</text><text x="210" y="150" text-anchor="middle">state.ts（零 import）</text><text class="sm" x="210" y="172" text-anchor="middle">门禁 · 督促 · 拆分提示 · 模型可见文案</text></g>
+        <g data-layer="E2"><rect class="box" x="40" y="200" width="340" height="66" rx="8"/><text class="tag" x="50" y="216">E-L2</text><text x="210" y="230" text-anchor="middle">index.ts</text><text class="sm" x="210" y="252" text-anchor="middle">唯一的 model 单元；挂 Pi 事件</text></g>
+        <g data-layer="E1"><rect class="box" x="40" y="280" width="340" height="66" rx="8"/><text class="tag" x="50" y="296">E-L1</text><text x="210" y="310" text-anchor="middle">Pi 运行时</text><text class="sm" x="210" y="332" text-anchor="middle">不改动</text></g>
+        <g data-layer="D4"><rect class="box" x="520" y="40" width="340" height="66" rx="8"/><text class="tag" x="530" y="56">D-L4</text><text x="690" y="70" text-anchor="middle">renderer/</text><text class="sm" x="690" y="92" text-anchor="middle">只画 JSON 视图，只发意图</text></g>
+        <g data-layer="D3"><rect class="box" x="520" y="120" width="340" height="66" rx="8"/><text class="tag" x="530" y="136">D-L3</text><text x="690" y="150" text-anchor="middle">domain.ts · appearance.ts · api-domain.ts</text><text class="sm" x="690" y="172" text-anchor="middle">纯函数 reduce / planIntent / toViewModel</text></g>
+        <g data-layer="D2"><rect class="box" x="520" y="200" width="340" height="66" rx="8"/><text class="tag" x="530" y="216">D-L2</text><text x="690" y="230" text-anchor="middle">desk.ts · rpc.ts · jsonl.ts · main.ts …</text><text class="sm" x="690" y="252" text-anchor="middle">唯一可变状态；子进程、IPC、时钟</text></g>
+        <g data-layer="D1"><rect class="box" x="520" y="280" width="340" height="66" rx="8"/><text class="tag" x="530" y="296">D-L1</text><text x="690" y="310" text-anchor="middle">pi 子进程 + Electron 运行时</text><text class="sm" x="690" y="332" text-anchor="middle">不改动</text></g>
+        <path class="seam" id="d1-seam" d="M520 153 H380"/>
+        <text class="sm" x="450" y="144" text-anchor="middle">import</text>
+        <text class="sm" x="450" y="372" text-anchor="middle">E- 整套运行在 D-L1 的 pi 子进程里</text>
+      </svg>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">先点“唯一接缝”，再点“规矩在哪执行”。你会看到：桌面端读扩展 L3 的代码，但只读选择器，不执行规矩。<span class="data-note">此图依据原文 §2 的分层表重画。方框位置是示意。</span></div>
+  </div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>唯一的接缝</h2>
+  <p>先说结论：两套结构之间只有一条依赖。D-L3 import E-L3 的四个选择器。所以任务数据的格式只定义一次。</p>
+  <ul>
+    <li><a class="term" href="glossary.html#parse-details">parseDetails</a>：把工具结果里的快照还原成清单。</li>
+    <li><code>countByStatus</code>：按状态计数。</li>
+    <li><code>current</code>：取第一个进行中的任务。</li>
+    <li><code>STATUS_ICON</code>：三种状态的图标。</li>
+  </ul>
+  <p>两边都能共用 E-L3，因为它零 import。<code>state.ts</code> 开头写明 “Zero imports by design”。测试 <code>state.test.ts</code> 强制检查这一点。</p>
+  <div class="callout rule"><span class="ttl">本节核心句</span>桌面端从不调用 <code>gate</code> 或 <code>runTool</code>。规矩只在 Pi 进程里执行一次，桌面端只做投影。</div>
+  <div class="callout note"><span class="ttl">补充：源码里实际 import 了几个</span>原文列的是四个选择器。核对 <code>src/domain.ts</code> 第 6 行，它还 import 了 <code>EMPTY_LIST</code>、<code>SPLIT_HINT_EVERY</code>、<code>TOOL</code> 和类型 <code>ListState</code>。这些都是常量或类型，不是规矩的执行代码。所以“只投影、不执行”的结论不变。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>谁是权威</h2>
+  <p>先说结论：每个事实只有一个权威。桌面端只读权威的投影，从不自己重算。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>事实</th><th>权威</th><th>桌面端怎么拿到</th></tr>
+    <tr><td>任务清单</td><td>扩展的 <code>model.list</code></td><td>只从 tilldone 工具的 <code>tool_execution_end</code> 里的 <code>result.details</code> 取完整快照</td></tr>
+    <tr><td>当前任务</td><td>清单里第一个 <code>inprogress</code></td><td><code>current(list)</code> 现算</td></tr>
+    <tr><td>是否在运行</td><td>Pi 的 run 状态</td><td><code>agent_start</code> 置真，<code>agent_settled</code> 置假</td></tr>
+    <tr><td>每个任务的工具次数、模型请求次数</td><td>桌面端 D-L3 自己数</td><td>从 <code>tool_execution_start</code>、<code>turn_start</code> 计数；不进模型上下文</td></tr>
+  </table></div>
+  <p>下面的追踪器把这张表变成路径。选一个事实，看它从权威走到界面经过哪几站。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">追踪器：一个事实从权威走到界面</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">事实：
+        <span class="btn-group" id="d2-f">
+          <button class="btn on" data-f="list">任务清单</button>
+          <button class="btn" data-f="current">当前任务</button>
+          <button class="btn" data-f="running">是否在运行</button>
+          <button class="btn" data-f="count">每任务工具次数</button>
+          <button class="btn" data-f="cred">API 凭据</button>
+        </span>
+      </div>
+      <div class="map-row" id="d2-badrow"><label class="ctrl"><input type="checkbox" id="d2-bad"> 这次快照是坏的（例如 status 写成 "doing"）</label></div>
+      <ol class="path-steps" id="d2-path"></ol>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">选“任务清单”，勾上“坏快照”。<code>parseDetails</code> 返回 <code>undefined</code>，<code>reduce</code> 保留旧清单（<code>src/domain.ts:253</code> 的 <code>?? state.list</code>）。面板不会清空。<span class="data-note">简化模型：路径依据原文 §2.1 和源码；示例清单是演示用例子。“API 凭据”一行依据原文 §3.2。</span></div>
+  </div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>动手看：依赖规则检查</h2>
+  <p>四层规则可以写成几条依赖规则。下面列出几种 import，选一种，看它是否违反规则。</p>
+  <div class="chart-card" id="demo3">
+    <div class="chart-head">
+      <div class="chart-title">依赖规则检查：这条 import 合规吗</div>
+    </div>
+    <div class="demo">
+      <div class="btn-group" id="d3-opts"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d3-out"></div></div>
+    <div class="chart-foot">前三条是源码里真实存在的 import；后三条是假设的违规写法。<span class="data-note">规则依据原文 §2 和白皮书 3.1 节的四条硬规则。违规例子是演示用例子，源码里没有。</span></div>
+  </div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>自测与速记</h2>
+  <div class="quiz" data-answer="1">
+    <div class="q">两套四层之间唯一的依赖是哪一条？</div>
+    <div class="opts"><button>D-L2 调用 E-L2 的回调</button><button>D-L3 import E-L3 的选择器</button><button>D-L4 import E-L4 的渲染函数</button><button>E-L3 import D-L3 的 reduce</button></div>
+    <div class="explain">原文 §2：D-L3 import E-L3 的 <code>parseDetails</code>、<code>countByStatus</code>、<code>current</code>、<code>STATUS_ICON</code>。所以任务数据格式只定义一次。</div>
+  </div>
+  <div class="quiz" data-answer="2">
+    <div class="q">桌面端为什么不调用 <code>gate</code> 或 <code>runTool</code>？</div>
+    <div class="opts"><button>它们在 Electron 里跑不起来</button><button>它们是私有函数，没有导出</button><button>规矩只在 Pi 进程里执行一次，桌面端只做投影</button><button>桌面端用自己的一份规矩</button></div>
+    <div class="explain">原文 §2：桌面端从不调用 gate 或 runTool。规矩只执行一次，桌面端只读结果。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">RPC 线上来了一份坏的 tilldone 快照，任务面板会怎样？</div>
+    <div class="opts"><button>保持旧清单</button><button>清空</button><button>显示坏数据</button><button>桌面端崩溃</button></div>
+    <div class="explain"><code>parseDetails</code> 逐字段校验，任何一处不对就返回 <code>undefined</code>。<code>reduce</code> 用 <code>?? state.list</code> 保留旧清单。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">每个任务的工具次数由谁说了算？</div>
+    <div class="opts"><button>扩展的 spent 计数，通过 RPC 发给桌面</button><button>Pi 运行时</button><button>模型自己报告</button><button>桌面端 D-L3 自己从 RPC 事件里数</button></div>
+    <div class="explain">原文 §2.1：桌面 D-L3 从 <code>tool_execution_start</code>、<code>turn_start</code> 计数。它不进模型上下文，扩展的 <code>spent</code> 也不在线上。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>四层</td><td>L1 搬运，L2 接线不放规则，L3 拿主意，L4 给人看不占上下文</td></tr>
+    <tr><td>两套</td><td>扩展 E-（index.ts / state.ts / ui.ts）；桌面 D-（desk.ts 等 / domain.ts 等 / renderer/）</td></tr>
+    <tr><td>接缝</td><td>D-L3 import E-L3 的四个选择器；格式只定义一次</td></tr>
+    <tr><td>执行</td><td>规矩只在 Pi 进程里执行；桌面端只投影</td></tr>
+    <tr><td>可变状态</td><td>E-L2 的 model 单元；D-L2 的 state（<code>reduce</code> 一行更新）</td></tr>
+    <tr><td>坏快照</td><td><code>parseDetails</code> 返回 undefined，面板保持旧清单</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L01-overview.html"><small>上一课 · L01</small>边牧全景：羊、边牧与双循环</a>
+    <a href="L03-what-enters-context.html"><small>下一课 · L03</small>什么进模型的上下文</a>
+    <a href="L06-pstack-meshing.html"><small>L06</small>PStack 与 TillDone 的咬合</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L02-two-four-layers.html"></nav>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§2、§2.1（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 两套四层 ---- */
+  const L = {
+    E1: ["E-L1 · Pi 运行时", "双循环、工具调度、会话文件。", "不改动。"],
+    E2: ["E-L2 · extensions/tilldone/index.ts", "持有唯一的 model 单元。把 tool_call、tool_result、agent_end、input 等 Pi 事件翻译成 L3 调用。", "不放业务规则，不写模型可见的字符串。"],
+    E3: ["E-L3 · extensions/tilldone/state.ts", "门禁 gate、计费门 billingGate、拆分提示 toolCalled、督促 agentEnd、快照解析 parseDetails。模型能看到的所有字符串都在这里。", "零 import：不碰 Pi、TUI、L4。"],
+    E4: ["E-L4 · extensions/tilldone/ui.ts", "终端里的状态栏、widget、浮层。", "不写状态。RPC 下大多不起作用。"],
+    D1: ["D-L1 · pi 子进程 + Electron 运行时", "提供进程和窗口。整套 E- 跑在这个 pi 子进程里。", "不改动。"],
+    D2: ["D-L2 · desk.ts、rpc.ts、jsonl.ts、main.ts、config.ts、credentials.ts", "唯一持有可变状态：this.state = reduce(this.state, record)。管子进程、JSONL、IPC、时钟、偏好文件、凭据文件。", "不放业务规则。"],
+    D3: ["D-L3 · domain.ts、appearance.ts、api-domain.ts", "纯函数 reduce(state, record)、planIntent、toViewModel。把 RPC 事件投影成视图。", "不 import Electron、Node 或 L2/L4；没有 I/O，没有 Date.now()。"],
+    D4: ["D-L4 · renderer/", "画 JSON 视图，发意图。", "不解析 RPC，不存业务状态，不 import 领域代码。"],
+  };
+  const V = {
+    seam: [["D3", "E3"], true, "唯一接缝：D-L3 import E-L3。\n被 import 的四个选择器：parseDetails、countByStatus、current、STATUS_ICON。\n扩展用 toDetails 写快照，桌面用同一个 parseDetails 读回来。所以任务数据格式只定义一次。"],
+    state: [["E2", "D2"], false, "可变状态只在两处：E-L2 的 model 单元，以及 D-L2 的 this.state。\n两边的 L3 都是纯函数：输入旧值，返回新值。"],
+    rules: [["E3", "E2"], false, "规矩只在 Pi 子进程里执行：E-L2 在 tool_call 钩子里调用 E-L3 的 gate。\n桌面端从不调用 gate 或 runTool，只投影 Pi 报告的结果。"],
+  };
+  const groups = CL.$$("#demo1 [data-layer]"), seam = CL.$("#d1-seam"), out1 = CL.$("#d1-out");
+  const DEF1 = "点一个方框，或点上面的按钮。";
+  function show1(ids, seamOn, label) {
+    groups.forEach((g) => { const on = !ids || ids.includes(g.dataset.layer); g.querySelector("rect").classList.toggle("hl", !!ids && on); g.style.opacity = on ? 1 : 0.3; });
+    seam.classList.toggle("on", !!seamOn);
+    out1.textContent = label;
+  }
+  CL.$$("#demo1 [data-v]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#demo1 [data-v]").forEach((x) => x.classList.toggle("on", x === b));
+    const v = V[b.dataset.v];
+    if (!v) return show1(null, false, DEF1);
+    show1(v[0], v[1], v[2]);
+  }));
+  groups.forEach((g) => g.addEventListener("click", () => {
+    CL.$$("#demo1 [data-v]").forEach((x) => x.classList.remove("on"));
+    const l = L[g.dataset.layer];
+    show1([g.dataset.layer], g.dataset.layer === "D3" || g.dataset.layer === "E3", l[0] + "\n职责：" + l[1] + "\n不做什么：" + l[2]);
+  }));
+  show1(null, false, DEF1);
+
+  /* ---- 2. 权威追踪器 ---- */
+  const OLD = "○ #1 写 README · ● #2 跑测试";
+  const F = {
+    list: { auth: "扩展的 model.list（Pi 子进程内存）", steps: [
+      ["E-L3", "runTool 产生新清单；toDetails 把它拷贝成普通对象，写进工具结果的 details"],
+      ["Pi → RPC", "tool_execution_end，toolName = \"tilldone\"，带 result.details"],
+      ["D-L2", "rpc.ts 按 LF 切帧；desk.ts 调 reduce(state, record)"],
+      ["D-L3", "parseDetails(result.details) 逐字段校验"],
+      ["D-L3", "toViewModel：countByStatus、current、STATUS_ICON"],
+      ["D-L4", "任务面板重画"]] },
+    current: { auth: "清单里第一个 inprogress 任务", steps: [
+      ["D-L3", "state.list 已经由“任务清单”那条路径更新"],
+      ["D-L3", "current(state.list) 现算，不存储"],
+      ["D-L4", "面板高亮当前任务"]] },
+    running: { auth: "Pi 的 run 状态", steps: [
+      ["Pi → RPC", "agent_start"],
+      ["D-L3", "reduce：runActive = true"],
+      ["Pi → RPC", "agent_end（不改 runActive）"],
+      ["Pi → RPC", "agent_settled"],
+      ["D-L3", "reduce：runActive = false，清空 queued、pendingSplits"],
+      ["D-L4", "界面显示“空闲”"]] },
+    count: { auth: "桌面端 D-L3 自己", steps: [
+      ["Pi → RPC", "tool_execution_start（tilldone 自己的调用不算）"],
+      ["D-L3", "计入当时进行中的任务"],
+      ["Pi → RPC", "turn_start：模型请求次数同样计入"],
+      ["D-L4", "面板显示次数；达到 SPLIT_HINT_EVERY（15）时加强调"],
+      ["不进上下文", "这些数字只给界面，模型看不到"]] },
+    cred: { auth: "Pi 的 ~/.pi/agent/auth.json", steps: [
+      ["Pi", "Pi 自己解析 auth.json，用来请求模型"],
+      ["D-L2", "credentials.ts 读写这个文件（设置页保存时）"],
+      ["D-L3", "只拿到“有没有、是什么类型”的摘要"],
+      ["不进上下文", "key 本身不进领域状态、视图模型，也不进模型上下文"]] },
+  };
+  let f = "list";
+  function draw2() {
+    const bad = f === "list" && CL.$("#d2-bad").checked;
+    CL.$("#d2-badrow").style.display = f === "list" ? "" : "none";
+    const steps = F[f].steps.map((s, i) => {
+      if (bad && i === 3) return ["D-L3", "parseDetails 发现 status = \"doing\" 不合法 → 返回 undefined；reduce 用 ?? state.list 保留旧清单", true];
+      if (bad && i > 3) return [s[0], s[1] + "（用的是旧清单）", false];
+      return s;
+    });
+    CL.$("#d2-path").innerHTML = '<li><b>权威</b><span>' + CL.esc(F[f].auth) + "</span></li>" +
+      steps.map((s) => '<li class="' + (s[2] ? "bad" : "") + '"><b>' + CL.esc(s[0]) + "</b><span>" + CL.esc(s[1]) + "</span></li>").join("");
+    let msg = "权威：" + F[f].auth + "。从权威到界面经过 " + steps.length + " 站。";
+    if (f === "list") msg += bad ? "\n坏快照被丢弃。面板仍显示旧清单：" + OLD + "。" : "\n快照合法。面板显示新清单。";
+    if (f === "current") msg += "\n当前任务不单独传输，也不单独存储。它总是从清单现算。";
+    if (f === "running") msg += "\nagent_end 不改运行状态，只有 agent_settled 才置假（L01 讲过原因）。";
+    if (f === "count") msg += "\n扩展里的 spent 不在线上。桌面端自己数，所以扩展不需要为界面加计数器。";
+    if (f === "cred") msg += "\n凭据只走 D-L2 的文件适配器，不进 D-L3 的状态。";
+    CL.$("#d2-out").textContent = msg;
+  }
+  CL.$$("#d2-f [data-f]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d2-f [data-f]").forEach((x) => x.classList.toggle("on", x === b)); f = b.dataset.f; draw2();
+  }));
+  CL.$("#d2-bad").addEventListener("change", draw2);
+  draw2();
+
+  /* ---- 3. 依赖规则检查 ---- */
+  const IMP = [
+    ["src/domain.ts → ../extensions/tilldone/state.ts", true, "合规。D-L3 读 E-L3 的选择器，这就是唯一接缝。state.ts 零 import，所以被谁读都安全。"],
+    ["src/desk.ts → ./domain.ts", true, "合规。D-L2 调用 D-L3 的纯函数 reduce。上层胶水可以依赖下层领域。"],
+    ["extensions/tilldone/index.ts → ./state.ts", true, "合规。E-L2 调用 E-L3 的 gate、agentEnd、runTool。"],
+    ["src/domain.ts → electron", false, "违规。D-L3 不 import Electron 或 Node。否则 bun test 就要启动 Electron，reduce 也不再是纯函数。"],
+    ["renderer/renderer.ts → ../src/domain.ts", false, "违规。D-L4 不 import 领域代码，只画视图、只发意图。否则渲染端会持有第二份业务状态。"],
+    ["extensions/tilldone/state.ts → node:fs", false, "违规。E-L3 零 import，state.test.ts 会让这条测试失败。读文件属于 L2 的事（例如 index.ts 读 models.json）。"],
+  ];
+  CL.$("#d3-opts").innerHTML = IMP.map((x, i) => '<button class="btn" data-i="' + i + '"><code>' + CL.esc(x[0]) + "</code></button>").join("");
+  const out3 = CL.$("#d3-out");
+  out3.textContent = "选一条 import。";
+  CL.$$("#d3-opts [data-i]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d3-opts [data-i]").forEach((x) => x.classList.toggle("on", x === b));
+    const x = IMP[+b.dataset.i];
+    out3.textContent = x[0] + "\n判定：" + (x[1] ? "✓ 合规" : "✗ 违反四层规则") + "\n" + x[2];
+  }));
+});
+</script>
+</body>
+</html>
