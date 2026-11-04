@@ -87,6 +87,10 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; flex: 1; min-
 .message.user { border-color: var(--accent); background: var(--user); border-radius: var(--radius); }
 .message.nudge { border-color: var(--warning); background: var(--warning-bg); border-radius: var(--radius); }
 .message.nudge h3 { color: var(--warning); }
+.nudge-summary { color: var(--ink); }
+.nudge-outcome { margin-top: 6px !important; font: 600 12px var(--sans); color: var(--muted); }
+.nudge-outcome[data-tone="done"] { color: var(--accent); } .nudge-outcome[data-tone="partial"], .nudge-outcome[data-tone="stopped"] { color: var(--warning); }
+.nudge-raw { margin-top: 8px; font-size: 12px; color: var(--muted); } .nudge-raw summary { cursor: pointer; } .nudge-raw p { margin-top: 6px; }
 .message.notice { border-color: var(--notice); }
 .message.assistant { position: relative; }
 .message .copy { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; opacity: 0; transition: opacity .15s; }
@@ -146,6 +150,11 @@ textarea::placeholder { color: var(--muted); opacity: 1; }
 aside { border-left: 1px solid var(--line); padding: 25px 22px; overflow-y: auto; background: var(--surface-2); }
 #list-description { color: var(--muted); white-space: pre-wrap; }
 .progress-row { font-size: 12px; color: var(--muted); } progress { display: block; width: 100%; height: 7px; margin-top: 10px; accent-color: var(--accent); }
+.nudges { display: block; margin: 10px 0 0; padding: 0; border: 0; background: none; font: 12px var(--sans); color: var(--warning); cursor: pointer; text-align: left; }
+.nudges[hidden] { display: none; } .nudges[data-target]:not([data-target=""]):hover { text-decoration: underline; }
+.nudges[data-target=""] { color: var(--muted); cursor: help; }
+#handoff { margin: 0 0 8px; padding: 8px 12px; font: 12px/1.6 var(--sans); color: var(--ink); background: var(--warning-bg); border: 1px solid var(--warning); border-radius: var(--radius); }
+#handoff[hidden] { display: none; }
 #current { font-size: 12px; color: var(--accent); border-bottom: 1px solid var(--line); padding-bottom: 16px; }
 ol { padding: 0; list-style: none; } li { padding: 10px; border-radius: var(--radius); margin-bottom: 5px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 li.current { color: var(--active-ink); background: var(--active); border: 1px solid var(--accent); } li.done { color: var(--muted); }

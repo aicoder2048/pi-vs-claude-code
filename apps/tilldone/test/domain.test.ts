@@ -697,3 +697,85 @@ test("a tool card inside a group names its command or path", () => {
 	const group = toViewModel(s).conversation[0];
 	expect(group.kind === "tools" && group.tools.map((t) => t.label)).toEqual(["bash · bun run lint · 出错", "tilldone · 执行中"]);
 });
+
+describe("nudges: count, meaning, and outcome", () => {
+	type T = { id: number; text: string; status: "idle" | "inprogress" | "done"; from?: number };
+	const listed = (tasks: T[], nextId = 9) => ({ type: "tool_execution_end", toolCallId: `l${nextId}`, toolName: "tilldone", isError: false,
+		result: { details: { action: "update", nextId, listTitle: "T", listDescription: undefined, tasks } } });
+	const nudge = { type: "message_start", message: { role: "custom", customType: "tilldone-nudge", content: "⚠️ You still have 2 incomplete task(s)" } };
+	const open: T[] = [{ id: 1, text: "a", status: "done" }, { id: 2, text: "b", status: "idle" }, { id: 3, text: "c", status: "inprogress" }];
+	const nudged = () => [listed(open), { type: "agent_start" }, { type: "agent_end" }, nudge].reduce(reduce, initial());
+	const nudgeEntries = (s: ReturnType<typeof initial>) => said(toViewModel(s)).filter((e) => e.kind === "nudge");
+
+	test("a nudge names the open tasks and counts toward the session total", () => {
+		const s = nudged(), vm = toViewModel(s), [entry] = nudgeEntries(s);
+		expect(entry.label).toBe("督促 #1");
+		expect(entry.summary).toContain("2 个任务");
+		expect(entry.summary).toContain("#2、#3");
+		expect(entry.outcomeTone).toBe("waiting");
+		expect(entry.text).toContain("You still have");
+		expect(vm.tasks.nudges?.label).toBe("督促 1 次");
+		expect(vm.tasks.nudges?.target).toBe(entry.id);
+		expect(toViewModel(initial()).tasks.nudges).toBeNull();
+		const zero = toViewModel(reduce(initial(), listed(open))).tasks.nudges;
+		expect(zero?.label).toBe("督促 0 次");
+		expect(zero?.target).toBe("");
+		expect(zero?.title).toContain("还没有督促过");
+	});
+
+	test("the run after a nudge is judged at its agent_end: done, partial, or stopped", () => {
+		const after = (tasks: T[]) => [listed(tasks), { type: "agent_end" }].reduce(reduce, nudged());
+		const done = after([{ id: 1, text: "a", status: "done" }, { id: 2, text: "b", status: "done" }, { id: 3, text: "c", status: "done" }]);
+		expect(nudgeEntries(done)[0].outcomeTone).toBe("done");
+		expect(toViewModel(done).tasks.nudges?.label).toBe("督促 1 次 · 1 次后完成");
+		const partial = after([{ id: 1, text: "a", status: "done" }, { id: 2, text: "b", status: "done" }, { id: 3, text: "c", status: "inprogress" }]);
+		expect(nudgeEntries(partial)[0].outcomeTone).toBe("partial");
+		expect(nudgeEntries(partial)[0].outcome).toContain("1 / 2");
+		expect(nudgeEntries(partial)[0].outcome).toContain("#3");
+		const stopped = after(open);
+		expect(nudgeEntries(stopped)[0].outcomeTone).toBe("stopped");
+		expect(toViewModel(stopped).tasks.nudges?.label).toBe("督促 1 次 · 1 次后仍停下");
+	});
+
+	test("a split task counts as finished only when all of its subtasks are", () => {
+		const split = (status: T["status"]) => [listed([{ id: 1, text: "a", status: "done" }, { id: 2, text: "b", status: "done" },
+			{ id: 9, text: "c1", status: "done", from: 3 }, { id: 10, text: "c2", status, from: 3 }], 11), { type: "agent_end" }].reduce(reduce, nudged());
+		expect(nudgeEntries(split("done"))[0].outcomeTone).toBe("done");
+		expect(nudgeEntries(split("idle"))[0].outcomeTone).toBe("partial");
+	});
+
+	test("a replaced list cannot be compared", () => {
+		const s = [listed([{ id: 1, text: "new", status: "idle" }], 2), { type: "agent_end" }].reduce(reduce, nudged());
+		expect(nudgeEntries(s)[0].outcomeTone).toBe("replaced");
+	});
+
+	test("after the nudge is spent and Pi settles with open tasks, the shepherd is told to step in", () => {
+		const settled = [{ type: "agent_end" }, { type: "agent_settled" }].reduce(reduce, nudged());
+		const handoff = toViewModel(settled).handoff;
+		expect(handoff).toContain("#2");
+		expect(handoff).toContain("#3");
+		expect(toViewModel(nudged()).handoff).toBeNull();
+		const replied = reduce(settled, { type: "message_start", message: { role: "user", content: "go on" } });
+		expect(toViewModel(replied).handoff).toBeNull();
+		const finished = reduce(settled, listed(open.map((t) => ({ ...t, status: "done" as const }))));
+		expect(toViewModel(finished).handoff).toBeNull();
+	});
+
+	test("a steer re-arms the extension, so one settle can hold two nudges", () => {
+		let s = nudged();
+		s = reduce(s, { type: "message_start", message: { role: "user", content: "also check X" } });
+		s = [{ type: "agent_end" }, nudge].reduce(reduce, s);
+		expect(nudgeEntries(s).map((e) => e.label)).toEqual(["督促 #1", "督促 #2"]);
+		expect(nudgeEntries(s)[0].outcomeTone).toBe("stopped");
+		expect(toViewModel(s).tasks.nudges?.label).toBe("督促 2 次 · 1 次后仍停下");
+	});
+
+	test("labels follow the interface language; the model's own text stays verbatim", () => {
+		const s = reduce(nudged(), { type: "desk_preferences", preferences: { theme: "system", language: "en" } });
+		const [entry] = nudgeEntries(s);
+		expect(entry.label).toBe("Nudge #1");
+		expect(entry.summary).toContain("#2, #3");
+		expect(entry.text).toContain("You still have");
+		expect(toViewModel(s).tasks.nudges?.label).toBe("1 nudge");
+	});
+});

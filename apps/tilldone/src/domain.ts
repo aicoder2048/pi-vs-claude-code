@@ -25,6 +25,19 @@ export interface Message {
 	readonly images: number;
 	readonly error: string;
 	readonly task: TaskStamp | null;
+	/** Only on nudge messages. */
+	readonly nudge?: Nudge;
+}
+/**
+ * A TillDone nudge and what came of it. The tasks still open when it arrived are judged at the next agent_end,
+ * the end of the run the nudge started. Task ids only mean the same tasks within one list (State.listEpoch).
+ */
+export interface Nudge {
+	readonly no: number;
+	readonly list: number;
+	readonly pending: readonly number[];
+	readonly outcome: "waiting" | "done" | "partial" | "stopped" | "replaced";
+	readonly left: readonly number[];
 }
 /** A pasted image as the renderer sends it; Pi resizes oversized ones before they reach the model. */
 export interface Image { readonly mimeType: string; readonly data: string }
@@ -167,6 +180,29 @@ function keepCounts(counts: Counts, previous: ListState, list: ListState): Count
 	const kept = Object.entries(counts).filter(([id]) => list.tasks.some((t) => t.id === Number(id)));
 	return kept.length === Object.keys(counts).length ? counts : Object.fromEntries(kept);
 }
+/** A task counts as open while it, or any subtask a split replaced it with, is not done. */
+function stillOpen(list: ListState, id: number, seen: ReadonlySet<number> = new Set()): boolean {
+	const task = list.tasks.find((t) => t.id === id);
+	if (task) return task.status !== "done";
+	return list.tasks.some((t) => t.from === id && !seen.has(t.id) && stillOpen(list, t.id, new Set([...seen, id])));
+}
+function addNudge(state: State, blocks: Record<number, string>): State {
+	const no = state.messages.filter((m) => m.nudge).length + 1;
+	const pending = state.list.tasks.filter((t) => t.status !== "done").map((t) => t.id);
+	const s = addMessage(state, "nudge", blocks);
+	const nudge: Nudge = { no, list: state.listEpoch, pending, outcome: "waiting", left: pending };
+	return { ...s, messages: s.messages.map((m, i) => i === s.messages.length - 1 ? { ...m, nudge } : m) };
+}
+function judgeNudges(state: State): State {
+	if (!state.messages.some((m) => m.nudge?.outcome === "waiting")) return state;
+	return { ...state, messages: state.messages.map((m) => {
+		if (m.nudge?.outcome !== "waiting") return m;
+		if (m.nudge.list !== state.listEpoch) return { ...m, nudge: { ...m.nudge, outcome: "replaced", left: [] } };
+		const left = m.nudge.pending.filter((id) => stillOpen(state.list, id));
+		const outcome = left.length === 0 ? "done" : left.length === m.nudge.pending.length ? "stopped" : "partial";
+		return { ...m, nudge: { ...m.nudge, outcome, left } };
+	}) };
+}
 /** Every Pi record except the state poll's response proves Pi is still making progress. */
 export function reduce(state: State, record: RecordValue): State {
 	const next = project(state, record);
@@ -220,13 +256,14 @@ function project(state: State, record: RecordValue): State {
 		// One turn is one model request; it belongs to the task in progress when it starts.
 		case "turn_start": return { ...state, turnAt: state.now, modelCalls: countActive(state.modelCalls, state.list) };
 		// agent_end is intentionally not an idle transition: a nudge may start another run.
+		case "agent_end": return judgeNudges(state);
 		case "agent_settled": return { ...state, runStartedAt: null, runActive: false, streaming: false, compacting: false, queued: [], pendingSplits: [] };
 		case "thinking_level_changed": return { ...state, thinking: text(record.level) };
 		case "message_start": {
 			const m = record.message;
 			if (m?.role === "assistant") return addMessage(state, "assistant", contentBlocks(m.content));
 			if (m?.role === "user") return addMessage(state, "user", contentBlocks(m.content), "", imageCount(m.content));
-			if (m?.role === "custom" && m.customType === "tilldone-nudge") return addMessage(state, "nudge", contentBlocks(m.content));
+			if (m?.role === "custom" && m.customType === "tilldone-nudge") return addNudge(state, contentBlocks(m.content));
 			return state;
 		}
 		case "message_update": {
@@ -419,7 +456,9 @@ function dialogView(dialog: Dialog, now: number) {
 	return { ...shown, remainingSeconds: deadline === null ? null : Math.max(0, Math.ceil((deadline - now) / 1000)) };
 }
 const pretty = (value: unknown) => JSON.stringify(value, null, 2) ?? "";
-export type Entry = { id: string; kind: Message["kind"] | "tool"; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean };
+export type Entry = { id: string; kind: Message["kind"] | "tool"; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean;
+	/** Nudges only: what the nudge was about and what came of it, in the interface language. */
+	summary: string; outcome: string; outcomeTone: "" | Nudge["outcome"] };
 // Messages and tools are immutable, so an entry stays valid while its source object and copy are unchanged.
 // Without this, every streamed token re-serializes the whole history, including every tool result.
 const entries = new WeakMap<Message | Tool, { ui: ReturnType<typeof copyFor>; entry: Entry }>();
@@ -646,11 +685,39 @@ function groupSummary(tools: readonly Tool[], ui: Ui): string {
 	return [parts.join(ui.groupSeparator), ...status].join(" · ");
 }
 function toolEntry(t: Tool, ui: Ui): Entry {
-	return entryFor(t, ui, () => ({ id: t.id, kind: "tool", label: [t.name, toolDetail(t.name, t.args), { running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]].filter(Boolean).join(" · "), text: "", images: 0, args: pretty(t.args), result: pretty(t.result), error: "", copyable: false }));
+	return entryFor(t, ui, () => ({ id: t.id, kind: "tool", label: [t.name, toolDetail(t.name, t.args), { running: ui.toolRunning, done: ui.toolDone, error: ui.toolError }[t.phase]].filter(Boolean).join(" · "), text: "", images: 0, args: pretty(t.args), result: pretty(t.result), error: "", copyable: false, summary: "", outcome: "", outcomeTone: "" }));
+}
+const taskIds = (ids: readonly number[], ui: Ui) => ids.map((id) => `#${id}`).join(ui.idSeparator);
+function nudgeOutcome(n: Nudge, ui: Ui): string {
+	const left = taskIds(n.left, ui);
+	return { waiting: ui.nudgeWaiting, done: ui.nudgeDone, replaced: ui.nudgeReplaced, stopped: ui.nudgeStopped.replace("{left}", left),
+		partial: ui.nudgePartial.replace("{d}", String(n.pending.length - n.left.length)).replace("{n}", String(n.pending.length)).replace("{left}", left) }[n.outcome];
 }
 function messageEntry(m: Message, ui: Ui): Entry {
-	return entryFor(m, ui, () => ({ id: m.id, kind: m.kind, label: { assistant: ui.assistant, user: ui.user, nudge: ui.nudge, notice: ui.notice }[m.kind],
-		text: shownText(m), images: m.images, error: m.error, args: "", result: "", copyable: copyable(m) }));
+	return entryFor(m, ui, () => ({ id: m.id, kind: m.kind, label: m.nudge ? ui.nudgeNo.replace("{n}", String(m.nudge.no)) : { assistant: ui.assistant, user: ui.user, nudge: ui.nudge, notice: ui.notice }[m.kind],
+		text: shownText(m), images: m.images, error: m.error, args: "", result: "", copyable: copyable(m),
+		summary: m.nudge ? ui.nudgeSummary.replace("{n}", String(m.nudge.pending.length)).replace("{ids}", taskIds(m.nudge.pending, ui)) : "",
+		outcome: m.nudge ? nudgeOutcome(m.nudge, ui) : "", outcomeTone: m.nudge?.outcome ?? "" }));
+}
+/** The session's nudges in one line for the task panel, zero included once there is a list; null while there is nothing to nudge about. */
+function nudgesView(state: State, ui: Ui) {
+	const nudges = state.messages.filter((m) => m.nudge);
+	if (!nudges.length && !state.list.tasks.length) return null;
+	if (!nudges.length) return { label: ui.nudgeCountZero, title: ui.nudgeTitleZero, target: "" };
+	const count = (outcome: Nudge["outcome"]) => nudges.filter((m) => m.nudge!.outcome === outcome).length;
+	const parts = ([["done", ui.nudgeCountDone], ["partial", ui.nudgeCountPartial], ["stopped", ui.nudgeCountStopped]] as const)
+		.map(([outcome, label]) => [count(outcome), label] as const).filter(([n]) => n > 0).map(([n, label]) => label.replace("{n}", String(n)));
+	const total = nudges.length === 1 ? ui.nudgeCountOne : ui.nudgeCount.replace("{n}", String(nudges.length));
+	return { label: [total, ...parts].join(" · "), title: ui.nudgeTitle, target: nudges[nudges.length - 1].id };
+}
+/** Pi has settled with open tasks after its nudge for the latest user message was spent: the shepherd's move. */
+function handoffView(state: State, ui: Ui): string | null {
+	if (isRunning(state) || state.connection === "exited") return null;
+	const lastIndex = (match: (m: Message) => boolean) => { for (let i = state.messages.length - 1; i >= 0; i--) if (match(state.messages[i])) return i; return -1; };
+	const lastNudge = lastIndex((m) => m.nudge !== undefined), lastUser = lastIndex((m) => m.kind === "user");
+	const open = state.list.tasks.filter((t) => t.status !== "done").map((t) => t.id);
+	if (lastNudge < 0 || lastNudge < lastUser || !open.length) return null;
+	return ui.handoff.replace("{tasks}", taskIds(open, ui));
 }
 /** Consecutive tools with no visible message between them; the id is the first tool's, so it holds as the group grows. */
 export interface ToolGroup { readonly kind: "tools"; readonly id: string; readonly summary: string; readonly tone: Tone; readonly open: boolean; readonly tools: readonly Entry[] }
@@ -698,7 +765,9 @@ export function toViewModel(state: State) {
 			current: active ? `${ui.working} #${active.id}: ${active.text}` : ui.noActive, focus: state.taskFocus, filterTitle: ui.filterTitle,
 			items: state.list.tasks.map((t) => ({ ...t, label: t.from === undefined ? `#${t.id}` : `#${t.id} ← #${t.from}`, icon: STATUS_ICON[t.status], statusLabel: { idle: ui.taskIdle, inprogress: ui.taskInprogress, done: ui.taskDone }[t.status], current: t.id === active?.id,
 				filtered: t.id === filter?.id, splittable: state.connection === "ready" && t.status !== "done", splitting: state.pendingSplits.includes(t.id),
-				...toolCallsView(state.toolCalls[t.id] ?? 0, ui), ...modelCallsView(state.modelCalls[t.id] ?? 0, ui) })) },
+				...toolCallsView(state.toolCalls[t.id] ?? 0, ui), ...modelCallsView(state.modelCalls[t.id] ?? 0, ui) })),
+			nudges: nudgesView(state, ui) },
+		handoff: handoffView(state, ui),
 		queued: state.queued,
 		activity: activityView(state, ui),
 		filter: filter ? { label: ui.filterLabel.replace("{id}", String(filter.id)).replace("{text}", filter.text), clear: ui.filterClear } : null,

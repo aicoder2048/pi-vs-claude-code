@@ -259,6 +259,7 @@ try {
 	await page.locator("#prompt").fill("tasks"); await page.locator("#send").click();
 	await page.waitForFunction(() => document.querySelectorAll("#task-list li").length === 2);
 	assert.equal(await page.locator("#task-list li button.split").count(), 1, "Only the unfinished task offers a split button");
+	assert.equal(await page.locator("#nudges").innerText(), "0 nudges", "A list with no nudge yet still shows the count");
 	await page.waitForFunction(() => document.querySelector("#task-list li .tool-calls")?.textContent?.startsWith("16 "));
 	assert.equal(await page.locator("#task-list li .tool-calls").count(), 1, "Only the task that was in progress shows a tool-call count");
 	assert.equal(await page.locator("#task-list li .tool-calls").innerText(), "16 tools");
@@ -410,6 +411,25 @@ try {
 		await restored.waitForTimeout(350);
 		await restored.screenshot({ path: join(tmpdir(), `tilldone-brand-zh-${theme}.png`) });
 	}
+	const nudgeErrors: string[] = [];
+	restored.on("pageerror", (error) => nudgeErrors.push(error.message));
+	await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 860));
+	await restored.waitForFunction(() => !(document.querySelector("#send") as HTMLButtonElement).disabled);
+	await restored.locator("#prompt").fill("nudge"); await restored.locator("#send").click();
+	await restored.locator(".message.nudge .nudge-outcome[data-tone='partial']").waitFor();
+	assert.equal(await restored.locator(".message.nudge h3").innerText(), "督促 #1");
+	assert.match(await restored.locator(".message.nudge .nudge-summary").innerText(), /2 个任务没完成（#2、#3）/);
+	assert.match(await restored.locator(".message.nudge .nudge-outcome").innerText(), /完成 1 \/ 2，#3 仍未完成/);
+	assert.equal(await restored.locator(".message.nudge details.nudge-raw").evaluate((d) => (d as HTMLDetailsElement).open), false, "The model's own text stays folded");
+	assert.equal(await restored.locator("#nudges").innerText(), "督促 1 次 · 1 次后部分完成");
+	assert.match(await restored.locator("#nudges").getAttribute("title") ?? "", /最多催一次/);
+	await restored.locator("#handoff").waitFor();
+	assert.match(await restored.locator("#handoff").innerText(), /#3 还没完成/);
+	await restored.locator("#nudges").click();
+	await restored.locator(".message.nudge details.nudge-raw summary").click();
+	await restored.waitForTimeout(400);
+	await restored.screenshot({ path: join(screenshots, "tilldone-desk-nudge.png") });
+	assert.deepEqual(nudgeErrors, [], "No page errors in the nudge view");
 	console.log(`Electron smoke passed (fake Pi), including skin persistence across app restart. Screenshot: ${screenshot}`);
 } catch (error) {
 	const page = await application.firstWindow();

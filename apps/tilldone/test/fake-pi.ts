@@ -105,6 +105,19 @@ async function handle(r: any) {
 		update([working, finished, nesting, queued("reviewer")]);
 		return;
 	}
+	if (r.message === "nudge") {
+		// A run that ends with two tasks open, the extension's nudge, and a second run that finishes only one of them.
+		const list = (tasks: object[]) => emit({ type: "tool_execution_end", toolCallId: `nudge-${JSON.stringify(tasks).length}`, toolName: "tilldone", isError: false,
+			result: { content: [], details: { action: "update", tasks, nextId: 4, listTitle: "Nudge", listDescription: undefined } } });
+		emit({ type: "agent_start" });
+		list([{ id: 1, text: "draft", status: "done" }, { id: 2, text: "review", status: "inprogress" }, { id: 3, text: "publish", status: "idle" }]);
+		emit({ type: "agent_end" });
+		emit({ type: "message_start", message: { role: "custom", customType: "tilldone-nudge", content: "⚠️ You still have 2 incomplete task(s):\n\n  ● #2 [in progress]: review\n  ○ #3 [idle]: publish\n\nEither continue working on them or mark them done with `tilldone done`. Don't stop until it's done!" } });
+		list([{ id: 1, text: "draft", status: "done" }, { id: 2, text: "review", status: "done" }, { id: 3, text: "publish", status: "idle" }]);
+		emit({ type: "agent_end" });
+		emit({ type: "agent_settled" });
+		return;
+	}
 	if (r.message.startsWith("Split task")) return;
 	if (r.message === "expiry") { emit({ type: "extension_ui_request", method: "confirm", id: "expiry-id", title: "Timeout", message: "Close only", timeout: 100 }); return; }
 	if (r.message === "dialogs") {

@@ -56,6 +56,7 @@
       <div id="conversation" aria-live="polite"><p class="empty">让 Pi 制定计划，并逐项完成任务。</p></div>
       <form id="composer">
         <label for="prompt"><span id="message-label">发送消息给 Pi</span> <span id="keyboard-hint">Enter 发送 · Shift+Enter 换行</span></label>
+        <p id="handoff" role="status" hidden></p>
         <ul id="queued" hidden></ul>
         <div id="attachments" hidden></div>
         <textarea id="prompt" rows="3" placeholder="你想完成什么任务？"></textarea>
@@ -66,6 +67,7 @@
     <aside id="tasks" tabindex="-1" aria-label="TillDone 任务面板">
       <span id="task-list-label" class="eyebrow">任务列表</span><h2 id="list-title">TillDone</h2><p id="list-description"></p>
       <div class="progress-row"><span id="progress-label">0 / 0 已完成</span><progress id="progress" max="1" value="0"></progress></div>
+      <button id="nudges" class="nudges" type="button" hidden></button>
       <p id="current">暂无进行中的任务</p><ol id="task-list"></ol>
     </aside>
   </main>

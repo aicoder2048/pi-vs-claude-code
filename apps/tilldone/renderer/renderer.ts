@@ -16,7 +16,9 @@ interface View {
 	input: { enabled: boolean; running: boolean; newSession: boolean; images: boolean };
 	tasks: { title: string; description: string; progress: string; total: number; done: number; current: string; focus: number; filterTitle: string;
 		items: { id: number; label: string; text: string; status: string; statusLabel: string; icon: string; current: boolean; filtered: boolean; splittable: boolean; splitting: boolean;
-			toolCallsLabel: string; toolCallsTitle: string; heavy: boolean; modelCallsLabel: string; modelCallsTitle: string }[] };
+			toolCallsLabel: string; toolCallsTitle: string; heavy: boolean; modelCallsLabel: string; modelCallsTitle: string }[];
+		nudges: { label: string; title: string; target: string } | null };
+	handoff: string | null;
 	queued: string[];
 	activity: { text: string; elapsed: string; total: string; lastActivity: string; stale: boolean;
 		children: { agent: string; status: string; icon: string; text: string; nested: string; stale: boolean }[] } | null;
@@ -24,7 +26,8 @@ interface View {
 	conversation: (Entry | { kind: "tools"; id: string; summary: string; tone: "error" | "change" | "quiet" | "normal"; open: boolean; tools: Entry[] })[];
 	dialog: { id: string; kind: "confirm" | "select" | "input" | "editor"; title: string; message: string; options: string[]; placeholder: string; prefill: string; remainingSeconds: number | null } | null;
 }
-type Entry = { id: string; kind: "assistant" | "user" | "nudge" | "notice" | "tool"; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean };
+type Entry = { id: string; kind: "assistant" | "user" | "nudge" | "notice" | "tool"; label: string; text: string; images: number; error: string; args: string; result: string; copyable: boolean;
+	summary: string; outcome: string; outcomeTone: string };
 declare global {
 	interface Window { tilldone: { send(intent: unknown): Promise<{ ok: boolean; error?: string }>; onView(callback: (view: View) => void): () => void } }
 }
@@ -205,6 +208,9 @@ function render(view: View) {
 		queued.replaceChildren(...view.queued.map((message) => node("li", `⏳ ${ui.queued} · ${message}`)));
 	}
 	renderActivity(view.activity);
+	const handoff = $("handoff");
+	if (handoff.hidden !== !view.handoff) handoff.hidden = !view.handoff;
+	setText("handoff", view.handoff ?? "");
 	setText("input-hint", !view.input.enabled ? view.connection === "exited" ? ui.restartHint : ui.connecting : view.input.running ? ui.busy : ui.ready);
 
 	renderFilter(view.filter);
@@ -221,6 +227,7 @@ function render(view: View) {
 			[item.label, item.text, item.error, item.images ? `🖼 ${ui.image} ×${item.images}` : ""].forEach((value, index) => {
 				const child = element!.children[index];
 				if (item.kind === "assistant" && index === 1) setMarkdown(child, value);
+				else if (item.kind === "nudge" && index === 1) renderNudgeBody(child, item, ui);
 				else if (child.textContent !== value) child.textContent = value;
 			});
 			const copy = element.querySelector<HTMLButtonElement>("button.copy");
@@ -233,6 +240,12 @@ function render(view: View) {
 	setText("list-title", view.tasks.title); setText("list-description", view.tasks.description);
 	setText("progress-label", view.tasks.progress); setText("current", view.tasks.current);
 	const progress = $<HTMLProgressElement>("progress"); progress.max = Math.max(1, view.tasks.total); progress.value = view.tasks.done;
+	const nudges = $<HTMLButtonElement>("nudges");
+	if (nudges.hidden !== !view.tasks.nudges) nudges.hidden = !view.tasks.nudges;
+	if (view.tasks.nudges) {
+		setText("nudges", view.tasks.nudges.label);
+		nudges.title = view.tasks.nudges.title; nudges.dataset.target = view.tasks.nudges.target;
+	}
 	// Rebuild the list only when its content changes, not on every streamed view.
 	const taskList = $("task-list");
 	const taskSignature = JSON.stringify([view.tasks.items, ui.split, ui.splitting, view.tasks.filterTitle]);
@@ -297,12 +310,30 @@ function messageElement(item: Entry) {
 	const element = node("article"); element.className = `message ${item.kind}`;
 	const error = node("p"); error.className = "message-error";
 	const images = node("p"); images.className = "message-images";
-	// Assistant replies are Markdown; user, nudge and notice text is shown as written.
-	const body = item.kind === "assistant" ? node("div") : node("p");
+	// Assistant replies are Markdown; user and notice text is shown as written.
+	// A nudge leads with its meaning and outcome; the text the model saw stays verbatim behind a fold.
+	const body = item.kind === "assistant" || item.kind === "nudge" ? node("div") : node("p");
 	if (item.kind === "assistant") body.className = "markdown";
+	if (item.kind === "nudge") {
+		body.className = "nudge-body";
+		const summary = node("p"); summary.className = "nudge-summary";
+		const outcome = node("p"); outcome.className = "nudge-outcome";
+		const raw = node("details"); raw.className = "nudge-raw";
+		raw.append(node("summary"), node("p"));
+		body.append(summary, outcome, raw);
+	}
 	element.append(node("h3"), body, error, images);
 	if (item.kind === "assistant") element.append(copyButton(item.id));
 	return element;
+}
+function renderNudgeBody(body: Element, item: Entry, ui: View["ui"]) {
+	const [summary, outcome, raw] = Array.from(body.children) as HTMLElement[];
+	if (summary.textContent !== item.summary) summary.textContent = item.summary;
+	if (outcome.textContent !== item.outcome) outcome.textContent = item.outcome;
+	if (outcome.dataset.tone !== item.outcomeTone) outcome.dataset.tone = item.outcomeTone;
+	const [label, text] = Array.from(raw.children) as HTMLElement[];
+	if (label.textContent !== ui.nudgeRaw) label.textContent = ui.nudgeRaw;
+	if (text.textContent !== item.text) text.textContent = item.text;
 }
 function renderGroup(group: Extract<View["conversation"][number], { kind: "tools" }>, element: HTMLElement | undefined, ui: View["ui"]) {
 	if (!element) {
@@ -445,6 +476,12 @@ function filterFromRow(event: Event) {
 $("task-list").addEventListener("click", filterFromRow);
 $("task-list").addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.target as Element).matches("li")) filterFromRow(event); });
 $("filter-clear").onclick = () => { void send({ type: "filterTask", id: null }); };
+$("nudges").onclick = () => {
+	const target = $("nudges").dataset.target;
+	if (!target) return;
+	const message = Array.from($("conversation").children).find((el) => (el as HTMLElement).dataset.key === target);
+	message?.scrollIntoView({ behavior: "smooth", block: "center" });
+};
 $("stop").onclick = () => { void send({ type: "abort" }); };
 $("restart").onclick = () => { void send({ type: "restart" }); };
 $("new-session").onclick = () => { const dialog = $<HTMLDialogElement>("new-session-dialog"); dialog.showModal(); $("new-session-cancel").focus(); };
