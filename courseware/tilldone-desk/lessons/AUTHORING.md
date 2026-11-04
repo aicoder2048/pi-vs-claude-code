@@ -14,7 +14,9 @@
 | `Lxx-*.html` | 课程页。文件名必须和 `assets/course-lib.js` 里 `CL.LESSONS` 的 `file` 一致 |
 | `assets/course.css` | 公用样式。局部样式写在课程 `<style>` 里，只用 CSS 变量，不写死颜色 |
 | `assets/course-lib.js` | 公用脚本 + 课程配置（`CL.STEPS`、`CL.LESSONS`） |
-| `assets/course-tutor.js` | AI 助教前端（自动加载） |
+| `assets/course-tutor.js` | AI 助教前端（自动加载；可拖宽、可“记笔记”） |
+| `notes.html` | 学习笔记页：列出并渲染 `study-notes/*.md` |
+| `study-notes/` | 从助教对话整理出的 Markdown 笔记（服务端写入） |
 | `assets/glossary-data.js` | 共用术语表 + 分类表 `CL_GLOSSARY_CATS` |
 | `assets/glossary-add-<课号>.js` | 写课时新增术语的临时文件，最后由 `node tools/finalize.mjs --merge` 合并 |
 | `img/figNN.*` | 原文配图（编号与原文顺序一致；在这里补一张“图号 → 原文位置 → 内容”对照表） |

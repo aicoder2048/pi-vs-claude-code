@@ -115,6 +115,88 @@
     return null;
   };
 
+  /* ================= Markdown（AI 助教回答、学习笔记共用） ================= */
+  // 先转义再解析，不执行任何 HTML。支持：标题、列表、引用、表格、代码块、```mermaid 图、链接。
+  // opts.flat = true：标题一律渲染成 <h4>（助教面板里不用多级标题）
+  CL.esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); };
+  CL.md = function (src, opts) {
+    opts = opts || {};
+    const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+    const inline = (s) => CL.esc(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>")
+      .replace(/\[([^\]]+)\]\(((?:https?:\/\/|\.{0,2}\/|[\w-]+\.(?:html|md))[^)\s]*)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    const cells = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+    const isSep = (l) => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(l || "");
+    let out = "", list = null, i = 0;
+    const flush = () => { if (list) { out += "</" + list + ">"; list = null; } };
+    while (i < lines.length) {
+      const l = lines[i].trimEnd(); let m;
+      if ((m = l.match(/^\s*```\s*([\w-]*)/))) {               // 代码块 / mermaid
+        flush(); const lang = m[1].toLowerCase(), buf = []; i++;
+        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) buf.push(lines[i++]);
+        i++; const code = buf.join("\n");
+        out += lang === "mermaid"
+          ? '<div class="md-mermaid" data-src="' + CL.esc(code) + '"><pre class="md-code">' + CL.esc(code) + "</pre></div>"
+          : '<pre class="md-code">' + CL.esc(code) + "</pre>";
+        continue;
+      }
+      if (/^\s*\|.*\|\s*$/.test(l) && isSep(lines[i + 1])) {  // 表格
+        flush(); const head = cells(l), aligns = cells(lines[i + 1]).map((c) => (/^:-+:$/.test(c) ? "center" : /-:$/.test(c) ? "right" : ""));
+        const td = (tag, c, k) => "<" + tag + (aligns[k] ? ' style="text-align:' + aligns[k] + '"' : "") + ">" + inline(c) + "</" + tag + ">";
+        out += '<div class="md-tbl"><table class="tbl"><thead><tr>' + head.map((c, k) => td("th", c, k)).join("") + "</tr></thead><tbody>";
+        i += 2;
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { out += "<tr>" + cells(lines[i]).map((c, k) => td("td", c, k)).join("") + "</tr>"; i++; }
+        out += "</tbody></table></div>"; continue;
+      }
+      i++;
+      if (!l.trim()) { flush(); continue; }
+      if ((m = l.match(/^(#{1,4})\s+(.*)/))) { flush(); const h = opts.flat ? 4 : Math.min(4, m[1].length); out += "<h" + h + ">" + inline(m[2]) + "</h" + h + ">"; continue; }
+      if ((m = l.match(/^\s*>\s?(.*)/))) { flush(); out += "<blockquote>" + inline(m[1]) + "</blockquote>"; continue; }
+      if ((m = l.match(/^\s*[-*•]\s+(.*)/))) { if (list !== "ul") { flush(); out += "<ul>"; list = "ul"; } out += "<li>" + inline(m[1]) + "</li>"; continue; }
+      if ((m = l.match(/^\s*\d+[.)、]\s+(.*)/))) { if (list !== "ol") { flush(); out += "<ol>"; list = "ol"; } out += "<li>" + inline(m[1]) + "</li>"; continue; }
+      if (/^\s*(---|\*\*\*)\s*$/.test(l)) { flush(); out += "<hr>"; continue; }
+      flush(); out += "<p>" + inline(l) + "</p>";
+    }
+    flush();
+    return out.replace(/<\/blockquote><blockquote>/g, "<br>");
+  };
+
+  // 把 root 里的 .md-mermaid 画成图。mermaid 按需从 CDN 加载；加载失败或语法错时保留源码。
+  const MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js";
+  const mermaidCache = new Map();
+  let mermaidLoading = null, mermaidSeq = 0;
+  function loadMermaid() {
+    if (window.mermaid) return Promise.resolve(window.mermaid);
+    if (!mermaidLoading) mermaidLoading = new Promise((ok, fail) => {
+      const s = document.createElement("script"); s.src = MERMAID_URL;
+      s.onload = () => ok(window.mermaid); s.onerror = () => { mermaidLoading = null; fail(new Error("mermaid 加载失败")); };
+      document.head.appendChild(s);
+    });
+    return mermaidLoading;
+  }
+  CL.renderMermaid = async function (root) {
+    const blocks = [...(root || document).querySelectorAll(".md-mermaid:not(.done)")];
+    if (!blocks.length) return;
+    let mm;
+    try { mm = await loadMermaid(); } catch (e) { console.warn("[CL]", e); return; }
+    const theme = CL.theme() === "dark" ? "dark" : "neutral";
+    mm.initialize({ startOnLoad: false, securityLevel: "strict", theme, fontFamily: "inherit" });
+    for (const b of blocks) {
+      const src = b.dataset.src, key = theme + "\n" + src;
+      try {
+        if (!mermaidCache.has(key)) mermaidCache.set(key, (await mm.render("cl-mm-" + ++mermaidSeq, src)).svg);
+        b.innerHTML = mermaidCache.get(key);
+        b.classList.add("done");
+      } catch (e) {
+        b.classList.add("done", "bad");
+        b.insertAdjacentHTML("beforeend", '<div class="md-note">（这张图的 Mermaid 语法有误，上面显示源码）</div>');
+        document.querySelectorAll("body > [id^='dcl-mm-'], body > [id^='cl-mm-']").forEach((x) => x.remove()); // 清理 mermaid 出错时留下的临时节点
+      }
+    }
+  };
+
   /* ================= 交互组件 ================= */
   function initQuiz() {
     document.querySelectorAll(".quiz").forEach((q) => {
@@ -220,7 +302,7 @@
       top.innerHTML = '<div class="topbar-inner">' +
         (hasNav ? '<button class="nav-btn" type="button" aria-label="打开学习路线">☰ 学习路线</button>' : "") +
         '<a class="brand" href="index.html"><span class="seal">牧</span>边牧结构精读<small>互动课程</small></a>' +
-        '<nav><a href="index.html">课程目录</a><a href="glossary.html">术语表</a><a href="../docs/articles/tilldone-desk-anatomy.md" title="原文存档">原文</a>' +
+        '<nav><a href="index.html">课程目录</a><a href="glossary.html">术语表</a><a href="notes.html">学习笔记</a><a href="../docs/articles/tilldone-desk-anatomy.md" title="原文存档">原文</a>' +
         '<button class="theme-btn" type="button" title="切换主题：浅色 → 深色 → 水墨">' + themeLabel() + "</button></nav></div>";
       const tb = top.querySelector(".theme-btn");
       tb.addEventListener("click", () => {

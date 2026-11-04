@@ -15,10 +15,13 @@
   let history = load();              // [{role, content, meta?}]
   let pending = null;                // {chartCard, selection} 附在下一条提问上
   let busy = false, ctrl = null, serverOk = null, model = "deepseek-flash";
+  let picking = false, picked = new Set(), noteBusy = false;   // “记笔记”勾选模式
 
   // 面板默认常开；用户手动收起后记住（所有课程共用这个偏好）
   function panelPref() { try { return localStorage.getItem("bm-tutor-panel"); } catch (e) { return null; } }
   function savePanelPref(v) { try { localStorage.setItem("bm-tutor-panel", v); } catch (e) { /* ignore */ } }
+  function widthPref() { try { return +localStorage.getItem("bm-tutor-w") || 0; } catch (e) { return 0; } }
+  function saveWidthPref(v) { try { if (v) localStorage.setItem("bm-tutor-w", String(v)); else localStorage.removeItem("bm-tutor-w"); } catch (e) { /* ignore */ } }
   function load() { try { return JSON.parse(localStorage.getItem(STORE) || "[]"); } catch (e) { return []; } }
   function save() { try { localStorage.setItem(STORE, JSON.stringify(history.slice(-40))); } catch (e) { /* ignore */ } }
 
@@ -28,10 +31,12 @@
   const panel = el("aside", "tutor-panel");
   panel.setAttribute("aria-label", "AI 助教");
   panel.innerHTML =
+    '<div class="tp-resize" title="拖动调整宽度（双击恢复默认）"></div>' +
     '<div class="tp-head"><div><b>AI 助教</b><small class="tp-model"></small></div>' +
-    '<div class="tp-tools"><button type="button" class="tp-clear" title="清空本课对话">清空</button><button type="button" class="tp-close" title="收起 AI 助教（右下角可重新打开）">收起 ›</button></div></div>' +
+    '<div class="tp-tools"><button type="button" class="tp-pickbtn" title="勾选几段对话，整理成一篇学习笔记">记笔记</button><button type="button" class="tp-clear" title="清空本课对话">清空</button><button type="button" class="tp-close" title="收起 AI 助教（右下角可重新打开）">收起 ›</button></div></div>' +
     '<div class="tp-where"></div>' +
     '<div class="tp-msgs" aria-live="polite"></div>' +
+    '<div class="tp-notebar"></div>' +
     '<div class="tp-quick"></div>' +
     '<div class="tp-attach"></div>' +
     '<form class="tp-form"><textarea rows="3" placeholder="问任何关于本课的问题……  Enter 发送，Shift+Enter 换行"></textarea>' +
@@ -65,8 +70,85 @@
   function close() { document.body.classList.remove("tutor-open"); }
   fab.addEventListener("click", () => { if (document.body.classList.contains("tutor-open")) { close(); savePanelPref("closed"); } else { open(); savePanelPref("open"); } });
   $(".tp-close").addEventListener("click", () => { close(); savePanelPref("closed"); });
-  $(".tp-clear").addEventListener("click", () => { if (busy) stop(); history = []; save(); render(); });
+  $(".tp-clear").addEventListener("click", () => { if (busy) stop(); if (picking) setPicking(false); history = []; save(); render(); });
 
+
+  /* ---------- 拖动左边缘调整宽度 ---------- */
+  const DEFAULT_W = 420, MIN_W = 320;
+  const maxW = () => Math.max(MIN_W, Math.min(1100, window.innerWidth - 420));   // 正文至少留 420px
+  function setWidth(w) {
+    if (!w) { document.documentElement.style.removeProperty("--tutor-w"); return; }
+    document.documentElement.style.setProperty("--tutor-w", Math.round(Math.min(maxW(), Math.max(MIN_W, w))) + "px");
+  }
+  setWidth(widthPref());
+  window.addEventListener("resize", () => setWidth(widthPref()));
+  const grip = $(".tp-resize");
+  grip.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); grip.setPointerCapture(e.pointerId); document.body.classList.add("tp-dragging");
+    const move = (ev) => setWidth(window.innerWidth - ev.clientX);
+    const up = () => {
+      grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", up); grip.removeEventListener("pointercancel", up);
+      document.body.classList.remove("tp-dragging");
+      saveWidthPref(parseInt(getComputedStyle(document.documentElement).getPropertyValue("--tutor-w")) || 0);
+    };
+    grip.addEventListener("pointermove", move); grip.addEventListener("pointerup", up); grip.addEventListener("pointercancel", up);
+  });
+  grip.addEventListener("dblclick", () => { setWidth(0); saveWidthPref(0); });
+
+  /* ---------- 记笔记：勾选对话 → 服务端整理成 Markdown 笔记 → 存进 study-notes/ ---------- */
+  const noteBar = $(".tp-notebar");
+  function pickable(m) { return m && m.content && !m.streaming && !m.error; }
+  function setPicking(on) {
+    picking = on; picked = new Set(); panel.classList.toggle("picking", on);
+    $(".tp-pickbtn").textContent = on ? "退出笔记" : "记笔记";
+    if (on) noteBar.innerHTML =
+      '<div class="tp-nb-tip">点选要保留的对话（点问题会连同它的回答一起选上）。</div>' +
+      '<input type="text" class="tp-nb-hint" maxlength="120" placeholder="笔记的标题或重点（可选）">' +
+      '<div class="tp-nb-row"><span class="tp-nb-n">已选 0 条</span><span><button type="button" class="tp-nb-all">全选</button>' +
+      '<button type="button" class="btn primary tp-nb-go" disabled>整理为笔记</button></span></div><div class="tp-nb-status"></div>';
+    render();
+  }
+  function refreshPicked() {
+    msgsEl.querySelectorAll(".tp-msg.pickable").forEach((x) => x.classList.toggle("picked", picked.has(+x.dataset.i)));
+    noteBar.querySelector(".tp-nb-n").textContent = "已选 " + picked.size + " 条";
+    noteBar.querySelector(".tp-nb-go").disabled = !picked.size || noteBusy;
+  }
+  $(".tp-pickbtn").addEventListener("click", () => { if (noteBusy) return; if (busy) stop(); setPicking(!picking); });
+  msgsEl.addEventListener("click", (e) => {
+    if (!picking || noteBusy) return;
+    const box = e.target.closest(".tp-msg.pickable"); if (!box || e.target.closest("a")) return;
+    const i = +box.dataset.i, on = !picked.has(i);
+    const ids = [i];
+    if (history[i].role === "user" && history[i + 1] && history[i + 1].role === "assistant" && pickable(history[i + 1])) ids.push(i + 1);
+    ids.forEach((k) => (on ? picked.add(k) : picked.delete(k)));
+    refreshPicked();
+  });
+  noteBar.addEventListener("click", (e) => {
+    if (e.target.closest(".tp-nb-all")) {
+      const all = history.map((m, i) => (pickable(m) ? i : -1)).filter((i) => i >= 0);
+      picked = picked.size === all.length ? new Set() : new Set(all); refreshPicked();
+    } else if (e.target.closest(".tp-nb-go")) makeNote();
+  });
+  async function makeNote() {
+    if (!picked.size || noteBusy) return;
+    const msgs = [...picked].sort((a, b) => a - b).map((i) => ({ role: history[i].role, content: history[i].content }));
+    const status = noteBar.querySelector(".tp-nb-status");
+    noteBusy = true; refreshPicked();
+    status.innerHTML = '<span class="tp-dots">正在整理 ' + msgs.length + " 条对话，约需 20–60 秒</span>";
+    try {
+      const r = await fetch("/api/tutor/note", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lesson: LESSON, hint: noteBar.querySelector(".tp-nb-hint").value.trim(), messages: msgs,
+          context: { title: lesson.id + " " + lesson.title, lessonText: (document.querySelector("main") || document.body).innerText } }),
+      });
+      const j = await r.json().catch(() => ({ error: "HTTP " + r.status }));
+      if (!r.ok || !j.ok) throw new Error(j.error || "HTTP " + r.status);
+      status.innerHTML = '✓ 已保存：<a href="notes.html#' + encodeURIComponent(j.file) + '" target="_blank">' + esc(j.file) + "</a>";
+      picked = new Set(); render(); refreshPicked();
+    } catch (e) {
+      status.innerHTML = '<span class="tp-err">⚠ ' + esc(e.message || e) + "</span>";
+    } finally { noteBusy = false; refreshPicked(); }
+  }
 
   /* ---------- 当前上下文 ---------- */
   function currentSection() {
@@ -222,39 +304,24 @@
       return;
     }
     msgsEl.innerHTML = history.map(msgHtml).join("");
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    if (!picking) msgsEl.scrollTop = msgsEl.scrollHeight;
+    if (!busy) CL.renderMermaid(msgsEl).then(() => { if (!picking) msgsEl.scrollTop = msgsEl.scrollHeight; });
   }
   function renderLast() {
     const last = msgsEl.lastElementChild, m = history[history.length - 1];
-    if (last && m) { last.outerHTML = msgHtml(m); }
+    if (last && m) { last.outerHTML = msgHtml(m, history.length - 1); }
     const near = msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120;
     if (near) msgsEl.scrollTop = msgsEl.scrollHeight;
   }
-  function msgHtml(m) {
-    if (m.role === "user") return '<div class="tp-msg user">' + (m.meta ? '<div class="tp-meta">' + esc(m.meta) + "</div>" : "") + "<div>" + esc(m.content).replace(/\n/g, "<br>") + "</div></div>";
-    let body = m.content ? md(m.content) : m.thinking ? '<span class="tp-dots">思考中</span>' : m.streaming ? '<span class="tp-dots">连接中</span>' : "";
+  function msgHtml(m, i) {
+    const pick = picking && pickable(m) ? ' pickable' + (picked.has(i) ? " picked" : "") + '" data-i="' + i : "";
+    if (m.role === "user") return '<div class="tp-msg user' + pick + '">' + (m.meta ? '<div class="tp-meta">' + esc(m.meta) + "</div>" : "") + "<div>" + esc(m.content).replace(/\n/g, "<br>") + "</div></div>";
+    let body = m.content ? CL.md(m.content, { flat: true }) : m.thinking ? '<span class="tp-dots">思考中</span>' : m.streaming ? '<span class="tp-dots">连接中</span>' : "";
     if (m.error) body += '<div class="tp-err">⚠ ' + esc(m.error) + "</div>";
-    return '<div class="tp-msg ai">' + body + (m.streaming && m.content ? '<span class="tp-caret"></span>' : "") + "</div>";
+    return '<div class="tp-msg ai' + pick + '">' + body + (m.streaming && m.content ? '<span class="tp-caret"></span>' : "") + "</div>";
   }
 
-  /* 极简 Markdown：先转义，再处理加粗、代码、标题、列表、段落（不执行任何 HTML） */
-  function md(src) {
-    const lines = esc(src).split("\n"); let out = "", list = null;
-    const inline = (s) => s.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>");
-    const flush = () => { if (list) { out += "</" + list + ">"; list = null; } };
-    for (const raw of lines) {
-      const l = raw.trimEnd(); let m;
-      if (!l.trim()) { flush(); continue; }
-      if ((m = l.match(/^#{1,4}\s+(.*)/))) { flush(); out += "<h4>" + inline(m[1]) + "</h4>"; continue; }
-      if ((m = l.match(/^\s*[-*•]\s+(.*)/))) { if (list !== "ul") { flush(); out += "<ul>"; list = "ul"; } out += "<li>" + inline(m[1]) + "</li>"; continue; }
-      if ((m = l.match(/^\s*\d+[.)、]\s+(.*)/))) { if (list !== "ol") { flush(); out += "<ol>"; list = "ol"; } out += "<li>" + inline(m[1]) + "</li>"; continue; }
-      if (/^\s*(---|\*\*\*)\s*$/.test(l)) { flush(); out += "<hr>"; continue; }
-      if (/^\|.*\|$/.test(l.trim())) { flush(); out += '<div class="tp-tbl">' + inline(l) + "</div>"; continue; }
-      flush(); out += "<p>" + inline(l) + "</p>";
-    }
-    flush(); return out;
-  }
-  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+  const esc = CL.esc;
   function el(tag, cls, html) { const e = document.createElement(tag); e.className = cls; if (html) e.innerHTML = html; return e; }
 
   // 默认常开。直接双击打开文件（file://）时助教用不了，默认收起，按钮上注明“未连接”

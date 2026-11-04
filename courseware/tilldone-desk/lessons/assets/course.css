@@ -363,13 +363,13 @@ a.term:hover { color: var(--brand-2); }
 .tutor-fab .seal { background: var(--accent); color: #fff; width: 28px; height: 28px; border-radius: 50%; }
 .tutor-open .tutor-fab { display: none; }
 .tutor-panel {
-  position: fixed; top: 53px; right: 0; bottom: 0; width: 420px; z-index: 64; display: none; flex-direction: column;
+  position: fixed; top: 53px; right: 0; bottom: 0; width: var(--tutor-w, 420px); z-index: 64; display: none; flex-direction: column;
   background: var(--surface); border-left: 1px solid var(--line); box-shadow: -8px 0 28px rgba(0,0,0,.08); font-family: var(--sans); font-size: 15px;
 }
 .tutor-open .tutor-panel { display: flex; }
-/* 面板打开时：正文让出右侧 420px，不被遮挡 */
-.tutor-open .layout.three-col { margin-right: 420px; max-width: none; padding-left: 24px; padding-right: 32px; }
-@media (min-width: 1900px) { .tutor-open .layout.three-col { max-width: 1240px; margin-left: calc((100vw - 420px - 1240px) / 2); } }
+/* 面板打开时：正文让出右侧面板宽度（默认 420px，可拖动左边缘调整），不被遮挡 */
+.tutor-open .layout.three-col { margin-right: var(--tutor-w, 420px); max-width: none; padding-left: 24px; padding-right: 32px; }
+@media (min-width: 1900px) { .tutor-open .layout.three-col { max-width: 1240px; margin-left: max(0px, calc((100vw - var(--tutor-w, 420px) - 1240px) / 2)); } }
 .tutor-open .layout.three-col { grid-template-columns: 260px minmax(0, 1fr); gap: 32px; }
 /* 窗口不够宽（课程树 + 正文 + 助教 放不下）时，课程树收进“☰ 课程”抽屉 */
 @media (max-width: 1300px) {
@@ -417,6 +417,40 @@ a.term:hover { color: var(--brand-2); }
 .tp-row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
 .tp-chk { font-size: 12.5px; color: var(--ink-3); display: inline-flex; align-items: center; gap: 4px; }
 .tutor-ask { font-size: 12.5px; padding: 2px 10px; border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); color: var(--accent); }
+/* 拖动调宽 */
+.tp-resize { position: absolute; left: -5px; top: 0; bottom: 0; width: 10px; cursor: col-resize; z-index: 2; touch-action: none; }
+.tp-resize::after { content: ""; position: absolute; left: 4px; top: 50%; width: 2px; height: 44px; margin-top: -22px; border-radius: 2px; background: var(--line); transition: background .15s; }
+.tp-resize:hover::after, .tp-dragging .tp-resize::after { background: var(--brand-2); height: 100%; top: 0; margin-top: 0; }
+body.tp-dragging { cursor: col-resize; user-select: none; }
+body.tp-dragging .layout { transition: none; }
+/* 助教回答里的表格、代码块、Mermaid 图（CL.md 输出，笔记页共用） */
+.md-tbl { overflow-x: auto; margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; }
+.md-tbl table.tbl { font-size: 13.5px; }
+.md-tbl table.tbl th { padding: 6px 10px; font-size: 13px; white-space: normal; }
+.md-tbl table.tbl td { padding: 6px 10px; }
+.md-code { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; overflow-x: auto; white-space: pre; margin: 8px 0; }
+.md-mermaid { margin: 8px 0; }
+.md-mermaid.done:not(.bad) { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px; text-align: center; overflow-x: auto; }
+.md-mermaid svg { max-width: 100%; height: auto; }
+.md-note { font-size: 12px; color: var(--ink-3); }
+.tp-msg.ai blockquote, .note-doc blockquote { margin: 6px 0; padding: 4px 12px; border-left: 3px solid var(--brand-2); color: var(--ink-2); background: var(--surface-2); }
+/* 记笔记：勾选模式 */
+.tp-pickbtn { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)) !important; color: var(--accent) !important; }
+.tp-notebar { display: none; padding: 8px 16px 14px; border-top: 1px solid var(--line); background: var(--surface-2); font-size: 13px; }
+.tutor-panel.picking .tp-notebar { display: block; }
+.tutor-panel.picking :is(.tp-quick, .tp-attach, .tp-form) { display: none; }
+.tp-nb-tip { color: var(--ink-3); margin-bottom: 6px; }
+.tp-nb-hint { width: 100%; font: inherit; font-size: 13.5px; border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; background: var(--bg); color: var(--ink); }
+.tp-nb-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; gap: 8px; }
+.tp-nb-row button { margin-left: 6px; }
+.tp-nb-all { font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+.tp-nb-go[disabled] { opacity: .5; cursor: default; }
+.tp-nb-status { margin-top: 6px; color: var(--ink-2); word-break: break-all; }
+.tp-nb-status:empty { display: none; }
+.tutor-panel.picking .tp-msg.pickable { cursor: pointer; position: relative; outline: 2px dashed transparent; outline-offset: 2px; transition: outline-color .12s, opacity .12s; opacity: .62; }
+.tutor-panel.picking .tp-msg.pickable:hover { outline-color: var(--line); opacity: .85; }
+.tutor-panel.picking .tp-msg.pickable.picked { outline: 2px solid var(--accent); opacity: 1; }
+.tutor-panel.picking .tp-msg.picked::before { content: "✓"; position: absolute; top: -9px; left: -9px; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; line-height: 20px; text-align: center; }
 .tutor-sel { position: absolute; z-index: 66; display: none; font: inherit; font-family: var(--sans); font-size: 12.5px; font-weight: 600; background: var(--brand); color: var(--surface); border: 0; border-radius: 14px; padding: 3px 11px; box-shadow: var(--shadow-lift); cursor: pointer; }
 
 
