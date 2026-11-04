@@ -152,7 +152,8 @@
   <ul>
     <li>用户一句话 = 一次 settle。</li>
     <li>一次 settle 通常只有 1 个 run。督促发生时有 2 个 run。</li>
-    <li>督促每条用户输入最多一次。所以 run 数不超过 2。</li>
+    <li>督促每条用户消息最多一次。所以你中途不插话时，run 数不超过 2。</li>
+    <li>运行中插话（steer）也算一条用户消息，会让督促重新可用。所以插过话的 settle 可能被督促不止一次。</li>
   </ul>
   <p>督促的路径是这样的。run 1 结束时，TillDone 的 <code>agentEnd</code> 检查清单。如果还有未完成任务，它发一条 <code>tilldone-nudge</code> 消息。这时 run 仍算活跃，所以消息进入 <a class="term" href="glossary.html#steer">steer</a> 队列。外循环看到排队消息，就再起 run 2。</p>
   <div class="callout rule"><span class="ttl">本节核心句</span>桌面端只把 <code>agent_settled</code> 当作“空闲”。<code>agent_end</code> 不算空闲，因为督促可能让外循环再转一圈。</div>
@@ -218,7 +219,7 @@
     <tr><td>比喻</td><td>任务 = 羊，AI = 边牧，用户 = 牧羊人；羊不进圈，边牧不歇</td></tr>
     <tr><td>分工</td><td>TillDone 管做什么、做完没（硬）；PStack 管怎么做（软）</td></tr>
     <tr><td>进程</td><td>Electron 主进程 → <code>pi --mode rpc</code> 子进程（TillDone + 可选 PStack）→ subagent 子进程（无 TillDone）</td></tr>
-    <tr><td>双循环</td><td>settle 外循环套 run 内循环；一句话一次 settle，run 数 ≤ 2</td></tr>
+    <tr><td>双循环</td><td>settle 外循环套 run 内循环；一句话一次 settle；不插话时 run 数 ≤ 2</td></tr>
     <tr><td>空闲信号</td><td>只认 <code>agent_settled</code>，不认 <code>agent_end</code></td></tr>
   </table></div>
 

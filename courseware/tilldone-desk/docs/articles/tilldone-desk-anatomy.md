@@ -20,7 +20,8 @@
 
 - **settle 外循环**：`AgentSession._startRun()` 里的 `while`。一个 run 结束后，如果有重试、压缩、排队消息，就再起一个 run。停稳时发出 `agent_settled`。
 - **run 内循环**：`agent-loop.js` 的 `runLoop()`。一个 turn = 一次 LLM 请求 + 这条回复里所有工具调用。
-- 用户一句话 = 一次 settle。通常 1 个 run；被督促时 2 个 run（督促每条输入最多一次）。
+- 用户一句话 = 一次 settle。通常 1 个 run；被督促时 2 个 run（督促每条用户消息最多一次）。
+- 运行中插话（steer）也会触发 `input` 事件，复位督促闩锁（Pi 1.4.0 `agent-session.js` 的 `steer()` → `_queueUserInput()` → `_runInputHandlers()`）。所以插过话的 settle 可能被督促不止一次，run 数也可能超过 2（读源码推断，没有实际运行验证）。
 - 桌面端只把 `agent_settled` 当“空闲”。`agent_end` 不算空闲，因为督促会让外循环再转一圈（`src/domain.ts:223`）。
 
 ## 2. 四层架构：两套四层叠在一起
