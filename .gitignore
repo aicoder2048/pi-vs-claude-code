@@ -16,3 +16,4 @@ __pycache__/
 tmp/
 HANDOFF.md
 .claude/skills/ext-walkthrough-workspace/
+.codegraph/
