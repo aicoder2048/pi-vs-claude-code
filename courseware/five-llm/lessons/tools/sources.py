@@ -169,3 +169,71 @@ def unregistered_refs(text: str, sources) -> list:
             continue
         counts[tok] = counts.get(tok, 0) + 1
     return sorted(counts, key=lambda k: (-counts[k], k))
+
+
+# ---------- 勘误：助教发现课文与资料矛盾时，在回答末尾输出 ```errata 代码块 ----------
+
+ERRATA_BLOCK = re.compile(r"```errata[ \t]*\n(.*?)(?:```|\Z)", re.S)
+ERRATA_FIELDS = {"section": 200, "claim": 300, "evidence": 500, "source": 200}
+ERRATA_MARK = re.compile(r"^<!-- errata (\{.*\}) -->$", re.M)
+
+
+def strip_errata(text: str) -> str:
+    return ERRATA_BLOCK.sub("", text).rstrip()
+
+
+def parse_errata(answer: str, lesson: str) -> list:
+    """取出回答里的勘误块。坏 JSON、缺 claim 或 evidence 的块丢掉。lesson 以服务端知道的为准。"""
+    out = []
+    for m in ERRATA_BLOCK.finditer(answer):
+        try:
+            obj = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            continue
+        for e in obj if isinstance(obj, list) else [obj]:
+            if not isinstance(e, dict):
+                continue
+            item = {k: str(e.get(k) or "").strip()[:n] for k, n in ERRATA_FIELDS.items()}
+            if item["claim"] and item["evidence"]:
+                out.append({"lesson": lesson, **item})
+    return out
+
+
+def errata_key(e: dict) -> str:
+    return e["lesson"] + "|" + re.sub(r"[\W_]+", "", e["claim"]).lower()
+
+
+def read_errata(path: Path) -> list:
+    p = Path(path)
+    if not p.exists():
+        return []
+    out = []
+    for m in ERRATA_MARK.finditer(p.read_text(encoding="utf-8")):
+        try:
+            out.append(json.loads(m.group(1)))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def add_errata(path: Path, entries: list, date: str) -> list:
+    """把没记过的勘误追加到 errata.md，返回真正新增的条目。"""
+    p = Path(path)
+    seen = {errata_key(e) for e in read_errata(p)}
+    new = []
+    for e in entries:
+        k = errata_key(e)
+        if k not in seen:
+            seen.add(k)
+            new.append({**e, "date": date})
+    if not new:
+        return []
+    text = p.read_text(encoding="utf-8") if p.exists() else (
+        "# 疑似勘误\n\nAI 助教发现课文与资料矛盾时记在这里。作者核实后修改课文，再删掉对应条目。\n")
+    for e in new:
+        text += (f"\n## {e['lesson']}" + (f" · {e['section']}" if e["section"] else "") + "\n\n"
+                 f"- 课文：{e['claim']}\n- 资料：{e['evidence']}" + (f"（{e['source']}）" if e["source"] else "") + "\n"
+                 f"- 记录：{e['date']}\n"
+                 f"<!-- errata {json.dumps(e, ensure_ascii=False)} -->\n")
+    p.write_text(text, encoding="utf-8")
+    return new

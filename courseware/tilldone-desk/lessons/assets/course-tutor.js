@@ -316,9 +316,26 @@
   function msgHtml(m, i) {
     const pick = picking && pickable(m) ? ' pickable' + (picked.has(i) ? " picked" : "") + '" data-i="' + i : "";
     if (m.role === "user") return '<div class="tp-msg user' + pick + '">' + (m.meta ? '<div class="tp-meta">' + esc(m.meta) + "</div>" : "") + "<div>" + esc(m.content).replace(/\n/g, "<br>") + "</div></div>";
-    let body = m.content ? CL.md(m.content, { flat: true }) : m.thinking ? '<span class="tp-dots">思考中</span>' : m.streaming ? '<span class="tp-dots">连接中</span>' : "";
+    const { text, errata } = splitErrata(m.content || "");
+    let body = text ? CL.md(text, { flat: true }) : m.thinking ? '<span class="tp-dots">思考中</span>' : m.streaming ? '<span class="tp-dots">连接中</span>' : "";
+    body += errata.map(errataHtml).join("");
     if (m.error) body += '<div class="tp-err">⚠ ' + esc(m.error) + "</div>";
     return '<div class="tp-msg ai' + pick + '">' + body + (m.streaming && m.content ? '<span class="tp-caret"></span>' : "") + "</div>";
+  }
+
+  // 助教在回答末尾用 ```errata 代码块报告“课文与资料矛盾”。流式输出时未写完的块先隐藏。
+  function splitErrata(content) {
+    const errata = [];
+    const text = content.replace(/```errata[ \t]*\n([\s\S]*?)(```|$)/g, (_, json, end) => {
+      if (end) { try { const o = JSON.parse(json); (Array.isArray(o) ? o : [o]).forEach((x) => x && x.claim && errata.push(x)); } catch (e) { /* 坏 JSON 不显示 */ } }
+      return "";
+    });
+    return { text: text.trimEnd(), errata };
+  }
+  function errataHtml(e) {
+    return '<div class="tp-errata"><b>疑似勘误' + (e.section ? " · " + esc(e.section) : "") + "</b>" +
+      "<p>课文：" + esc(e.claim) + "</p><p>资料：" + esc(e.evidence || "") + (e.source ? "（" + esc(e.source) + "）" : "") + "</p>" +
+      "<small>已记入课程目录的 errata.md，等作者核对。</small></div>";
   }
 
   const esc = CL.esc;

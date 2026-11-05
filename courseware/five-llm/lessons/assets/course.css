@@ -522,3 +522,9 @@ body.tp-dragging .layout { transition: none; }
 
 /* 代码块：窄屏下在块内横向滚动，不撑宽页面 */
 main pre { max-width: 100%; overflow-x: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; font-size: 13px; line-height: 1.5; }
+
+/* 助教回答里的疑似勘误卡片 */
+.tp-errata { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--warn-bd); background: var(--warn-bg); border-radius: 4px; font-size: 13.5px; }
+.tp-errata b { display: block; margin-bottom: 4px; }
+.tp-errata p { margin: 2px 0; }
+.tp-errata small { color: var(--ink-3); }

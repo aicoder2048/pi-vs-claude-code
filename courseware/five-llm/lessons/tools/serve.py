@@ -21,6 +21,7 @@ import datetime
 import json
 import re
 import sys
+import threading
 import urllib.error
 import urllib.request
 from functools import partial
@@ -34,6 +35,8 @@ ROOT = LESSONS.parent                                    # 项目根目录（静
 MANIFEST = LESSONS / "tools" / "sources.json"
 API = "https://api.deepseek.com/chat/completions"
 NOTES = LESSONS / "study-notes"                         # “记笔记”整理出的 Markdown 笔记
+ERRATA = LESSONS / "errata.md"                           # 助教发现的疑似勘误
+ERRATA_LOCK = threading.Lock()                           # 多个回答同时结束时，串行改 errata.md
 SKIP_PAGES = {"index.html", "glossary.html", "notes.html"}   # 其余 .html 都是课程页
 
 
@@ -80,7 +83,13 @@ SYSTEM = """你是“{title}”的 AI 助教。学员正在浏览器里自学一
 3. 学员附上配图截图、演示读数时：先说看到了什么，再对照本课内容解释。看不清就直说，不要猜。
 4. 学员说“考考我”：一次只出一道题，等他作答后再讲评。
 5. 学员问到附带资料里的内容时，引用资料的标签和其中的名字（函数名、小节标题、图号）。资料没给的，直说不知道。
+6. 课程页面的说法和附带资料矛盾时，以资料为准回答，并在回答最末尾输出一个勘误块。每处矛盾一个块，没有矛盾就不输出。格式：
+```errata
+{"section": "课程页面的小节标题", "claim": "课文原话（不超过 80 字）", "evidence": "资料里的事实（不超过 120 字）", "source": "资料标签"}
+```
+7. 你的推理结果和学员附上的演示读数不一致时，明说“演示读数与我的分析不一致”，并写出两边的数。不要为了迁就读数改结论，也不要无视读数。
 """
+FIXED_RULES = 7
 
 
 NOTE_SYSTEM = """你是一位专业的学习笔记整理师。学员在自学“{course}”时，和 AI 助教有几段对话。请把选中的对话整理成一篇结构清楚、可以长期保存和复习的中文学习笔记。
@@ -118,7 +127,7 @@ NOTE_SYSTEM = """你是一位专业的学习笔记整理师。学员在自学“
 
 def system_prompt(course) -> str:
     rules = [*course.rules, f"今天是 {datetime.date.today().isoformat()}。不要编造资料之外的新进展。"]
-    extra = "".join(f"{i}. {r}\n" for i, r in enumerate(rules, 6))
+    extra = "".join(f"{i}. {r}\n" for i, r in enumerate(rules, FIXED_RULES + 1))
     return SYSTEM.replace("{title}", course.title).replace("{persona}", course.persona) + extra
 
 
@@ -333,6 +342,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(200, {"ok": err is None, "model": self.env.get("DEEPSEEK_MODEL", "deepseek-flash"), "error": err})
         if self.path.startswith("/api/notes"):
             return self._json(200, {"notes": list_notes()})
+        if self.path.startswith("/api/errata"):
+            return self._json(200, {"errata": S.read_errata(ERRATA)})
         return super().do_GET()
 
     def guess_type(self, path):  # 让浏览器直接显示 Markdown 原文
@@ -356,6 +367,8 @@ class Handler(SimpleHTTPRequestHandler):
     def _note(self, key: str, req: dict):
         """把勾选的对话整理成笔记（非流式），存进 study-notes/。"""
         try:
+            check_history(req.get("messages"))
+            req = {**req, "messages": [{**m, "content": S.strip_errata(m["content"])} for m in req["messages"]]}
             msgs = build_note_messages(req)
         except ValueError as e:
             return self._json(400, {"error": str(e)})
@@ -426,7 +439,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode())
             self.wfile.flush()
 
-        usage, thinking = None, False
+        usage, thinking, answer = None, False, []
         try:
             if note:
                 send({"t": note})
@@ -446,8 +459,16 @@ class Handler(SimpleHTTPRequestHandler):
                             thinking = True
                             send({"thinking": True})
                         if d.get("content"):
+                            answer.append(d["content"])
                             send({"t": d["content"]})
-            send({"done": True, "usage": usage})
+            found = S.parse_errata("".join(answer), req["lesson"])
+            new = []
+            if found:
+                with ERRATA_LOCK:
+                    new = S.add_errata(ERRATA, found, datetime.date.today().isoformat())
+            for e in new:
+                sys.stderr.write(f"疑似勘误已记入 {ERRATA.name}：{e['lesson']} · {e['claim'][:40]}\n")
+            send({"done": True, "usage": usage, "errata": len(new)})
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:

@@ -97,7 +97,11 @@
 - unittest：解析合法块、忽略坏 JSON、多块、去重。
 - 用一个测试夹具课程（模板生成，课文故意写错一个数字）跑 learner driver 1–2 问，确认 `errata.md` 出现对应条目、页面显示卡片。
 
-**Status**: Not Started
+**Status**: Complete
+- 勘误块里的 `lesson` 以服务端为准，不信模型填的；按“课程文件 + 去标点的课文原话”去重；写 `errata.md` 有锁。
+- `learn.py` 每问记录 `.tp-errata` 卡片（`qa.json` 的 `errata`、`summary.json` 的 `errata`）。
+- 测试：模板 28 个 unittest 通过；两门课 check_page 三主题全部通过（边牧 10 页、弈境 13 页）。
+- 夹具课（原文“最多重试 3 次”，课文写成 5 次）1 问：助教按原文作答，`errata.md` 和 `/api/errata` 各出现 1 条，页面显示“疑似勘误”卡片。随后 1 次记笔记：笔记正文和原始对话附录里都没有勘误块。测试笔记已删除。
 
 ## Stage 3: 来源漂移哨兵
 

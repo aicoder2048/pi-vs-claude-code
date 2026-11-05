@@ -112,6 +112,48 @@ class UnregisteredRefs(unittest.TestCase):
         self.assertEqual(S.unregistered_refs("见《某论文》", ss), [])
 
 
+def errata_answer(*objs, raw=None):
+    blocks = [raw] if raw is not None else [json.dumps(o, ensure_ascii=False) for o in objs]
+    return "正文。\n" + "".join(f"```errata\n{b}\n```\n" for b in blocks)
+
+
+GOOD = {"lesson": "wrong.html", "section": "s1", "claim": "上限是 5 次", "evidence": "源码写的是 3 次", "source": "原文"}
+
+
+class Errata(unittest.TestCase):
+    def test_parses_a_valid_block_with_the_server_lesson(self):
+        e = S.parse_errata(errata_answer(GOOD), "L01.html")
+        self.assertEqual((len(e), e[0]["lesson"], e[0]["claim"]), (1, "L01.html", "上限是 5 次"))
+
+    def test_ignores_bad_json(self):
+        self.assertEqual(S.parse_errata(errata_answer(raw="{not json"), "L01.html"), [])
+
+    def test_ignores_block_without_evidence(self):
+        self.assertEqual(S.parse_errata(errata_answer({"claim": "x"}), "L01.html"), [])
+
+    def test_parses_several_blocks(self):
+        e = S.parse_errata(errata_answer(GOOD, {**GOOD, "claim": "另一处"}), "L01.html")
+        self.assertEqual([x["claim"] for x in e], ["上限是 5 次", "另一处"])
+
+    def test_strip_removes_blocks_and_keeps_answer(self):
+        self.assertEqual(S.strip_errata(errata_answer(GOOD)), "正文。")
+
+    def test_strip_removes_an_unfinished_block(self):
+        self.assertEqual(S.strip_errata("正文。\n```errata\n{\"claim\""), "正文。")
+
+    def test_add_dedups_by_lesson_and_claim(self):
+        path = Path(tempfile.mkdtemp()) / "errata.md"
+        e = S.parse_errata(errata_answer(GOOD), "L01.html")
+        first = S.add_errata(path, e, "2026-11-04")
+        again = S.add_errata(path, S.parse_errata(errata_answer({**GOOD, "claim": "上限是 5 次。"}), "L01.html"), "2026-11-05")
+        self.assertEqual((len(first), again, len(S.read_errata(path))), (1, [], 1))
+
+    def test_same_claim_in_another_lesson_is_new(self):
+        path = Path(tempfile.mkdtemp()) / "errata.md"
+        S.add_errata(path, S.parse_errata(errata_answer(GOOD), "L01.html"), "d")
+        self.assertEqual(len(S.add_errata(path, S.parse_errata(errata_answer(GOOD), "L02.html"), "d")), 1)
+
+
 class BuildMessages(unittest.TestCase):
     """serve.build_messages 只构建消息、不发请求：断言助教拿到了课文引用的来源。"""
 
@@ -152,7 +194,7 @@ class BuildMessages(unittest.TestCase):
 
     def test_course_rules_and_title_reach_the_system_prompt(self):
         s = self.system("L02-b.html")
-        self.assertTrue("测试课" in s and "6. 课程规则" in s and "ARTICLE BODY" in s)
+        self.assertTrue("测试课" in s and "8. 课程规则" in s and "ARTICLE BODY" in s)
 
 
 if __name__ == "__main__":
