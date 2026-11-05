@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pstack 血统、实战复盘与改进 · L10</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .player-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13.5px; color: var(--ink-3); }
+  .card { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 12px 14px; margin-bottom: 10px; }
+  .card .k { font-size: 12px; color: var(--ink-3); }
+  .card .p { font-size: 15px; margin: 4px 0 10px; color: var(--ink); }
+  .tally { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+  .risks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .risks li { display: grid; grid-template-columns: 2em minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 14px; cursor: pointer; }
+  .risks li .n { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+  .risks li.open { border-color: var(--rule-bd); } .risks li.open .st { color: var(--rule-bd); }
+  .risks li.part { border-color: var(--note-bd); } .risks li.part .st { color: var(--note-bd); }
+  .risks li.fixed { border-color: var(--tip-bd); } .risks li.fixed .st { color: var(--tip-bd); }
+  .risks li.unk .st { color: var(--ink-3); }
+  .risks li .st { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .risks li.sel { outline: 2px solid var(--brand-2); }
+  .loop [data-step] { cursor: pointer; transition: opacity .2s; }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">pstack 是什么（据 Grok 分析）</a></li>
+    <li><a href="#s2">动手看：提案分拣台</a></li>
+    <li><a href="#s3">准确的定位</a></li>
+    <li><a href="#s4">一局 40 手的复盘</a></li>
+    <li><a href="#s5">自我改进：线头与闭环</a></li>
+    <li><a href="#s6">动手看：风险看板</a></li>
+    <li><a href="#s7">结论与房子比喻</a></li>
+    <li><a href="#s8">自测与全课速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L10 · 证据、界面与复盘</div>
+  <h1>pstack 血统、实战复盘与改进</h1>
+  <p>弈境的知识层借鉴了 pstack，但把路由权、验证时机和状态所有权收回到宿主。这一课先对照“提案”和“实现”，再读一局真实对局的复盘。最后按代码现状盘点风险和下一步。</p>
+  <div class="meta"><span>原文：白皮书 §4.6–4.8、§7–8、附录 C + 重构说明 + 勘误</span><span>阅读约 20 分钟</span><span>含 3 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>说出实现怎样处理每条 <a class="term" href="glossary.html#grok-proposal">Grok 改造提案</a>（采纳、改造、否决或暂缓），以及理由。</li>
+    <li>用一句话说准弈境与 <a class="term" href="glossary.html#pstack">pstack</a> 的关系。</li>
+    <li>说出一局 40 手<a class="term" href="glossary.html#live-review">实战复盘</a>能说明什么、不能说明什么。</li>
+    <li>画出<a class="term" href="glossary.html#self-improvement-loop">自我改进闭环</a>，指出现在缺哪几步。</li>
+    <li>按代码现状判断白皮书 §7.2 的 11 条风险是否仍成立。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>pstack 是什么（据 Grok 分析）</h2>
+  <p>L3 重构有一条清楚的来历。先有 Grok 对 pstack 的结构分析，再有 Grok 针对<strong>重构前</strong>弈境的改造提案，最后才是实际实现。</p>
+  <div class="callout warn"><span class="ttl">可信度</span>下面关于 pstack 结构的描述来自 Grok 的二手分析。白皮书写明“未重新核验 pstack 上游实现”。可信度排序：源码与测试 &gt; 实战复盘 &gt; 重构说明 &gt; Grok 的二手分析。</div>
+  <div class="grid-2">
+    <div class="kp"><div class="k">编排入口</div><div class="v">/poteto-mode</div><p>读取请求，匹配一个剧本，把步骤逐字抄进 todo 列表。跳过的步骤保留原因。</p></div>
+    <div class="kp"><div class="k">原则</div><div class="v">24 条一句话原则</div><p>以索引形式常驻上下文。</p></div>
+    <div class="kp"><div class="k">技能与子 Agent</div><div class="v">约 30 个工作流技能</div><p>解释、影响分析、并行（arena / swarm）、多模型审查（interrogate）。子 Agent 提供隔离执行。</p></div>
+    <div class="kp"><div class="k">耦合方式</div><div class="v">共享 todo + 规则文件</div><p>一份始终生效的规则文件广播模型角色配置。</p></div>
+  </div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>动手看：提案分拣台</h2>
+  <p>白皮书 §4.6 把 Grok 的 10 条提案与实际实现逐条对照。下面每张卡片是一条提案。先猜它的去向，再看实际取舍和理由。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">提案分拣台：采纳、改造、否决，还是暂缓</div>
+    </div>
+    <div class="demo">
+      <div class="player-bar"><span id="d1-pos"></span>
+        <button class="btn" id="d1-prev">上一条</button><button class="btn" id="d1-next">下一条</button><button class="btn" id="d1-reset">重来</button>
+      </div>
+      <div class="card">
+        <div class="k">Grok 提案</div>
+        <div class="p" id="d1-prop"></div>
+        <div class="btn-group" id="d1-guess">
+          <button class="btn" data-g="采纳">采纳</button><button class="btn" data-g="改造采纳">改造采纳</button><button class="btn" data-g="否决">否决</button><button class="btn" data-g="暂缓">暂缓</button>
+        </div>
+      </div>
+      <div class="tally" id="d1-tally"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">做完 10 张卡，找否决和改造理由的共同点。它们几乎都来自三条领域约束：自由五子棋规则、棋钟在扣、只要一个可写状态源。<span class="data-note">提案与取舍逐条取自白皮书 §4.6 对照表；括号里的“现状”是课程作者按勘误补的，不是白皮书原文。</span></div>
+  </div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>准确的定位</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>pstack 模式</th><th>弈境的对应物</th><th>差异</th></tr>
+    <tr><td>poteto-mode 编排入口</td><td><code>gomoku-coach</code> + <code>turnGuidance()</code></td><td>剧本由代码选定，不由模型自主选择</td></tr>
+    <tr><td>原则索引</td><td>5 条原则的简短索引常驻上下文</td><td>全文按需读取</td></tr>
+    <tr><td>任务剧本</td><td>4 个棋局情景剧本</td><td>共用同一套四步 ID，不是可变的依赖图</td></tr>
+    <tr><td>专项技能</td><td>领域技能（现在 5 项）</td><td>只是说明文档，执行者是工具</td></tr>
+    <tr><td>prove it works</td><td>提交前候选验证 + 每手全谱重放</td><td>一步验证；v2/v3 另加有界的连续冲四检查</td></tr>
+    <tr><td>共享 todo / 决策 artifact</td><td>内存闭包状态 + <code>notes[].decision</code></td><td>只在成功提交时生成摘要</td></tr>
+    <tr><td>子 Agent、多模型审查</td><td>无</td><td>只有一个主棋手</td></tr>
+    <tr><td>模型角色配置文件</td><td>单一模型 + 固定预算</td><td>没有 reviewer / judge 角色</td></tr>
+  </table></div>
+  <div class="callout rule"><span class="ttl">本节核心句</span>弈境是一个受 pstack 启发、由宿主显式管理的领域知识包与工具服务层，不是完整的 pstack 式多 Agent 技能平台。</div>
+  <div class="grid-3">
+    <div class="kp"><div class="k">技能</div><div class="v">方法</div><p>使用能力的方法：何时用、怎样用。</p></div>
+    <div class="kp"><div class="k">工具</div><div class="v">接口</div><p>能力的受限接口：schema、预算、门禁。</p></div>
+    <div class="kp"><div class="k">业务服务</div><div class="v">实现</div><p>计算与状态的权威实现：<code>GameService</code>、<code>forcing.ts</code>。</p></div>
+  </div>
+  <p>三者不是同一件事，也不必一一对应。</p>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>一局 40 手的复盘</h2>
+  <p>复盘读取的是 2026-10-30 保存的一局真实对局：人类执黑，<code>openai-codex/gpt-6.1-sol</code> 执白，第 40 手 M9 连五获胜。20 手模型落子都带 <code>gomoku-knowledge/v1</code> 决策记录。复盘用当时的规则引擎全谱重放，40 份逐手评估和 20 份候选验证都与保存值一致。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>项目</th><th>观察结果</th></tr>
+    <tr><td>剧本分布</td><td>opening 4、midgame 13、endgame 3（第 24、36、40 手）、time-pressure 0</td></tr>
+    <tr><td>observe 证据</td><td>20 回合最后一次观察都是 <code>evaluate_threats</code></td></tr>
+    <tr><td>变化试算</td><td>15 回合 done，5 回合 skipped</td></tr>
+    <tr><td>提交前验证</td><td>20 回合全部合法，warnings 全部为空</td></tr>
+    <tr><td>额外知识全文</td><td>只有入口和选中剧本，没有额外读取任何原则或技能</td></tr>
+    <tr><td>与启发式排名</td><td>15 手选第 1 名；5 手选第 2、6、8、9 名，L3 没有把它们强制换成榜首</td></tr>
+    <tr><td>耗时</td><td>平均 10.5 秒 / 手，最短 3.8 秒，最长 19.4 秒；终局时模型还剩约 390 秒基本用时</td></tr>
+  </table></div>
+  <ul>
+    <li><strong>第 24 手 L8：事实驱动防守。</strong>黑方唯一的立即成五点是 L8，路由选中 endgame，模型直接封堵。</li>
+    <li><strong>第 38 手 J6：进攻判断。</strong>双方都没有立即胜点，路由仍是 midgame。J6 形成两端都能成五的四子。这说明 endgame 的触发含义是“当前已经有一手成五点”。</li>
+    <li><strong>第 40 手 M9：直接获胜优先。</strong>endgame 剧本直接取下胜点，没有多余试算。</li>
+  </ul>
+  <div class="vs">
+    <div><h4>能说明</h4><p><span class="good">剧本编排、结构化信号和受控工具确实在起作用。</span>模型的行动与信号相符，低分但合法的选择也受到尊重。</p></div>
+    <div><h4>不能说明</h4><p><span class="bad">没有对照组，不能把胜局归因于知识包。</span>没有走到时间剧本，没有额外技能读取和失败纠错的样本。技能“可用”，不等于模型读取或遵循了它。</p></div>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>自我改进：线头与闭环</h2>
+  <p>先说结论：线头已经埋好。复盘用人工方式跑通了闭环的第一圈。自动化的环还没有闭合。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>线头</th><th>对自我改进的价值</th></tr>
+    <tr><td>版本化知识包 <code>KNOWLEDGE_VERSION</code></td><td>能把对局结果归因到某个知识版本</td></tr>
+    <tr><td>每手 <code>DecisionTrace</code></td><td>能分析“读了某技能的回合是否更少漏防”</td></tr>
+    <tr><td>每手 <code>evaluations</code> + 结果 <code>outcome</code></td><td>能对比启发式第一候选与模型实际选择</td></tr>
+    <tr><td><code>userData/records/*.json</code> 原子保存</td><td>天然的离线数据集</td></tr>
+    <tr><td>测试中的 Pi SSE 替身</td><td>可以扩展成固定局面的回归评测</td></tr>
+  </table></div>
+  <p>白皮书列出缺少的四件事：可观测性不足；没有读取历史记录的分析器；没有评测基准；没有把结论写回知识包的通道。</p>
+  <p>点下面闭环图的每一步，看它在代码现状里有没有。</p>
+
+  <div class="chart-card" id="demo3">
+    <div class="chart-head">
+      <div class="chart-title">闭环图：每一步现在有没有</div>
+    </div>
+    <div class="demo">
+      <svg class="proc loop" viewBox="0 0 900 230" role="img" aria-label="自我改进闭环">
+        <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="currentColor"/></marker></defs>
+        <g style="color: var(--ink-3)">
+          <path class="edge" d="M150 60 H190" marker-end="url(#ar3)"/>
+          <path class="edge" d="M330 60 H370" marker-end="url(#ar3)"/>
+          <path class="edge" d="M510 60 H550" marker-end="url(#ar3)"/>
+          <path class="edge" d="M690 60 H730" marker-end="url(#ar3)"/>
+          <path class="edge" d="M800 95 V170 H470" marker-end="url(#ar3)"/>
+          <path class="edge" d="M330 170 H260 V95" marker-end="url(#ar3)"/>
+        </g>
+        <g data-step="obs"><rect class="box" x="10" y="25" width="140" height="70" rx="8"/><text x="80" y="55" text-anchor="middle">补齐可观测性</text><text class="sm" x="80" y="75" text-anchor="middle">失败回合 · 工具序列</text></g>
+        <g data-step="rec"><rect class="box" x="190" y="25" width="140" height="70" rx="8"/><text x="260" y="55" text-anchor="middle">对局记录</text><text class="sm" x="260" y="75" text-anchor="middle">decision · evaluations</text></g>
+        <g data-step="ana"><rect class="box" x="370" y="25" width="140" height="70" rx="8"/><text x="440" y="55" text-anchor="middle">离线分析器</text><text class="sm" x="440" y="75" text-anchor="middle">漏防率 · 违背率</text></g>
+        <g data-step="lib"><rect class="box" x="550" y="25" width="140" height="70" rx="8"/><text x="620" y="55" text-anchor="middle">失败局面库</text><text class="sm" x="620" y="75" text-anchor="middle">可复放的棋谱</text></g>
+        <g data-step="eval"><rect class="box" x="730" y="25" width="140" height="70" rx="8"/><text x="800" y="55" text-anchor="middle">回归评测</text><text class="sm" x="800" y="75" text-anchor="middle">局面 × 模型 × 版本</text></g>
+        <g data-step="fix"><rect class="box" x="330" y="140" width="140" height="70" rx="8"/><text x="400" y="170" text-anchor="middle">人工修订知识包</text><text class="sm" x="400" y="190" text-anchor="middle">版本号升级</text></g>
+      </svg>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d3-out"></div></div>
+    <div class="chart-foot">依次点 6 个方框。v2 和 v3 各自把“局面库 → 回归测试 → 人工修订”走了一圈，但“离线分析器”仍是人工。<span class="data-note">闭环图依据白皮书 §4.8 的建议图重画（白皮书标注“建议，未实现”）。每步的现状由课程作者按勘误和 v2/v3 设计记录判断。</span></div>
+  </div>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书只记录了闭环的第一圈。之后 v2 与 v3 本身就是“实战复盘 → 人工修订知识包与工具 → 回归测试”又转了两圈：
+    <ul>
+      <li>v2 来自 2026-10-30 的人类胜局：白棋下 H7 后，黑棋用连续冲四反杀。它固化为 <code>tests/forcing-case.test.ts</code>，知识包升到 v2。</li>
+      <li>v3 来自白棋在 G10 有强杀却下了 H6，固化为 <code>tests/fixtures/missed-white-win-g10.json</code> 与 <code>missed-win-case.test.ts</code>，知识包升到 v3。</li>
+    </ul>
+    它们仍是人工闭环：没有代码读回 <code>records/</code> 做统计，也没有跨模型、跨版本的评测基准。
+  </div>
+  <div class="callout rule"><span class="ttl">保留人工审阅</span>知识包会进入每一手的系统提示词。自动改写它的风险（提示词漂移、对单一模型过拟合）高于收益。所以白皮书主张修订这一步保留人工。</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>动手看：风险看板</h2>
+  <p>白皮书 §7.1 列了 5 条设计亮点：权威与建议严格分离；最小接入面；revision 贯穿四层；用重建取代压缩；测试覆盖真实 Pi Agent Loop。§7.2 列了 11 条风险。下面的看板按两个时间点给出每条风险的状态。点一行看影响和建议。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">风险看板：白皮书 v1.0 时 vs 代码现状</div>
+    </div>
+    <div class="demo">
+      <div class="player-bar">时间点：
+        <span class="btn-group" id="d2-time">
+          <button class="btn" data-t="v1">白皮书 v1.0（380cb07）</button>
+          <button class="btn on" data-t="now">代码现状（4f65e37）</button>
+        </span>
+      </div>
+      <div class="tally" id="d2-tally"></div>
+      <ul class="risks" id="d2-list"></ul>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">在两个时间点之间来回切换。变化集中在第 6、8、9 条：v2/v3 的人工闭环、连续冲四门禁与候选级证据。其余 8 条在代码现状里仍然成立。<span class="data-note">风险描述与建议取自白皮书 §7.2。“现状”一列由课程作者依据代码现状勘误判断；第 2、4、5、7 条勘误没有覆盖，课程作者在源码里另行核实。</span></div>
+  </div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>结论与房子比喻</h2>
+  <p>白皮书把弈境的答案归纳成三句话：</p>
+  <div class="grid-3">
+    <div class="kp"><div class="k">Harness</div><div class="v">权威留在宿主</div><p>Agent 通过端口提交。运行链路自上而下，依赖方向指向中心的业务层。</p></div>
+    <div class="kp"><div class="k">Loop</div><div class="v">一手棋一次 settle</div><p>在工具准备阶段挂钩子；用 terminate 加 abort 保证提交即停；三道闸保证有界。</p></div>
+    <div class="kp"><div class="k">Context</div><div class="v">每手重建</div><p>宿主选剧本，模型在白名单里按需取知识，计算、推演、验证委派给确定性工具。</p></div>
+  </div>
+  <p>白皮书提出的下一步三件事：补可观测性；把关键警告放到提交之前；显示已记录的 DecisionTrace。按代码现状，第二件对连续冲四已经做到（L08）。第一、三件仍待做。</p>
+
+  <h3>用<a class="term" href="glossary.html#house-metaphor">房子比喻</a>复习四层</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>层</th><th>比喻</th><th>弈境里对应</th></tr>
+    <tr><td>L0</td><td>公用事业公司：水电煤气，按套餐或按量计费</td><td>模型提供商</td></tr>
+    <tr><td>L1</td><td>入户管网：建筑商铺好，住户不改</td><td>Pi 双循环：run 内循环 + settle 外循环</td></tr>
+    <tr><td>L2</td><td>标准接口面板：插座、电表、断路器</td><td>ExtensionAPI：<code>tool_call</code> 拦截、<code>registerTool</code></td></tr>
+    <tr><td>L3</td><td>家电本体：保险丝、程序、说明书</td><td>规则、信号、剧本与技能、<code>GameService</code></td></tr>
+    <tr><td>L4</td><td>控制与显示终端：墙上触屏</td><td>Electron 桌面</td></tr>
+  </table></div>
+  <p>一句话区分：<strong>菜谱是方法，按钮是接口，电机是实现。</strong>比喻也有失效处：真实房子里水电是“笨”的；在 Agent Harness 里，做决策的是 L0 送来的模型，L3 反而负责把关和提供事实。</p>
+</section>
+
+<!-- ============ 8 ============ -->
+<section class="lesson-sec" id="s8">
+  <h2><span class="num">08</span>自测与全课速记</h2>
+  <div class="quiz" data-answer="2">
+    <div class="q">Grok 提案里的 <code>principle-double-three-forbidden</code>（双三禁手原则）实现为什么否决了它？</div>
+    <div class="opts"><button>实现太复杂</button><button>会增加 token 消耗</button><button>弈境是自由五子棋，双三合法；照搬会让模型误判规则</button><button>暂缓到下一版</button></div>
+    <div class="explain"><code>RULESET = free-gomoku/v1</code>，无禁手。<code>principle-rules</code> 明确写“无禁手”。重构说明把 Renju 禁手列为需要独立设计的新规则集。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">Grok 提议“落子之后用分析和试算自检”。实现改成了什么？</div>
+    <div class="opts"><button>提交之前验证，place_stone 内置一步反击扫描</button><button>落子后再请求一次模型</button><button>启动一个 review-agent</button><button>完全去掉验证</button></div>
+    <div class="explain">落子后自检要多一次模型请求、多扣一段棋钟，而且已经无法撤回。所以 verify 放到提交之前。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">40 手复盘里，模型赢了。这能证明知识包提升了棋力吗？</div>
+    <div class="opts"><button>能，20 手都有决策记录</button><button>能，15 手选了启发式第 1 名</button><button>能，没有任何警告</button><button>不能，没有对照组，单局也区分不了技能是否被遵循</button></div>
+    <div class="explain">白皮书 §4.7：能说明编排与信号在起作用，不能把胜局归因于知识包。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">按代码现状，白皮书 §7.2 第 8 条“策略警告在提交前不反馈给模型”是什么状态？</div>
+    <div class="opts"><button>完全修复</button><button>部分修复：连续冲四有 needsReview 门禁，一步警告仍不阻止提交</button><button>仍完全成立</button><button>被否决</button></div>
+    <div class="explain">v2/v3 让连续冲四反证和己方强杀在提交前跨过请求边界返回给模型。<code>validateCandidate</code> 的一步警告仍随 <code>accepted: true</code> 一起返回。</div>
+  </div>
+
+  <h3>全课复盘速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>课</th><th>一句话</th></tr>
+    <tr><td>L01 全景</td><td>LLM 只能经 <code>place_stone</code> 落子；四层运行自上而下，依赖指向 L3</td></tr>
+    <tr><td>L02 端口与不变量</td><td>L3 只认 TurnPort 与 AgentDriver；单写者 GameService；revision 让迟到提交失效</td></tr>
+    <tr><td>L03 SDK 接入</td><td>进程内 SDK：每手一个内存 Session，系统提示词整段替换，只开 8 个领域工具</td></tr>
+    <tr><td>L04 接入点</td><td>一手一次 settle；<code>tool_call</code> 拦截；L1 订阅 <code>turn_start</code> 数请求；terminate 加 abort 提交即停</td></tr>
+    <tr><td>L05 三道闸</td><td>请求 8、工具 16、超时 90 秒、取消；权威留在宿主，扩展需要的回调就少</td></tr>
+    <tr><td>L06 知识与路由</td><td>15 个条目；宿主确定性选剧本，模型在白名单里按需读；事实与启发式分开</td></tr>
+    <tr><td>L07 上下文</td><td>关闭压缩，每手从权威棋谱重建；知识、计算、验证都委派给确定性代码</td></tr>
+    <tr><td>L08 连续冲四</td><td>对手反证与己方强杀；needsReview 让反馈跨过请求边界再提交</td></tr>
+    <tr><td>L09 证据与桌面</td><td>DecisionTrace 只记工具证据；渲染器隔离；心跳只画棋钟、键变才写盘</td></tr>
+    <tr><td>L10 血统与复盘</td><td>受 pstack 启发、由宿主管理；复盘推动 v2/v3 两圈人工闭环，自动化仍未闭合</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L01-overview.html"><small>回到起点 · L01</small>弈境全景：让 LLM 真的落子</a>
+    <a href="L06-knowledge-routing.html"><small>L06</small>知识包、两级路由与信号契约</a>
+    <a href="L08-forcing-search.html"><small>L08</small>连续冲四：反证、强杀与提交前反馈</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L10-lineage-review.html"></nav>
+<p class="disclaimer">原文：《弈境 · Five LLM 技术白皮书》v1.0 §4.6–4.8、§7–8、附录 C（2026-10-30）；L3 重构说明；L3 v2/v3 设计记录；课程作者整理的《弈境代码现状勘误》（对照提交 4f65e37）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 提案分拣台 ---- */
+  const CARDS = [
+    ["RULES.md 升级为原则层，拆成独立的 principle 技能，启动时只读索引", "采纳", "5 条 principle-*，索引常驻系统提示词；RULES.md 保留给人看。但硬规则仍在代码里，原则只做指导。"],
+    ["原则里加 principle-double-three-forbidden（双三禁手）", "否决", "本应用是自由五子棋，双三合法。principle-rules 明确写“无禁手”。照搬会让模型误判规则。"],
+    ["把 engine.ts 拆成技能 + 工具：check-win、evaluate-threats、ban-check", "改造采纳", "拆成 rules.ts（规则）+ tactics.ts（启发式）+ decision.ts（信号）。ban-check 被否决，换成 check-legality。技能只写何时、怎样用，计算留在 TypeScript。"],
+    ["把 game-service.ts 的流程变成剧本：opening / midgame / endgame / timeout", "改造采纳", "4 个剧本，统一为 observe / compare / verify / commit。GameService 的状态机没有改写成自然语言；剧本只覆盖“模型的一手棋怎么想”。"],
+    ["剧本由 game-service 在落子前后注入，跳过的步骤保留原因", "采纳", "由 turnGuidance() 确定性选择，回合开始时注入；跳过原因写进 DecisionTrace。路由权在代码，不在模型。"],
+    ["clock.ts 保留为基础设施，抽出时间策略原则", "采纳", "clock.ts 不变；新增 principle-time 和 time-pressure 剧本。"],
+    ["验证技能 skill-verify-board：落子之后用分析和试算自检", "改造采纳", "关键改造：verify-board 改到提交之前，place_stone 内置一步反击扫描。落子后自检要多一次模型请求、多扣一段棋钟，而且已经无法撤回。（现状：v2/v3 另加提交前的连续冲四检查。）"],
+    ["加 review-agent（多模型交叉审查）或 simulate-agent", "暂缓", "用确定性的 validateCandidate 做只读审查。费用、棋钟预算、故障传播都还没评估。（现状：仍未引入子 Agent；v2/v3 继续用确定性搜索。）"],
+    ["用 .five-llm/state 目录存剧本进度、原则索引、模型分配", "否决", "沿用 GameService 单写者 + 棋谱原子保存，避免出现第二个可写状态源。"],
+    ["工具太粗：拆出 evaluate_threats、check_bans，place_stone 加提交前钩子", "采纳", "新增三个工具：evaluate_threats / validate_move / read_knowledge；place_stone 内置证据门禁和验证。check_bans 除外。（现状：v2/v3 又加了 check_forcing_sequences、find_forcing_win，共 8 个工具。）"],
+  ];
+  let i1 = 0;
+  const ans = new Array(CARDS.length).fill(null);
+  function draw1() {
+    const c = CARDS[i1];
+    CL.$("#d1-pos").textContent = "第 " + (i1 + 1) + " / " + CARDS.length + " 条";
+    CL.$("#d1-prop").textContent = c[0];
+    CL.$$("#d1-guess [data-g]").forEach((b) => b.classList.toggle("on", ans[i1] === b.dataset.g));
+    const done = ans.filter((a) => a !== null).length, right = ans.filter((a, k) => a === CARDS[k][1]).length;
+    const cnt = {}; CARDS.forEach((k, j) => { if (ans[j] !== null) cnt[k[1]] = (cnt[k[1]] || 0) + 1; });
+    CL.$("#d1-tally").innerHTML = '<span class="pill">已分拣 ' + done + " / " + CARDS.length + '</span><span class="pill ' + (right ? "fast" : "") + '">猜对 ' + right + "</span>" +
+      ["采纳", "改造采纳", "否决", "暂缓"].map((g) => '<span class="pill">' + g + " " + (cnt[g] || 0) + "</span>").join("");
+    if (ans[i1] === null) CL.$("#d1-out").textContent = "先猜这条提案的去向。";
+    else CL.$("#d1-out").textContent = (ans[i1] === c[1] ? "猜对了。" : "你猜“" + ans[i1] + "”，实际是“" + c[1] + "”。") + "\n实际取舍：" + c[1] + "。\n理由：" + c[2] + (done === CARDS.length ? "\n\n10 条全部分拣完。实际分布：采纳 4、改造采纳 3、否决 2、暂缓 1。否决和改造的理由都来自领域约束。" : "");
+  }
+  CL.$$("#d1-guess [data-g]").forEach((b) => b.addEventListener("click", () => { ans[i1] = b.dataset.g; draw1(); }));
+  CL.$("#d1-prev").addEventListener("click", () => { i1 = (i1 + CARDS.length - 1) % CARDS.length; draw1(); });
+  CL.$("#d1-next").addEventListener("click", () => { i1 = (i1 + 1) % CARDS.length; draw1(); });
+  CL.$("#d1-reset").addEventListener("click", () => { ans.fill(null); i1 = 0; draw1(); });
+  draw1();
+
+  /* ---- 2. 风险看板 ---- */
+  // [风险, 影响, 建议, v1 状态, 现状, 现状说明]
+  const R = [
+    ["DecisionTrace 已持久化，但界面不显示", "用户看不到模型基于什么证据决策", "手记卡片展开显示剧本、知识、四步进度、警告", "open", "open", "勘误确认：DecisionTrace 仍未在界面上显示。"],
+    ["候选集在用户提示词中出现两次", "每手多花几百到上千 token", "只保留 signals 一份，或在 analysis 中省略 candidates", "open", "open", "仍成立：用户提示词仍有“当前计算”的完整 analysis，信号里 heuristics.candidates 仍取自 analysis.candidates（decision.ts:94）。"],
+    ["每手重发完整系统提示词，并关闭 cacheWarming", "成本与首 token 延迟", "稳定部分放前面，剧本放最后，利用前缀缓存", "open", "open", "仍成立：勘误确认 cacheWarming: 'off'；每手仍新建 Session。"],
+    ["<cwd> 段把 userData 路径附加进系统提示词", "无关噪声，暴露本机路径", "传中性 cwd，或通过 sections 覆盖", "open", "open", "仍成立：main.ts:67 仍以 userData 作为 PiDriver 的 cwd；Pi 1.4.0 的 system-prompt.js:110 无论是否用 customPrompt，都追加 <cwd> 段。"],
+    ["回合中途推荐剧本变化时不重载全文", "时间突然变紧时仍以原剧本为主", "evaluate_threats 结果里显式提示剧本已变", "open", "open", "仍成立：evaluate_threats 每次返回新的 turnGuidance（gomoku.ts:106），但系统提示词里的剧本全文不变，结果里也没有“剧本已变”的提示。"],
+    ["自我改进环未闭合", "无法证明知识包修改是否提升棋力", "建立可观测 → 记录 → 分析 → 局面库 → 评测 → 人工修订闭环", "open", "part", "v2、v3 又各转了一圈人工闭环（H7、G10 固化为回归测试）。离线分析器与跨模型评测仍没有。"],
+    ["没有开局定式数据", "开局质量依赖模型先验", "把少量定式做成确定性信号", "open", "open", "仍成立（推断）：opening 剧本描述仍是“中央、联络、空间”（decision.ts:15），代码里没有定式表。"],
+    ["策略警告在提交前不反馈给模型", "最关键的反馈错过起作用的时机", "有风险的提交先返回 needs_review", "open", "part", "部分修复：连续冲四反证与己方强杀走 needsReview 门禁，必须跨过请求边界再提交。validateCandidate 的一步警告仍不阻止提交。"],
+    ["compare: done 偏弱，observed / simulated 是覆盖式变量", "分不清探索、验证与是否含对手应手", "试算证据绑定候选", "open", "part", "部分修复：candidateReview 里试算与反证都是绑定候选的数组，coverage 写明范围。observed 仍是覆盖式字符串。"],
+    ["knowledgeRead 混合注入与主动读取", "无法评估技能是否真被用到", "分成 injected / fetched 两个字段", "open", "open", "勘误确认仍成立。"],
+    ["失败、取消、超时的回合不留记录；logs 不导出", "无法统计纠错率和失败原因", "为每次尝试记 attemptId、路由原因、工具序列、错误、耗时", "open", "open", "勘误确认仍成立：失败尝试不写手记，内存日志只留 80 条。"],
+  ];
+  const ST = { open: "未修", part: "部分修", fixed: "已修", unk: "未核对" };
+  let t2 = "now", sel = -1;
+  function draw2() {
+    const k = t2 === "v1" ? 3 : 4;
+    const cnt = { open: 0, part: 0, fixed: 0, unk: 0 }; R.forEach((r) => cnt[r[k]]++);
+    CL.$("#d2-tally").innerHTML = Object.keys(ST).map((s) => '<span class="pill">' + ST[s] + " " + cnt[s] + "</span>").join("");
+    CL.$("#d2-list").innerHTML = R.map((r, i) => '<li data-i="' + i + '" class="' + r[k] + (i === sel ? " sel" : "") + '"><span class="n">' + (i + 1) + "</span><span>" + CL.esc(r[0]) + '</span><span class="st">' + ST[r[k]] + "</span></li>").join("");
+    CL.$$("#d2-list li").forEach((li) => li.addEventListener("click", () => { sel = +li.dataset.i; draw2(); }));
+    if (sel < 0) { CL.$("#d2-out").textContent = (t2 === "v1" ? "白皮书 v1.0 时，11 条全部未修。" : "代码现状：未修 " + cnt.open + "、部分修 " + cnt.part + (cnt.unk ? "、未核对 " + cnt.unk : "") + "，没有一条完全修好。") + "\n点一行看详情。"; return; }
+    const r = R[sel];
+    CL.$("#d2-out").textContent = "第 " + (sel + 1) + " 条：" + r[0] + "\n影响：" + r[1] + "\n白皮书建议：" + r[2] + "\n" + (t2 === "v1" ? "v1.0 时：未修。" : "现状（" + ST[r[4]] + "）：" + r[5]);
+  }
+  CL.$$("#d2-time [data-t]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d2-time [data-t]").forEach((x) => x.classList.toggle("on", x === b)); t2 = b.dataset.t; draw2();
+  }));
+  draw2();
+
+  /* ---- 3. 闭环图 ---- */
+  const STEP = {
+    obs: ["补齐可观测性", "部分有：candidateReview 记下全部试算、反证、强杀检查及请求序号。仍缺：失败回合、完整工具序列、knowledgeRead 分 injected / fetched。"],
+    rec: ["对局记录", "有：notes[].decision + evaluations + outcome，每盘一个 records/*.json，原子保存。"],
+    ana: ["离线分析器", "没有：复盘全靠人工，没有代码读回 records/ 统计漏防率、违背剧本率、警告后仍提交率。"],
+    lib: ["失败局面库", "有雏形：v2 的 H7 局面、v3 的 G10 局面（tests/fixtures/）已固化。但只是零散用例，不是成体系的局面库。"],
+    eval: ["回归评测", "部分有：bun test 121 项，含真实 Pi + 本地 SSE 替身。它验证 Harness 调度与证据契约，不评测真实模型棋力，也没有“局面 × 模型 × 知识版本”的对照。"],
+    fix: ["人工修订知识包", "有，且应保持人工：v2、v3 各升一次版本（gomoku-knowledge/v2、v3）。白皮书主张这一步不要自动化。"],
+  };
+  const g3 = CL.$$("#demo3 [data-step]");
+  g3.forEach((g) => g.addEventListener("click", () => {
+    g3.forEach((x) => { const on = x === g; x.querySelector("rect").classList.toggle("hl", on); x.style.opacity = on ? 1 : 0.45; });
+    const s = STEP[g.dataset.step]; CL.$("#d3-out").textContent = s[0] + "\n" + s[1];
+  }));
+  CL.$("#d3-out").textContent = "点一个方框，看这一步在代码现状里有没有。";
+});
+</script>
+</body>
+</html>

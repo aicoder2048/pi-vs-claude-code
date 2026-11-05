@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>上下文工程：用重建取代压缩 · L07</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .map-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; font-size: 13.5px; color: var(--ink-3); }
+  .map-row input[type=range] { flex: 1; min-width: 160px; }
+  .stack { display: flex; height: 34px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); margin: 6px 0 4px; }
+  .stack i { display: block; height: 100%; min-width: 1px; }
+  .stack-lbl { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--ink-3); margin-bottom: 10px; }
+  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 4px 16px; font-size: 13px; color: var(--ink-2); }
+  .legend span { display: flex; align-items: center; gap: 6px; }
+  .legend b { font-weight: 600; font-family: var(--mono); font-size: 12px; margin-left: auto; color: var(--ink); }
+  .legend .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .vs2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 640px) { .vs2 { grid-template-columns: 1fr; } }
+  .vs2 > div { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--surface); }
+  .vs2 h4 { margin: 0 0 6px; font-size: 14px; }
+  .qa { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; font-size: 13.5px; }
+  .qa li { display: grid; grid-template-columns: 1.6em minmax(0, 1fr); gap: 6px; }
+  .qa .ok { color: var(--tip-bd); font-weight: 700; } .qa .bad { color: var(--note-bd); font-weight: 700; } .qa .risk { color: var(--rule-bd); font-weight: 700; }
+  .ctx-mem { font-family: var(--mono); font-size: 12px; color: var(--ink-3); margin: 6px 0 8px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">两条原则</a></li>
+    <li><a href="#s2">模型每次请求看到什么</a></li>
+    <li><a href="#s3">提示词还藏在三个地方</a></li>
+    <li><a href="#s4">动手看：上下文装配台</a></li>
+    <li><a href="#s5">Compaction：用重建取代压缩</a></li>
+    <li><a href="#s6">动手看：压缩还是重建</a></li>
+    <li><a href="#s7">Delegation 与四层分布</a></li>
+    <li><a href="#s8">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L07 · 业务层与上下文</div>
+  <h1>上下文工程：用重建取代压缩</h1>
+  <p>弈境关闭了 Pi 的自动压缩。它每手从权威棋谱重建全部上下文，并把计算和验证委派给确定性工具。这一课拆开模型每次请求实际看到的内容，再看这种做法的收益和代价。</p>
+  <div class="meta"><span>原文：白皮书 §2.0、§6 + 代码现状勘误 §3.3、§3.7</span><span>阅读约 20 分钟</span><span>含 2 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>列出模型每次请求看到的三块内容：系统提示词、工具定义、消息。</li>
+    <li>说出<a class="term" href="glossary.html#user-prompt-template">用户提示词模板</a>的六段，以及提示词藏身的另外三个地方。</li>
+    <li>解释为什么对可完整序列化的状态，<a class="term" href="glossary.html#rematerialization">重建</a>比<a class="term" href="glossary.html#compaction">压缩</a>可靠，并说出它的代价。</li>
+    <li>说出弈境把哪五类东西<a class="term" href="glossary.html#delegation">委派</a>给了确定性代码。</li>
+    <li>指出“策略警告进不了提交前上下文”这个缺口现在修到了哪一步。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>两条原则</h2>
+  <p>先说结论：弈境的上下文设计落实了 2026-10-28 四层讨论定下的两条原则（白皮书 §2.0）。</p>
+  <div class="grid-2">
+    <div class="kp"><div class="k">原则 1</div><div class="v">上下文管理是手段，业务语义是内容</div><p>每一个进入上下文的字段，都要能回答“它帮模型做哪个业务决策”。逐手评估只送 5 个字段；信号里每段都标 <code>source</code>。</p></div>
+    <div class="kp"><div class="k">原则 2</div><div class="v">界面通道与上下文通道分离</div><p>界面数据直接来自 L3 状态，不经模型转述。冲突时以界面为准。模型的 <code>reason</code> 只是公开理由，从不作为状态来源。</p></div>
+  </div>
+  <blockquote class="src">L3 业务逻辑：决定什么信息进上下文、进多少、以什么形式进。<cite>白皮书 §2.0</cite></blockquote>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>模型每次请求看到什么</h2>
+  <p>模型每次请求看到三块内容。三块都由宿主控制。</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 250" role="img" aria-label="模型每次请求看到的三块内容">
+      <defs><marker id="ar7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="currentColor"/></marker></defs>
+      <rect class="box" x="20" y="14" width="270" height="222" rx="8"/>
+      <text x="155" y="38" text-anchor="middle" style="font-weight:700">系统提示词（L1 装配，L3 提供内容）</text>
+      <text class="sm" x="36" y="66">① SYSTEM：角色与边界（约 130 字符）</text>
+      <text class="sm" x="36" y="92">② 知识包版本 + gomoku-coach 入口全文</text>
+      <text class="sm" x="36" y="118">③ 5 条原则索引 + 15 个条目索引</text>
+      <text class="sm" x="36" y="144">④ 选中剧本全文（4 选 1）</text>
+      <text class="sm" x="36" y="170">⑤ &lt;cwd&gt; 段（Pi 自动附加）</text>
+      <text class="sm" x="36" y="210">每手新建 Session 时装配一次</text>
+      <rect class="box" x="315" y="14" width="250" height="222" rx="8"/>
+      <text x="440" y="38" text-anchor="middle" style="font-weight:700">工具定义（L2）</text>
+      <text class="sm" x="331" y="66">8 个工具的 name / description</text>
+      <text class="sm" x="331" y="92">TypeBox 参数 schema</text>
+      <text class="sm" x="331" y="118">read_knowledge 的 15 个 ID 枚举</text>
+      <text class="sm" x="331" y="144">place_stone 的两个确认参数</text>
+      <text class="sm" x="331" y="210">合计约 5.5k 字符（作者测量）</text>
+      <rect class="box" x="590" y="14" width="290" height="222" rx="8"/>
+      <text x="735" y="38" text-anchor="middle" style="font-weight:700">消息（每手全新）</text>
+      <text class="sm" x="606" y="66">user：宿主模板（六段，见下表）</text>
+      <text class="sm" x="606" y="92">assistant：toolCall …</text>
+      <text class="sm" x="606" y="118">toolResult：JSON 证据</text>
+      <text class="sm" x="606" y="144">　或错误 / 拦截原因 / needsReview</text>
+      <text class="sm" x="606" y="210">回合内增长，8 次请求 / 16 次工具封顶</text>
+    </svg>
+  </div>
+  <h3>系统提示词：整段替换，并屏蔽外来内容</h3>
+  <p><code>PiDriver</code> 把 <code>systemPrompt</code> 传给 <code>DefaultResourceLoader</code>（<code>pi-driver.ts:52</code>）。Pi 把它当作 <code>customPrompt</code>，整段替换默认的编码助手前言。再加上下面几项设置，系统提示词只剩弈境自己的内容，外加一个 <code>&lt;cwd&gt;</code> 段。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>设置</th><th>屏蔽了什么</th></tr>
+    <tr><td><code>appendSystemPromptOverride: () =&gt; []</code></td><td>用户或项目的 <code>APPEND_SYSTEM.md</code></td></tr>
+    <tr><td><code>noContextFiles: true</code></td><td><code>AGENTS.md</code> / <code>CLAUDE.md</code> 等上下文文件</td></tr>
+    <tr><td><code>noSkills: true</code></td><td>Pi 技能清单段落</td></tr>
+    <tr><td><code>noExtensions: true</code> + 只给内联工厂</td><td>用户和项目扩展（它们可能改提示词）</td></tr>
+    <tr><td><code>noTools: 'builtin'</code> + <code>tools: GAME_TOOLS</code></td><td>read / bash / edit / write 等编码工具</td></tr>
+  </table></div>
+  <p><b>系统提示词怎样“切换”。</b>弈境不在会话里切换，也不用 <code>before_agent_start</code>。它每手新建 Session，用新的剧本装配一份新的系统提示词。从一局棋看，提示词按局面切换：开局注入 <code>opening</code>，出现冲四换成 <code>endgame</code>，读秒紧张换成 <code>time-pressure</code>。</p>
+  <p>这有一个代价。回合中途时间可能突然变紧，<code>evaluate_threats</code> 会推荐另一个剧本。但系统提示词里的剧本全文不会更换。设计文档接受这一点。证据里记录回合开始时实际注入的剧本；模型需要时可以用 <code>read_knowledge</code> 读新剧本。</p>
+  <h3>用户提示词模板：六段</h3>
+  <p>模板在 <code>pi-driver.ts:83-90</code>，每手装配一次。所有内容都来自 L3 状态。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>段落</th><th>内容</th><th>来源</th></tr>
+    <tr><td>角色与 revision</td><td>“现在轮到你，执白棋 O。revision=17”</td><td>L3 状态</td></tr>
+    <tr><td>完整棋谱</td><td><code>1.X:H8(x=7,y=7) 2.O:…</code>，同时给棋盘记法和数组下标</td><td><code>position.moves</code></td></tr>
+    <tr><td>棋盘文本</td><td>15×15 的 <code>X / O / .</code> 字符画</td><td><code>boardText()</code></td></tr>
+    <tr><td>逐手评估摘要</td><td>每手只保留 <code>ply / next / blackScore / whiteScore / summary</code></td><td><code>evaluations</code>（<a class="term" href="glossary.html#assembly-summary">装配时摘要</a>）</td></tr>
+    <tr><td>当前计算</td><td>本手完整 <code>analysis</code>（含最多 12 个候选）</td><td><code>analyze()</code></td></tr>
+    <tr><td>决策信号与时间快照</td><td><code>turnGuidance()</code> 的 JSON（L06）</td><td><code>decision.ts</code></td></tr>
+  </table></div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>提示词还藏在三个地方</h2>
+  <p>先说结论：系统提示词和用户提示词之外，提示词还藏在工具描述、工具结果和错误里。Agent 系统很容易忽视这三处。</p>
+  <ol>
+    <li><b><a class="term" href="glossary.html#tool-description-prompt">工具描述就是提示词</a>。</b><code>place_stone</code> 的描述写着 “Commit ONE legal move after observing … accepted:true ends the run”。描述跟着工具定义进入每一次请求。</li>
+    <li><b>工具结果就是动态上下文。</b>每个工具都返回 JSON，并附带 <code>limitations</code>、<code>scope</code>、<code>hypothetical</code> 等元数据。</li>
+    <li><b><a class="term" href="glossary.html#error-as-prompt">错误就是纠正性提示词</a>。</b>“版本错误：当前 revision=17”“请先调用 analyze_position…”“该交叉点已有棋子”都是中文句子，写给模型看。Pi 把拦截和异常转成 <code>isError</code> 的工具结果，下一个 turn 它们进入上下文。这形成规则驱动的自我纠错回路。</li>
+  </ol>
+  <h3>缺口：策略警告不是错误</h3>
+  <p>白皮书 §6.3 指出一个缺口。<code>place_stone</code> 提交前自动运行 <code>validateCandidate</code>。但“放弃了本手直接获胜点”“对手下一手仍可立即成五”这类警告不阻止提交。警告随 <code>accepted: true</code> 一起返回，而成功提交立刻结束回合。所以模型没先调用 <code>validate_move</code> 时，它在提交前看不到这些警告。</p>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书把“有风险的提交先返回 needs_review”写成改进建议。现在它已经实现，但<b>只针对连续冲四</b>。普通中盘里，缺少已读的对手反证，或放弃了已读的己方强杀，<code>place_stone</code> 都返回 <code>accepted: false, needsReview: true</code>，不落子（<code>gomoku.ts:188-242</code>）。L08 详讲。<code>validateCandidate</code> 的一步警告<b>仍然不阻止提交</b>，这部分缺口还在。</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>动手看：上下文装配台</h2>
+  <p>下面的装配台估算回合第一次请求的上下文大小。拖动“已下手数”，换剧本，开关“候选去重”。看哪些部分随棋局增长。</p>
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">装配台：第一次请求里，每一块占多少字符</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">已下手数 <b id="d1-nv">30</b><input id="d1-n" type="range" min="0" max="80" value="30"></div>
+      <div class="map-row">剧本：
+        <span class="btn-group" id="d1-pb">
+          <button class="btn" data-pb="opening">opening</button>
+          <button class="btn on" data-pb="midgame">midgame</button>
+          <button class="btn" data-pb="endgame">endgame</button>
+          <button class="btn" data-pb="time-pressure">time-pressure</button>
+        </span>
+        <label class="ctrl"><input type="checkbox" id="d1-dedupe"> 候选去重（白皮书 §7.2 第 2 条建议，未实现）</label>
+      </div>
+      <div class="stack" id="d1-stack"></div>
+      <div class="stack-lbl"><span>系统提示词</span><span>工具定义</span><span>用户提示词</span></div>
+      <div class="legend" id="d1-legend"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">把手数从 0 拖到 80。系统提示词和工具定义不变；棋谱和逐手摘要线性增长，到 80 手时也只有约 8.3k 字符，远小于模型窗口。勾上“候选去重”，每手省约 1k 字符。<span class="data-note">简化模型：知识段用课程作者在快照上实测的 <code>knowledgeContext()</code> 长度（opening 2685、midgame 3535、endgame 2761、time-pressure 2779）。其余数字是作者在一个人工局面上测的近似值：工具定义 5502，棋盘 527，分析约 1100（候选约 960），信号约 1300，时间与步骤约 400。棋谱约 17.6 字符/手、摘要约 86 字符/手，为线性近似。<code>&lt;cwd&gt;</code> 段按 80 字符示意。单位是字符，不是 token。</span></div>
+  </div>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书 §6.4 写“默认注入约 2.1k 字符，全量约 4.8k”。那是 13 个条目的 v1。现在 15 个条目全文合计 9707 字符；默认注入随剧本不同，在 2685 到 3535 字符之间（课程作者在提交 4f65e37 上实测 <code>knowledgeContext()</code>）。渐进披露省下的比例比白皮书写的更大。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>Compaction：用重建取代压缩</h2>
+  <p>先说结论：对“状态可以完整序列化”的领域，压缩有损，重建无损。五子棋的完整状态就是一份棋谱。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>手段</th><th>位置</th><th>说明</th></tr>
+    <tr><td><b>关闭自动压缩</b></td><td><code>compaction: { enabled: false }</code>（<code>pi-driver.ts:43</code>）</td><td>Pi 的 <code>_checkCompaction</code> 直接返回，不生成摘要</td></tr>
+    <tr><td><b>每手重建</b></td><td>每手新建内存 Session + <code>dispose()</code></td><td>历史对话从不累积；“记忆”是权威棋谱，每次全量注入</td></tr>
+    <tr><td><b>装配时摘要</b></td><td>逐手评估只留 5 个字段</td><td>完整候选集留在本地棋谱</td></tr>
+    <tr><td><b>只注入一份剧本</b></td><td><code>knowledgeContext(playbook)</code></td><td>4 份剧本只注入 1 份</td></tr>
+    <tr><td><b>硬上限</b></td><td>8 次请求 / 16 次工具调用</td><td>一个回合内上下文的增长有界</td></tr>
+  </table></div>
+  <blockquote class="src">完整上下文来自业务棋谱，不依赖可能被压缩或残留的对话状态。<cite>弈境 README（白皮书 §6.4 引用）</cite></blockquote>
+  <p>这也回答了四层讨论稿的一个问题。讨论稿担心“受保护内容”会在裁剪或压缩后消失。它核对出：<code>context</code> 钩子的返回值只影响单次请求，不写回会话。所以受保护内容必须每次从 L3 状态重新注入。弈境把这条结论推到了极致：它根本不保留历史，整个上下文都是受保护内容。因此它连 <code>context</code> 钩子都不需要。</p>
+  <p>代价有三条：</p>
+  <ul>
+    <li><b>每手重发完整系统提示词。</b>弈境还设了 <code>cacheWarming: 'off'</code>（<code>pi-driver.ts:44</code>）。白皮书建议把稳定部分放前面、可变的剧本放最后，以利用 provider 的<a class="term" href="glossary.html#prefix-cache">前缀缓存</a>（§7.2 第 3 条）。</li>
+    <li><b>单手上下文随棋局线性增长。</b>棋谱和逐手摘要都是 O(手数)。上一个演示里，80 手时这两段约 8.3k 字符，仍远小于模型窗口。</li>
+    <li><b>候选集重复两次。</b>它同时出现在 <code>analysis.candidates</code> 和 <code>signals.heuristics.candidates</code> 里。这是可以省掉的冗余（§7.2 第 2 条）。</li>
+  </ul>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>动手看：压缩还是重建</h2>
+  <p>同一局棋走到第 N 手。左边假设用一个长会话加自动压缩，右边是弈境的每手重建。拖动手数，打开“中途悔过棋”，看两边能否答对四个问题。</p>
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">对照：长会话 + 压缩，和每手重建</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">当前手数 N <b id="d2-nv">36</b><input id="d2-n" type="range" min="4" max="80" value="36"></div>
+      <div class="map-row"><label class="ctrl"><input type="checkbox" id="d2-undo"> 中途悔过一次棋（练习模式）</label></div>
+      <div class="vs2">
+        <div><h4>假设：长会话 + 自动压缩（弈境没有这样做）</h4><div class="ctx-mem" id="d2-lmem"></div><ul class="qa" id="d2-left"></ul></div>
+        <div><h4>弈境：每手重建</h4><div class="ctx-mem" id="d2-rmem"></div><ul class="qa" id="d2-right"></ul></div>
+      </div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">把 N 拖过 20。左边第一次压缩后，早期棋步只剩大意，完整棋谱无法复原。打开“悔棋”：左边的历史里还留着已撤回的棋步。右边每手都从权威棋谱重建，四个问题都答对；代价是每手重发系统提示词。<span class="data-note">简化模型，不是原文实验。左边的参数是示意：每手对话约增长 1200 字符，窗口预算 24000 字符，所以每 20 手压缩一次；压缩后旧棋步只留一句摘要。右边的大小沿用上一个演示的近似公式（midgame）。“能否答对”只表示上下文里有没有可靠依据，不预测具体模型的表现。</span></div>
+  </div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>Delegation 与四层分布</h2>
+  <p>先说结论：弈境的委派是委派给<b>确定性代码</b>，不是委派给子 Agent。它把“需要放进上下文的东西”换成“可以调用的能力”。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>委派对象</th><th>原本要放进上下文的</th><th>现在</th></tr>
+    <tr><td>知识（<a class="term" href="glossary.html#progressive-disclosure">渐进披露</a>）</td><td>15 个条目全文，约 9.7k 字符</td><td>入口 + 索引 + 1 份剧本，约 2.7k–3.5k 字符；其余用 <code>read_knowledge(id)</code> 按需取</td></tr>
+    <tr><td>计算</td><td>让模型自己数连子、找威胁</td><td><code>analyze_position</code> / <code>evaluate_threats</code> 返回确定性结果</td></tr>
+    <tr><td>推演</td><td>让模型在脑中走几步</td><td><code>simulate_moves</code> 在副本上走 1–6 手；<code>check_forcing_sequences</code> / <code>find_forcing_win</code> 做有界连续冲四搜索</td></tr>
+    <tr><td>验证</td><td>让模型自检合法性和一步杀</td><td><code>validate_move</code> / <code>place_stone</code> 内置 <code>validateCandidate</code></td></tr>
+    <tr><td>裁决</td><td>让模型判断规则</td><td><code>rules.ts</code>，模型无法参与</td></tr>
+  </table></div>
+  <p>重构文档把“多模型 review-agent / 并行 simulate-agent”列为暂缓项。理由是费用、棋钟预算和故障传播都还没评估。棋钟每秒都在扣，所以这个取舍合理。确定性扫描几乎零延迟。一次子 Agent 调用至少多一次网络往返。按 v2 设计记录，H7 局面的反证检查本机中位约 1.29 ms（只是该局面的测量）。</p>
+  <h3>Prompt 与 Context 在四层中的分布</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>层</th><th>对提示词与上下文的贡献</th></tr>
+    <tr><td>L1</td><td>系统提示词装配与屏蔽；用户提示词模板；thinking 级别 <code>low</code>；请求预算</td></tr>
+    <tr><td>L2</td><td>工具名、描述与 schema；工具结果 JSON；拦截与错误文本；<code>terminate</code> 语义；<code>needsReview</code> 反馈</td></tr>
+    <tr><td>L3</td><td>知识包文本；剧本路由；结构化信号契约；规则错误文本；连续冲四证据；<code>DecisionTrace</code></td></tr>
+    <tr><td>L4</td><td>不参与提示词；只展示公开理由与日志，不索取思维链</td></tr>
+  </table></div>
+  <div class="callout note"><span class="ttl">补充</span>L2 一行里的 <code>needsReview</code> 和 L3 一行里的“连续冲四证据”是 v2、v3 之后才有的。白皮书 §6.5 的表里没有它们。</div>
+</section>
+
+<!-- ============ 8 ============ -->
+<section class="lesson-sec" id="s8">
+  <h2><span class="num">08</span>自测与速记</h2>
+  <div class="quiz" data-answer="1">
+    <div class="q">弈境的系统提示词怎样随局面“切换”？</div>
+    <div class="opts"><button>用 before_agent_start 钩子在会话里改写</button><button>每手新建 Session，按新选的剧本装配一份新的系统提示词</button><button>模型调用 read_knowledge 后，系统提示词自动替换</button><button>不切换，四个剧本全部注入</button></div>
+    <div class="explain">白皮书 §6.2：不在会话里切换，也不用 before_agent_start。每手一个新 Session，用新剧本装配。回合中途不换。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">为什么弈境关闭了 Pi 的自动压缩？</div>
+    <div class="opts"><button>压缩会消耗棋钟</button><button>Pi 1.4.0 的压缩有缺陷</button><button>模型窗口太小</button><button>完整状态就是一份棋谱，每手重建无损，压缩的摘要有损</button></div>
+    <div class="explain">白皮书 §6.4：对状态可以完整序列化的领域，重建是无损的。每手从权威棋谱全量注入，历史对话从不累积。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">按代码现状，<code>validateCandidate</code> 发出“对手下一手仍可立即成五”的警告时，会怎样？</div>
+    <div class="opts"><button>警告随 accepted:true 返回，不阻止提交</button><button>返回 needsReview，不落子</button><button>自动改下启发式第一名</button><button>run 崩溃</button></div>
+    <div class="explain">needsReview 只针对连续冲四的反证和己方强杀。一步警告仍不阻止合法提交，这部分缺口还在（勘误 §3.3）。</div>
+  </div>
+  <div class="quiz" data-answer="2">
+    <div class="q">按代码现状，默认注入的知识大约多少字符？</div>
+    <div class="opts"><button>约 2.1k，白皮书的数字仍然准确</button><button>约 9.7k，15 个条目全部注入</button><button>约 2.7k–3.5k，随剧本不同</button><button>0，知识全靠 read_knowledge</button></div>
+    <div class="explain">课程作者实测 <code>knowledgeContext()</code>：opening 2685、midgame 3535、endgame 2761、time-pressure 2779 字符。15 条全文合计 9707 字符。白皮书的 2.1k / 4.8k 是 v1 的数字。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>三块内容</td><td>系统提示词（L1 装配）+ 工具定义（L2）+ 每手全新的消息</td></tr>
+    <tr><td>屏蔽项</td><td>APPEND、上下文文件、技能、外部扩展、内置工具，全部关掉</td></tr>
+    <tr><td>六段模板</td><td>角色与 revision、棋谱、棋盘、逐手摘要、当前计算、决策信号</td></tr>
+    <tr><td>三处隐藏提示词</td><td>工具描述、工具结果、错误文本</td></tr>
+    <tr><td>Compaction</td><td>关闭压缩，每手重建；代价是每手重发、线性增长、候选重复</td></tr>
+    <tr><td>Delegation</td><td>知识、计算、推演、验证、裁决都交给确定性代码，不用子 Agent</td></tr>
+    <tr><td>缺口现状</td><td>needsReview 只覆盖连续冲四；一步警告仍不阻止提交</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L08-forcing-search.html"><small>下一课 · L08</small>连续冲四：反证、强杀与提交前反馈</a>
+    <a href="L06-knowledge-routing.html"><small>L06</small>知识包、两级路由与信号契约</a>
+    <a href="L03-sdk-vs-rpc.html"><small>L03</small>Pi SDK 接入：每手一个 Session</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L07-context-rebuild.html"></nav>
+<p class="disclaimer">原文：《弈境 · Five LLM 技术白皮书》v1.0 §2.0、§6（2026-10-30）。课程作者对照提交 4f65e37 整理了《弈境代码现状勘误》。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 装配台 ---- */
+  const KC = { opening: 2685, midgame: 3535, endgame: 2761, "time-pressure": 2779 };
+  let pb = "midgame";
+  function parts(n, playbook, dedupe) {
+    return [
+      { g: "sys", name: "SYSTEM 角色与边界", v: 131, grow: false },
+      { g: "sys", name: "知识段（入口 + 索引 + 剧本 " + playbook + "）", v: KC[playbook], grow: false },
+      { g: "sys", name: "<cwd> 段（示意）", v: 80, grow: false },
+      { g: "tool", name: "8 个工具定义", v: 5502, grow: false },
+      { g: "user", name: "角色与 revision", v: 70, grow: false },
+      { g: "user", name: "完整棋谱", v: Math.round(17.6 * n), grow: true },
+      { g: "user", name: "棋盘文本", v: 527, grow: false },
+      { g: "user", name: "逐手评估摘要", v: Math.round(86 * n), grow: true },
+      { g: "user", name: "当前计算 analysis" + (dedupe ? "（去掉候选）" : ""), v: dedupe ? 140 : 1100, grow: false },
+      { g: "user", name: "决策信号与时间快照", v: 1700, grow: false },
+    ];
+  }
+  function colors() { const c = CL.C; return [[c.blue, 1], [c.blue, 0.65], [c.blue, 0.35], [c.purple, 1], [c.gold, 1], [c.orange, 1], [c.pink, 1], [c.red, 1], [c.teal, 1], [c.gray, 1]]; }
+  function draw1() {
+    const n = +CL.$("#d1-n").value; CL.$("#d1-nv").textContent = n;
+    const dd = CL.$("#d1-dedupe").checked, P = parts(n, pb, dd), col = colors();
+    const total = P.reduce((s, p) => s + p.v, 0);
+    CL.$("#d1-stack").innerHTML = P.map((p, i) => '<i title="' + CL.esc(p.name + "：" + p.v) + '" style="width:' + (100 * p.v / total) + "%;background:" + col[i][0] + ";opacity:" + col[i][1] + '"></i>').join("");
+    CL.$("#d1-legend").innerHTML = P.map((p, i) => '<span><i class="sw" style="background:' + col[i][0] + ";opacity:" + col[i][1] + '"></i>' + CL.esc(p.name) + (p.grow ? "（随手数增长）" : "") + "<b>" + p.v + "</b></span>").join("");
+    const sum = (g) => P.filter((p) => p.g === g).reduce((s, p) => s + p.v, 0);
+    const grow = P.filter((p) => p.grow).reduce((s, p) => s + p.v, 0);
+    CL.$("#d1-out").textContent = "第一次请求合计约 " + total + " 字符：系统提示词 " + sum("sys") + "，工具定义 " + sum("tool") + "，用户提示词 " + sum("user") + "。\n随手数增长的部分（棋谱 + 逐手摘要）占 " + grow + " 字符，即 " + CL.fmt(100 * grow / total, 0) + "%。" +
+      (dd ? "\n去重后少了约 960 字符的重复候选。" : "\n候选集在 analysis 和 signals 里各出现一次，重复约 960 字符。") +
+      "\n回合内每次工具调用还会追加 assistant 与 toolResult 消息，由 8 次请求 / 16 次工具调用封顶。";
+  }
+  CL.$("#d1-n").addEventListener("input", draw1);
+  CL.$("#d1-dedupe").addEventListener("change", draw1);
+  CL.$$("#d1-pb [data-pb]").forEach((b) => b.addEventListener("click", () => {
+    pb = b.dataset.pb; CL.$$("#d1-pb [data-pb]").forEach((x) => x.classList.toggle("on", x === b)); draw1();
+  }));
+  CL.onTheme(draw1);
+  draw1();
+
+  /* ---- 2. 压缩 vs 重建 ---- */
+  const PER = 1200, WIN = 24000, EVERY = WIN / PER; // 每 20 手压缩一次（示意）
+  function rebuildSize(n) { return 131 + KC.midgame + 80 + 5502 + 70 + Math.round(17.6 * n) + 527 + Math.round(86 * n) + 1100 + 1700; }
+  function draw2() {
+    const n = +CL.$("#d2-n").value, undo = CL.$("#d2-undo").checked; CL.$("#d2-nv").textContent = n;
+    const comps = Math.floor(n / EVERY), sinceComp = n - comps * EVERY, lastComp = comps * EVERY;
+    const window = (comps ? 1500 : 0) + sinceComp * PER;
+    const stale = Math.max(0, sinceComp - 1); // 窗口里过时的分析结果份数
+    const undoInWindow = undo && sinceComp >= 4; // 假设悔棋发生在 N-3 手附近
+    const L = [
+      [comps ? "bad" : "ok", "完整棋谱能复原吗？", comps ? "不能。前 " + lastComp + " 手已压成一句摘要，只剩大意。" : "能。还没压缩，原始消息都在。"],
+      [stale ? "risk" : "ok", "对手现在的立即成五点", stale ? "最新一次工具结果是对的，但窗口里还有 " + stale + " 份过时的分析，可能被引用。" : "只有一份分析，可靠。"],
+      [undo ? "bad" : "ok", "已撤回的棋步会被当真吗？", undo ? (undoInWindow ? "会。被撤回的棋步和对应分析仍留在历史里。" : "会。悔棋记录已被压进摘要，摘要可能没写清撤回。") : "本局没有悔棋。"],
+      [comps ? "risk" : "ok", "规则与知识还完整吗？", comps ? "压缩可能改写早期的系统指令或知识读取结果。" : "还没压缩，完整。"],
+    ];
+    const R = [
+      ["ok", "完整棋谱能复原吗？", "能。每手从 position.moves 全量注入。"],
+      ["ok", "对手现在的立即成五点", "只有本手的信号，来自全盘扫描。"],
+      ["ok", "已撤回的棋步会被当真吗？", undo ? "不会。悔棋后 revision 变了，棋谱已重放，旧 Session 已丢弃。" : "本局没有悔棋；即使有，也从重放后的棋谱重建。"],
+      ["ok", "规则与知识还完整吗？", "完整。系统提示词每手重新装配。"],
+    ];
+    const ic = { ok: "✓", bad: "✗", risk: "⚠" };
+    const li = (a) => a.map((x) => '<li><span class="' + x[0] + '">' + ic[x[0]] + "</span><span><b>" + CL.esc(x[1]) + "</b>：" + CL.esc(x[2]) + "</span></li>").join("");
+    CL.$("#d2-left").innerHTML = li(L); CL.$("#d2-right").innerHTML = li(R);
+    CL.$("#d2-lmem").textContent = "已压缩 " + comps + " 次；本次请求上下文约 " + window + " 字符（预算 " + WIN + "）";
+    CL.$("#d2-rmem").textContent = "每手新建 Session；本次请求上下文约 " + rebuildSize(n) + " 字符";
+    const bad = L.filter((x) => x[0] !== "ok").length;
+    CL.$("#d2-out").textContent = "第 " + n + " 手：左边 " + bad + " 个问题缺少可靠依据，右边 0 个。" +
+      "\n右边的代价：每手重发约 " + (131 + KC.midgame + 80) + " 字符系统提示词和 5502 字符工具定义；cacheWarming 关闭。" +
+      (n >= 60 ? "\n到 " + n + " 手，右边单次请求约 " + rebuildSize(n) + " 字符，仍远小于常见模型窗口。" : "");
+  }
+  CL.$("#d2-n").addEventListener("input", draw2);
+  CL.$("#d2-undo").addEventListener("change", draw2);
+  draw2();
+});
+</script>
+</body>
+</html>

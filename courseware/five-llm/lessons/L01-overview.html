@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>弈境全景：让 LLM 真的落子 · L01</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .proc [data-part] { cursor: pointer; transition: opacity .2s; }
+  .map-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; font-size: 13.5px; color: var(--ink-3); }
+  .player-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13.5px; color: var(--ink-3); }
+  .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+  .msgs li.future { opacity: .25; }
+  .msgs li.now { outline: 2px solid var(--brand-2); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">为什么不用搜索 AI</a></li>
+    <li><a href="#s2">三个工程视角</a></li>
+    <li><a href="#s3">四层全景</a></li>
+    <li><a href="#s4">一手棋的往返</a></li>
+    <li><a href="#s5">动手看：一手棋怎样走完</a></li>
+    <li><a href="#s6">白皮书之后改了什么</a></li>
+    <li><a href="#s7">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L01 · 问题与全景</div>
+  <h1>弈境全景：让 LLM 真的落子</h1>
+  <p>弈境是一个人机五子棋桌面应用。机器棋手是一个 LLM，它必须调用工具才能落子。这一课建立全景：为什么这样设计，四层各管什么，一手棋怎样从点击走到落子。</p>
+  <div class="meta"><span>原文：白皮书 §1–2.4 + 代码现状勘误</span><span>阅读约 15 分钟</span><span>含 2 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>说出<a class="term" href="glossary.html#five-llm">弈境</a>要同时满足的四条约束。</li>
+    <li>说出<a class="term" href="glossary.html#four-layer">四层架构</a>每层拥有什么权威、不许做什么。</li>
+    <li>区分运行时调用链和编译依赖方向。</li>
+    <li>按顺序讲出一手棋的往返，并指出落子在哪一步真正发生。</li>
+    <li>说出白皮书 v1.0 之后代码的三项主要变化。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>为什么不用搜索 AI</h2>
+  <p>先说结论：弈境不是为了做出最强的五子棋程序。它要回答一个工程问题。</p>
+  <blockquote class="src">如何让一个通用 LLM 在一个有硬规则、有时限、有对抗的领域里做出可审计的决策，并且让它的每一步都受到工程约束？<cite>白皮书 §1.1</cite></blockquote>
+  <p>做五子棋程序，最省事的做法是 α-β 搜索，再把结果包装成“AI 说”。弈境刻意不这样做。它要同时满足四条约束：</p>
+  <div class="grid-2">
+    <div class="kp"><div class="k">约束 1</div><div class="v">规则不可协商</div><p>合法性、胜负、棋钟、轮次只由代码裁决。任何自然语言都改写不了。</p></div>
+    <div class="kp"><div class="k">约束 2</div><div class="v">LLM 必须真的做决定</div><p>应用不替模型下棋。应用也不从模型的文字里抠坐标直接落子。</p></div>
+    <div class="kp"><div class="k">约束 3</div><div class="v">过程可审计</div><p>能看到模型基于什么证据做决定。但不索取私有思维链。</p></div>
+    <div class="kp"><div class="k">约束 4</div><div class="v">时间是真实资源</div><p>网络等待、工具调用、重试都扣棋钟。</p></div>
+  </div>
+  <div class="callout rule"><span class="ttl">本课程的核心句</span>权威留在宿主，模型通过端口提交。规则在代码里，事实在信号里，经验在 Markdown 里。</div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>三个工程视角</h2>
+  <p>白皮书用三个视角看同一个系统。后面的课程按这三个视角展开。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>视角</th><th>关注点</th><th>在弈境中的体现</th><th>课程</th></tr>
+    <tr><td>Harness Engineering</td><td>系统怎么分层，权威在哪</td><td>四层架构 + <a class="term" href="glossary.html#ports-adapters">端口与适配器</a> + <a class="term" href="glossary.html#single-writer">单写者</a> <code>GameService</code></td><td>L01–L03</td></tr>
+    <tr><td>Loop Engineering</td><td>Agent 循环在哪些点被约束</td><td>每手一次 settle；<code>tool_call</code> 预算；<code>terminate</code> 加 <code>abort</code></td><td>L04–L05</td></tr>
+    <tr><td>Prompt / Context Engineering</td><td>模型每次看到什么</td><td>剧本路由、渐进披露、结构化信号、每手重建、委派计算</td><td>L06–L08</td></tr>
+  </table></div>
+  <p>最后两课（L09–L10）看证据、界面和复盘。</p>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>四层全景</h2>
+  <p>弈境自下而上分四层。编号与仓库里的边牧（TillDone Desk）一致。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>层</th><th>主要文件</th><th>拥有的权威</th><th>不许做的事</th></tr>
+    <tr><td>L1 Agent Loop</td><td><code>src/agent/pi-driver.ts</code> 等</td><td>本回合 Pi Session 的生命周期：模型解析、请求预算 8、技术超时 90 秒、取消、工具白名单校验</td><td>不判断落子是否合法，不碰棋钟</td></tr>
+    <tr><td>L2 Pi 扩展</td><td><code>src/extensions/gomoku.ts</code></td><td>本回合的工具面：8 个工具、调用预算 16、证据门禁、提交前反馈、决策证据组装</td><td>不直接改棋谱，提交只走 <code>port.commit</code></td></tr>
+    <tr><td>L3 业务</td><td><code>src/business/**</code></td><td>棋谱、<a class="term" href="glossary.html#revision">revision</a>、轮次、棋钟、比分、胜负，以及唯一写入入口</td><td>不 import Pi 或 Electron</td></tr>
+    <tr><td>L4 桌面</td><td><code>src/electron/*</code>、<code>src/renderer/*</code></td><td>进程组合、200 ms 心跳、IPC 校验、原子保存、可视化</td><td>渲染器不能提交 LLM 落子，不能改权威棋谱</td></tr>
+  </table></div>
+  <p>注意两个方向。运行时调用链自上而下：点击 → 业务 → Agent → 扩展。编译依赖却指向中心的 L3：L1、L2、L4 都 import L3，L3 一个都不 import。这就是<a class="term" href="glossary.html#ports-adapters">端口与适配器</a>。</p>
+  <p>下面的图把两种箭头画在一起。点按钮或方框，看每一层的职责。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">动手看：运行时谁调用谁，编译时谁依赖谁</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">箭头：
+        <span class="btn-group" id="d1-mode">
+          <button class="btn on" data-mode="run">运行时调用链</button>
+          <button class="btn" data-mode="dep">编译依赖（import）</button>
+        </span>
+      </div>
+      <div class="map-row">按问题看：
+        <button class="btn" data-q="write">谁能写棋谱</button>
+        <button class="btn" data-q="pi">谁知道 Pi 存在</button>
+        <button class="btn" data-q="ctx">谁决定什么进上下文</button>
+        <button class="btn" data-q="">全部</button>
+      </div>
+      <svg class="proc" viewBox="0 0 900 380" role="img" aria-label="弈境四层结构">
+        <defs><marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="currentColor"/></marker></defs>
+        <g data-part="l4"><rect class="box" x="40" y="20" width="560" height="62" rx="8"/><text x="320" y="46" text-anchor="middle" style="font-weight:700">L4 Electron 桌面层</text><text class="sm" x="320" y="66" text-anchor="middle">main.ts 组合根 · 心跳 · IPC · 自动保存 ｜ renderer：Canvas 棋盘、棋钟、手记</text></g>
+        <g data-part="l3"><rect class="box" x="40" y="112" width="560" height="62" rx="8"/><text x="320" y="138" text-anchor="middle" style="font-weight:700">L3 业务层（中心）</text><text class="sm" x="320" y="158" text-anchor="middle">rules · tactics · decision · forcing · clock · GameService · knowledge/</text></g>
+        <g data-part="l2"><rect class="box" x="40" y="204" width="560" height="62" rx="8"/><text x="320" y="230" text-anchor="middle" style="font-weight:700">L2 Pi 扩展层</text><text class="sm" x="320" y="250" text-anchor="middle">gomokuExtension(port, playbook)：8 个领域工具 + tool_call 预算闸</text></g>
+        <g data-part="l1"><rect class="box" x="40" y="296" width="560" height="62" rx="8"/><text x="320" y="322" text-anchor="middle" style="font-weight:700">L1 Agent Loop 层</text><text class="sm" x="320" y="342" text-anchor="middle">PiDriver：ModelRuntime、ResourceLoader、内存 AgentSession</text></g>
+        <g data-part="llm"><ellipse class="box" cx="790" cy="327" rx="90" ry="32"/><text x="790" y="332" text-anchor="middle">LLM provider</text></g>
+        <g id="d1-run" style="color: var(--brand)">
+          <path class="edge" d="M250 82 V112" marker-end="url(#ar1)"/><text class="sm" x="258" y="101">Command</text>
+          <path class="edge" d="M390 112 V82" marker-end="url(#ar1)"/><text class="sm" x="398" y="101">GameState 快照</text>
+          <path class="edge" d="M620 143 C700 143 700 327 600 327" marker-end="url(#ar1)"/><text class="sm" x="660" y="210">driver.run(port)</text>
+          <path class="edge" d="M150 296 V266" marker-end="url(#ar1)"/><text class="sm" x="158" y="285">extensionFactories</text>
+          <path class="edge" d="M490 204 V174" marker-end="url(#ar1)"/><text class="sm" x="498" y="193">port.commit / log</text>
+          <path class="edge" d="M600 320 H698" marker-end="url(#ar1)"/><path class="edge" d="M698 336 H600" marker-end="url(#ar1)"/>
+        </g>
+        <g id="d1-dep" style="color: var(--accent); display:none">
+          <path class="edge dash" d="M250 82 V112" marker-end="url(#ar1)"/><text class="sm" x="258" y="101">import</text>
+          <path class="edge dash" d="M250 204 V174" marker-end="url(#ar1)"/><text class="sm" x="258" y="193">import</text>
+          <path class="edge dash" d="M620 327 C720 327 720 143 600 143" marker-end="url(#ar1)"/><text class="sm" x="690" y="230">import</text>
+          <path class="edge dash" d="M450 296 V266" marker-end="url(#ar1)"/><text class="sm" x="458" y="285">import gomokuExtension</text>
+        </g>
+      </svg>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">先在“运行时调用链”下点“谁能写棋谱”，再切到“编译依赖”。运行时请求从 L4 一路走到 L1，再回到 L3 提交；编译依赖的箭头全部指向 L3。<span class="data-note">此图依据白皮书 §2.1 的全景图重画，层内文件按代码现状更新（新增 forcing、8 个工具）。框的位置是示意。</span></div>
+  </div>
+  <div class="callout tip"><span class="ttl">看图要点</span>L3 只认两个接口：<a class="term" href="glossary.html#turn-port">TurnPort</a> 和 <a class="term" href="glossary.html#agent-driver">AgentDriver</a>。它不知道 Pi 存在。冒烟测试换一个替身 driver，业务层一行不改。L02 展开这一点。</div>
+  <div class="callout note"><span class="ttl">补充：为什么 PiDriver 算 L1</span>弈境用进程内 <a class="term" href="glossary.html#pi-sdk">Pi SDK</a>。宿主的驱动代码和 Pi 运行时在同一个进程里，所以白皮书把 <code>PiDriver</code> 归入 L1。边牧用 RPC 子进程，它的 L1 是整个 pi 进程。层的边界跟着进程边界走（白皮书 §5.2）。</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>一手棋的往返</h2>
+  <p>先说结论：一手棋 = 一个新的内存 Session = 一次 <code>session.prompt()</code> = 一次 <a class="term" href="glossary.html#settle-loop">settle</a>。落子只在 L2 调用 <code>port.commit()</code> 时发生，由 L3 校验后写入。</p>
+  <p>“人类落子 → LLM 应手”按这个顺序走：</p>
+  <ol>
+    <li>渲染器发 <code>five:command { move, x, y, revision }</code>。主进程校验发送方和命令形状。</li>
+    <li><code>GameService.humanMove()</code> 先结算棋钟，再校验 revision，然后落子、重放、分析。</li>
+    <li><code>startAgent()</code> 新建 <code>AbortController</code> 和本回合的 <code>TurnPort</code>。状态变成“思考中”并推送给界面。</li>
+    <li>L3 调 <code>driver.run(port)</code>，不 await。L1 用 <code>turnGuidance()</code> 选剧本，装配系统提示词。</li>
+    <li>L1 创建内存 Session。Pi 在 <code>reload()</code> 中执行扩展工厂，注册 8 个工具。</li>
+    <li>L1 调 <code>session.prompt(棋谱 + 棋盘 + 信号 JSON)</code>。run 内循环开始：模型回复，Pi 顺序执行工具。</li>
+    <li>模型调 <code>place_stone</code>。L2 检查证据，调 <code>port.commit(point, reason, trace)</code>。L3 结算棋钟、校验 <a class="term" href="glossary.html#valid-check">valid()</a>、落子、切换棋钟。</li>
+    <li>L1 看到提交成功，立即 <code>abort()</code>。Session 停稳后 <code>dispose()</code>。界面收到新快照并自动保存。</li>
+  </ol>
+  <div class="callout warn"><span class="ttl">常见误解</span>“模型在回复里写出坐标，应用就落子。”不对。模型的文字从不作为落子来源。没有成功的 <code>place_stone</code> 工具调用，棋盘就不变。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>动手看：一手棋怎样走完</h2>
+  <p>下面的播放器按顺序列出一手棋里发生的事。先选一个场景，再点“下一步”。注意状态栏里的 revision、请求数和棋盘。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">逐步播放：一手棋里各层做了什么，落子在哪一步发生</div>
+    </div>
+    <div class="demo">
+      <div class="player-bar">场景：
+        <span class="btn-group" id="d2-sc">
+          <button class="btn on" data-sc="normal">正常应手</button>
+          <button class="btn" data-sc="nogate">没观察就提交</button>
+          <button class="btn" data-sc="mixed">一条回复里同时调两个工具</button>
+          <button class="btn" data-sc="undo">思考中人类悔棋</button>
+        </span>
+      </div>
+      <div class="player-bar">
+        <button class="btn" id="d2-next">下一步</button><button class="btn" id="d2-all">播完</button><button class="btn" id="d2-reset">重来</button>
+      </div>
+      <div class="status-row" id="d2-status"></div>
+      <ul class="msgs" id="d2-list"></ul>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">依次播完四个场景，比较“棋盘”一栏何时变化。只有成功的 <code>port.commit()</code> 会改棋盘。选“思考中人类悔棋”：revision 变了，<code>valid()</code> 拒绝迟到的提交。<span class="data-note">简化模型：事件顺序依据白皮书 §2.4 时序图与 §3.4，并按代码现状把工具数改为 8。省略了棋钟心跳、日志、普通中盘的连续冲四审查（L08 讲）。revision 数字和坐标是演示用例子。</span></div>
+  </div>
+  <div class="callout note"><span class="ttl">补充：混合批次为什么要 abort</span>Pi 的规则是：同一批工具<strong>全部</strong>返回 <a class="term" href="glossary.html#terminate">terminate</a>，才不再请求模型。<code>place_stone</code> 和别的工具同批时，同批工具会“否决”它的 terminate。所以 L1 订阅 <code>tool_execution_end</code>，看到提交成功就 <code>abort()</code>。L04 展开。</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>白皮书之后改了什么</h2>
+  <p>白皮书 v1.0 写于 2026-10-30，描述提交 <code>380cb07</code> 的代码。之后代码又改了 5 次行为。本课程按代码现状讲，快照是 <code>apps/five-llm</code> 的最后一次改动 <code>4f65e37</code>。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>项目</th><th>白皮书 v1.0</th><th>代码现状</th></tr>
+    <tr><td>工具</td><td>6 个</td><td>8 个：新增 <a class="term" href="glossary.html#forcing-check">check_forcing_sequences</a>、<a class="term" href="glossary.html#own-forcing-win">find_forcing_win</a></td></tr>
+    <tr><td>知识包</td><td><code>gomoku-knowledge/v1</code>，13 个条目</td><td><code>gomoku-knowledge/v3</code>，15 个条目（技能 3 → 5）</td></tr>
+    <tr><td>提交前反馈</td><td>列为改进建议（<code>needs_review</code>）</td><td>已实现：中盘缺已读反证或放弃已读强杀时返回 <a class="term" href="glossary.html#needs-review">needsReview</a>，不落子</td></tr>
+    <tr><td>扩展事件</td><td>只挂 <code>tool_call</code></td><td>另挂 <code>turn_start</code>，给反馈打<a class="term" href="glossary.html#model-turn">请求序号</a></td></tr>
+    <tr><td>试算证据</td><td>覆盖式变量，只留最后一次</td><td>绑定候选的数组（<a class="term" href="glossary.html#candidate-review">candidateReview</a>）</td></tr>
+    <tr><td>界面</td><td>棋盘、棋钟、手记、日志</td><td>另加最新一手青色光晕、胜负庆祝与结束音效</td></tr>
+    <tr><td>测试</td><td>74 项</td><td>121 项（13 个文件）</td></tr>
+  </table></div>
+  <p>四层划分、依赖方向、Pi SDK 用法、三道闸、路由优先级都没变。完整对照见<a href="../docs/articles/code-status.md">代码现状勘误</a>。</p>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>自测与速记</h2>
+  <div class="quiz" data-answer="2">
+    <div class="q">模型在回复文字里写了“我下 H8”，但没有调用工具。棋盘会怎样？</div>
+    <div class="opts"><button>应用从文字里解析出 H8 并落子</button><button>L2 替模型调用 place_stone</button><button>棋盘不变；只有成功的 place_stone 才落子</button><button>L3 按启发式第一名代下</button></div>
+    <div class="explain">约束 2：应用不替模型下棋，也不从自然语言里抠坐标。落子只在 <code>port.commit()</code> 成功时发生。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">下面哪一层不 import 任何其他层？</div>
+    <div class="opts"><button>L1 Agent Loop</button><button>L3 业务层</button><button>L2 Pi 扩展</button><button>L4 桌面层</button></div>
+    <div class="explain">编译依赖指向中心的 L3。L3 只定义 <code>TurnPort</code> 和 <code>AgentDriver</code>，不 import Pi 或 Electron。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">模型思考时，人类悔棋。之后模型调用 <code>place_stone</code>。结果是什么？</div>
+    <div class="opts"><button>正常落子，再自动撤销</button><button>L1 重新发起一次请求</button><button>界面显示两个棋子</button><button>回合已被取消，提交被拒绝，棋盘不变</button></div>
+    <div class="explain">悔棋让 <code>revision++</code> 并中止当前回合。L2 的 <code>ensureActive()</code> 抛错；即使提交到了 L3，<code>valid()</code> 也会因 revision 不符而拒绝。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">按代码现状，弈境注册了几个领域工具？</div>
+    <div class="opts"><button>8 个</button><button>6 个</button><button>13 个</button><button>16 个</button></div>
+    <div class="explain">白皮书 v1.0 写的是 6 个。v2 加了 <code>check_forcing_sequences</code>，v3 加了 <code>find_forcing_win</code>，现在是 8 个（<code>gomoku.ts:11</code>）。16 是工具调用预算，15 是知识条目数。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>目标</td><td>让通用 LLM 在硬规则、有时限、有对抗的领域里做可审计的决策</td></tr>
+    <tr><td>四条约束</td><td>规则不可协商；LLM 真做决定；过程可审计；时间是资源</td></tr>
+    <tr><td>四层</td><td>L1 PiDriver · L2 gomoku 扩展 · L3 业务（中心）· L4 Electron</td></tr>
+    <tr><td>两个方向</td><td>运行时自上而下调用；编译依赖全部指向 L3</td></tr>
+    <tr><td>一手棋</td><td>一个内存 Session，一次 <code>prompt()</code>，一次 settle；落子只经 <code>port.commit()</code></td></tr>
+    <tr><td>版本</td><td>白皮书 v1.0 对应 <code>380cb07</code>；课程对应 <code>4f65e37</code>：8 个工具、知识包 v3</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L02-ports-invariants.html"><small>下一课 · L02</small>端口、单写者与 revision</a>
+    <a href="L03-sdk-vs-rpc.html"><small>L03</small>Pi SDK 接入：每手一个 Session</a>
+    <a href="L04-loop-hooks.html"><small>L04</small>双循环接入点：提交即停</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L01-overview.html"></nav>
+<p class="disclaimer">原文：《弈境 · Five LLM 技术白皮书》v1.0 §1–2（2026-10-30），以及课程作者整理的《弈境代码现状勘误》（对照提交 4f65e37）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 四层图 ---- */
+  const PART = {
+    l4: ["L4 Electron 桌面层", "main.ts 是组合根：创建 PiDriver，注入 GameService，把状态订阅接到 IPC 推送和自动保存。渲染器只读快照、只发命令。"],
+    l3: ["L3 业务层", "GameService 是棋谱的唯一写入入口。它定义 TurnPort 和 AgentDriver 两个接口，不 import Pi 或 Electron。"],
+    l2: ["L2 Pi 扩展层", "gomokuExtension(port, playbook) 每手执行一次，注册 8 个工具和 tool_call 预算闸。它只能通过 port.commit 提交。"],
+    l1: ["L1 Agent Loop 层", "PiDriver 实现 AgentDriver：每手创建内存 Session，装配系统提示词，数请求、管超时和取消。"],
+    llm: ["LLM provider", "模型只能通过工具调用影响棋局。它的文字回复不作为状态来源。"],
+  };
+  const Q = {
+    write: [["l3"], "只有 L3 的 GameService 能写棋谱。L2 的 place_stone 只能请求 port.commit()，由 L3 校验 revision、棋钟和合法性后写入。渲染器只读快照。"],
+    pi: [["l1", "l2"], "只有 L1 和 L2 知道 Pi 存在。L3 只认 TurnPort 和 AgentDriver 两个接口。换成替身 driver，L3 一行不改。"],
+    ctx: [["l3", "l1", "l2"], "L3 决定内容：知识包、剧本路由、信号契约。L1 负责装配（系统提示词、用户提示词模板）。L2 贡献工具描述、工具结果和错误文本。L4 不参与提示词。"],
+  };
+  const MODE = {
+    run: "运行时：L4 发命令 → L3 起回合 → L1 跑 Pi → Pi 加载 L2 → L2 经 port.commit 回到 L3 → L3 推快照给 L4。",
+    dep: "编译时：L4、L2、L1 都 import L3；L1 还 import L2 的 gomokuExtension。L3 不 import 任何层。箭头全部指向中心。",
+  };
+  const groups = CL.$$("#demo1 [data-part]"), out1 = CL.$("#d1-out");
+  let mode = "run", lastQ = "";
+  function show1(parts, label) {
+    groups.forEach((g) => { const on = !parts || parts.includes(g.dataset.part); g.querySelector("rect,ellipse").classList.toggle("hl", !!parts && on); g.style.opacity = on ? 1 : 0.3; });
+    out1.textContent = label;
+  }
+  function ask(q) {
+    lastQ = q;
+    CL.$$("#demo1 [data-q]").forEach((x) => x.classList.toggle("on", x.dataset.q === q && q !== ""));
+    const it = Q[q];
+    if (!it) return show1(null, MODE[mode] + "\n点一个问题，或直接点图里的方框。");
+    show1(it[0], it[1] + "\n" + it[0].map((p) => "· " + PART[p][0] + "：" + PART[p][1]).join("\n"));
+  }
+  CL.$$("#d1-mode [data-mode]").forEach((b) => b.addEventListener("click", () => {
+    mode = b.dataset.mode;
+    CL.$$("#d1-mode [data-mode]").forEach((x) => x.classList.toggle("on", x === b));
+    CL.$("#d1-run").style.display = mode === "run" ? "" : "none";
+    CL.$("#d1-dep").style.display = mode === "dep" ? "" : "none";
+    ask(lastQ);
+  }));
+  CL.$$("#demo1 [data-q]").forEach((b) => b.addEventListener("click", () => ask(b.dataset.q)));
+  groups.forEach((g) => g.addEventListener("click", () => {
+    CL.$$("#demo1 [data-q]").forEach((x) => x.classList.remove("on"));
+    const p = g.dataset.part; show1([p], PART[p][0] + "\n" + PART[p][1]);
+  }));
+  ask("");
+
+  /* ---- 2. 一手棋播放器 ---- */
+  // 每步：[层, 文字, 类型, 效果]。效果：rev=设 revision；req=+1 请求；tool=+1 工具调用；stone=落子；reject=拒绝；end=结束
+  const HEAD = [
+    ["L4", "渲染器发 five:command {move H8, revision 16}；主进程 trusted() + validCommand() 通过", "fast", {}],
+    ["L3", "humanMove：charge 棋钟 → 校验 revision → play → replay → analyze；revision 变为 17", "fast", { rev: 17, human: true }],
+    ["L3", "startAgent：新建 AbortController 和 TurnPort；状态 = 思考中；driver.run(port)（不 await）", "fast", { thinking: true }],
+    ["L1", "turnGuidance 选中 opening；knowledgeContext 装配系统提示词", "fast", {}],
+    ["L1", "createAgentSession（内存 Session，8 个工具）；reload() 执行扩展工厂", "fast", {}],
+    ["L1", "session.prompt(棋谱 + 棋盘 + 信号 JSON)：settle 开始", "act", {}],
+  ];
+  const TAIL = [
+    ["L3", "commit：charge → valid() 五条件通过 → play → 切换棋钟", "act", { stone: true }],
+    ["L1", "tool_execution_end 看到 place_stone 成功 → abort()", "act", {}],
+    ["L1", "agent_settled → dispose()", "fast", { end: true }],
+    ["L4", "收到 five:state（轮到人类）并自动保存", "fast", {}],
+  ];
+  const SC = {
+    normal: HEAD.concat([
+      ["turn 1", "模型调用 evaluate_threats（observe）", "slow", { req: 1, tool: 1, observed: true }],
+      ["turn 2", "模型调用 place_stone {I9, revision 17, reason}", "slow", { req: 1, tool: 1 }],
+      ["L2", "证据门禁通过（已观察）；组装 DecisionTrace；调用 port.commit", "act", {}],
+    ], TAIL),
+    nogate: HEAD.concat([
+      ["turn 1", "模型直接调用 place_stone {I9, revision 17}", "slow", { req: 1, tool: 1 }],
+      ["L2", "证据门禁：没有先观察 → 抛错“请先调用 analyze_position 或 evaluate_threats…”", "act", { reject: "门禁" }],
+      ["Pi", "错误变成一条 isError 工具结果，回到上下文", "fast", {}],
+      ["turn 2", "模型读到错误，调用 evaluate_threats", "slow", { req: 1, tool: 1, observed: true }],
+      ["turn 3", "模型再次调用 place_stone {I9, revision 17}", "slow", { req: 1, tool: 1 }],
+      ["L2", "证据门禁通过；调用 port.commit", "act", {}],
+    ], TAIL),
+    mixed: HEAD.concat([
+      ["turn 1", "模型调用 evaluate_threats", "slow", { req: 1, tool: 1, observed: true }],
+      ["turn 2", "同一条回复里调用 [place_stone, analyze_position]", "slow", { req: 1 }],
+      ["L2", "place_stone 先执行（顺序模式）：门禁通过，调用 port.commit", "act", { tool: 1 }],
+      ["L3", "commit：charge → valid() 通过 → play → 切换棋钟", "act", { stone: true }],
+      ["L1", "tool_execution_end 看到成功 → abort()；同批的 analyze_position 被跳过", "act", {}],
+      ["Pi", "terminate 被同批工具“否决”也无妨：abort 让 run 不再请求模型", "fast", {}],
+      ["L1", "agent_settled → dispose()", "fast", { end: true }],
+      ["L4", "收到 five:state（轮到人类）并自动保存", "fast", {}],
+    ]),
+    undo: HEAD.concat([
+      ["turn 1", "模型调用 evaluate_threats", "slow", { req: 1, tool: 1, observed: true }],
+      ["L4", "人类点“悔棋”（需在新比赛设置里启用练习悔棋，默认关闭）：five:command {undo}", "fast", {}],
+      ["L3", "undo()：charge 棋钟（不返还时间）→ invalidate()：revision++ 变为 18，controller.abort() → 撤回人类上一手", "act", { rev: 18, unhuman: true }],
+      ["L1", "监听到 port.signal 中止 → session.abort()", "act", {}],
+      ["turn 2", "假设中止前已收到的回复里有 place_stone {I9, revision 17}", "slow", { req: 1, tool: 1 }],
+      ["L2", "tool_call 钩子 ensureActive()：本回合已取消 → 抛错", "act", { reject: "取消" }],
+      ["L1", "prompt() 返回；stopped() 报“本回合已取消”；dispose()", "fast", { end: true, cancelled: true }],
+      ["L3", "即使提交到达，valid() 也会拒绝：revision 17 ≠ 18", "fast", {}],
+    ]),
+  };
+  let sc = "normal", step = 0;
+  function evalState(evs) {
+    let rev = 16, req = 0, tool = 0, stones = 0, rejects = [], thinking = false, ended = false, cancelled = false, humanStone = false;
+    for (const e of evs) {
+      const f = e[3];
+      if (f.rev) rev = f.rev;
+      if (f.human) humanStone = true;
+      if (f.unhuman) humanStone = false;
+      if (f.thinking) thinking = true;
+      if (f.req) req += f.req;
+      if (f.tool) tool += f.tool;
+      if (f.stone) stones++;
+      if (f.reject) rejects.push(f.reject);
+      if (f.end) { ended = true; thinking = false; }
+      if (f.cancelled) cancelled = true;
+    }
+    return { rev, req, tool, stones, rejects, thinking, ended, cancelled, humanStone };
+  }
+  function draw2() {
+    const evs = SC[sc];
+    CL.$("#d2-list").innerHTML = evs.map((e, i) => '<li class="' + e[2] + (i >= step ? " future" : "") + (i === step - 1 ? " now" : "") + '"><span class="src">' + CL.esc(e[0]) + "</span><span>" + CL.esc(e[1]) + '</span><span class="verdict">' + (i < step ? "✓" : "") + "</span></li>").join("");
+    const st = evalState(evs.slice(0, step));
+    const board = st.stones ? "LLM 已落子" : st.humanStone ? "人类已落子，LLM 未落子" : "未变";
+    CL.$("#d2-status").innerHTML =
+      '<span class="pill">revision：' + st.rev + "</span>" +
+      '<span class="pill ' + (st.thinking ? "hot" : "") + '">状态：' + (st.thinking ? "LLM 思考中" : st.ended ? (st.cancelled ? "回合已取消" : "轮到人类") : "轮到人类") + "</span>" +
+      '<span class="pill">LLM 请求：' + st.req + " / 8</span>" +
+      '<span class="pill">工具调用：' + st.tool + " / 16</span>" +
+      '<span class="pill ' + (st.stones ? "hot" : "") + '">棋盘：' + board + "</span>";
+    let msg = "已播放 " + step + " / " + evs.length + " 步。";
+    if (step === evs.length) {
+      const fin = evalState(evs);
+      msg += "\n这手棋共 " + fin.req + " 次 LLM 请求、" + fin.tool + " 次工具调用，LLM 落子 " + fin.stones + " 次。";
+      if (fin.rejects.length) msg += "\n被拦下 " + fin.rejects.length + " 次（" + fin.rejects.join("、") + "）。拦截变成工具错误结果，没有让 run 崩溃。";
+      if (sc === "mixed") msg += "\n同批第二个工具没有执行。原因不是 terminate，而是 L1 的 abort()。";
+      if (sc === "undo") msg += "\n棋盘回到人类落子之前。旧回合的提交写不到新棋盘上。";
+    }
+    CL.$("#d2-out").textContent = msg;
+  }
+  CL.$$("#d2-sc [data-sc]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d2-sc [data-sc]").forEach((x) => x.classList.toggle("on", x === b)); sc = b.dataset.sc; step = 0; draw2();
+  }));
+  CL.$("#d2-next").addEventListener("click", () => { step = Math.min(step + 1, SC[sc].length); draw2(); });
+  CL.$("#d2-all").addEventListener("click", () => { step = SC[sc].length; draw2(); });
+  CL.$("#d2-reset").addEventListener("click", () => { step = 0; draw2(); });
+  draw2();
+});
+</script>
+</body>
+</html>

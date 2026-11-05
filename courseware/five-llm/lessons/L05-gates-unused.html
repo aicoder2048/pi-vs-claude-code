@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>三道闸与刻意不用的回调 · L05</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .player-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13.5px; color: var(--ink-3); }
+  .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+  .ctrl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px 18px; margin-bottom: 12px; font-size: 13.5px; color: var(--ink-2); }
+  .ctrl-grid label { display: flex; align-items: center; gap: 8px; }
+  .ctrl-grid input[type=range] { flex: 1; min-width: 0; }
+  .tl { position: relative; height: 54px; margin: 6px 0 4px; border-bottom: 1px solid var(--line); }
+  .tl .seg { position: absolute; top: 8px; height: 18px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--line); font-size: 11px; color: var(--ink-3); text-align: center; overflow: hidden; white-space: nowrap; }
+  .tl .seg.blocked { border-color: var(--note-bd); color: var(--note-bd); }
+  .tl .seg.cut { opacity: .3; border-style: dashed; }
+  .tl .mark { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid var(--ink-3); }
+  .tl .mark span { position: absolute; top: 30px; left: 3px; font-size: 11px; white-space: nowrap; color: var(--ink-3); }
+  .tl .mark.win { border-left-color: var(--rule-bd); }
+  .tl .mark.win span { color: var(--rule-bd); font-weight: 700; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-bottom: 10px; }
+  .cards .btn { text-align: left; font-family: var(--mono); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">墙上的接口面板</a></li>
+    <li><a href="#s2">三道闸，外加取消和棋钟</a></li>
+    <li><a href="#s3">动手看：哪道闸先触发</a></li>
+    <li><a href="#s4">刻意没有使用的回调</a></li>
+    <li><a href="#s5">动手看：把权威搬进会话会怎样</a></li>
+    <li><a href="#s6">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L05 · 循环工程</div>
+  <h1>三道闸与刻意不用的回调</h1>
+  <p>一个回合必须有界：请求有上限，工具有上限，时间有上限，人随时能取消。这一课看这些闸装在哪里，触发后谁看到什么；再看弈境为什么只挂了很少的回调。</p>
+  <div class="meta"><span>原文：白皮书 §3.6–3.7、附录 C.2 + 代码现状勘误 §3.2</span><span>阅读约 15 分钟</span><span>含 2 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>用接口面板比喻区分 L2 的读数口、断路器、净水器、插座、开关和定时器。</li>
+    <li>说出三道闸的位置、上限和触发后的结果。</li>
+    <li>区分<a class="term" href="glossary.html#tech-timeout">技术超时</a>和棋局超时。</li>
+    <li>说出至少四个弈境刻意不用的回调，以及不用的理由。</li>
+    <li>解释“权威越留在宿主，扩展挂的回调越少”。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>墙上的接口面板</h2>
+  <p>先说结论：白皮书把 L2 比作墙上的接口面板。面板上的东西按能力分成几类。弈境只用了其中几类。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>墙上的东西</th><th>能做什么</th><th>对应</th><th>弈境用了吗</th></tr>
+    <tr><td>电表、水表的读数口</td><td>只能看</td><td><a class="term" href="glossary.html#observe-event">观察类事件</a>：<code>turn_start</code> / <code>message_*</code> / <code>tool_execution_*</code></td><td>用了：L1 订阅 <code>turn_start</code>、<code>tool_execution_end</code>；L2 挂 <code>turn_start</code></td></tr>
+    <tr><td>断路器、漏电保护、阀门</td><td>能切断，跳闸后显示原因</td><td><code>tool_call</code> 拦截，理由作为工具结果回给模型</td><td>用了：预算 16、取消与已提交守卫</td></tr>
+    <tr><td>净水器、稳压器、变压器</td><td>改变流过的东西</td><td>改写类钩子：<code>context</code> / <code>tool_result</code> 等</td><td>没用</td></tr>
+    <tr><td>新装一个插座</td><td>增加能力</td><td><code>registerTool</code></td><td>用了：8 个工具</td></tr>
+    <tr><td>墙上的开关</td><td>住户一按就触发</td><td><code>registerCommand</code>（斜杠命令）</td><td>没用</td></tr>
+    <tr><td>定时器、限流阀</td><td>到点或到量就断</td><td>预算闸：8 次请求、16 次工具调用、90 秒超时</td><td>用了</td></tr>
+  </table></div>
+  <p>接口里不放家电的逻辑。也就是说，L2 不放业务规则。</p>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>三道闸，外加取消和棋钟</h2>
+  <p>先说结论：三道闸保证一个回合有界。取消让人随时收回控制权。棋钟独立于这一切，由 L3 计算。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>闸</th><th>位置</th><th>触发后</th></tr>
+    <tr><td><a class="term" href="glossary.html#request-budget">请求预算</a> 8</td><td>L1 订阅 <code>turn_start</code> 计数（<code>pi-driver.ts:68-72</code>）</td><td><code>abort()</code>；<code>prompt()</code> 返回后抛“已达到单回合 8 次 LLM 请求上限”；L3 显示错误，棋钟继续</td></tr>
+    <tr><td><a class="term" href="glossary.html#tool-budget">工具预算</a> 16</td><td>L2 <code>tool_call</code>（<code>gomoku.ts:82</code>）</td><td>返回 <code>block</code>，模型收到“单回合工具调用预算已耗尽”</td></tr>
+    <tr><td>技术超时 90 秒</td><td>L1 <code>setTimeout</code> → <code>abort()</code>（<code>pi-driver.ts:34</code>）</td><td>“LLM 思考超时（90 秒），可重试或换模型”；<strong>这和棋局超时是两回事</strong></td></tr>
+    <tr><td>取消 / 新局 / 悔棋</td><td>L3 <code>invalidate()</code> → <code>controller.abort()</code></td><td>L1 监听 <code>port.signal</code> 后 <code>abort()</code>；L2 的 <a class="term" href="glossary.html#ensure-active">ensureActive()</a> 抛错；L3 的 <code>valid()</code> 拒绝迟到提交</td></tr>
+    <tr><td><a class="term" href="glossary.html#clock">棋钟</a></td><td>L3 <code>charge()</code>，主进程 200 ms 心跳</td><td>超时直接判负，与 Agent 状态无关；判负时 <code>finish()</code> 也会中止当前回合</td></tr>
+  </table></div>
+  <p>L1 用一个 <code>stopped()</code> 函数统一报告停机原因（<code>pi-driver.ts:32</code>）：先看 <code>port.signal</code> 是否中止，再看是否超时。它在 Session 创建的各个阶段都调用一次。</p>
+  <div class="callout rule"><span class="ttl">本节核心句</span>技术超时只结束这一次 Agent 尝试，可以重试。棋局超时是比赛结果，由 L3 判定。网络等待、工具调用、重试都在扣棋钟。</div>
+  <div class="callout tip"><span class="ttl">迟到的响应赢不了过期的棋钟</span><code>port.commit</code> 的第一行是 <code>this.charge()</code>（<code>game-service.ts:175</code>）。先结算时间，再判断回合是否有效。模型在时限后才提交，L3 先判负，提交随后遭拒。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>动手看：哪道闸先触发</h2>
+  <p>下面的模拟器假设一个模型的行为。调滑块，看哪道闸先触发，以及触发后各方看到什么。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">闸门压力测试：请求、工具、时间、取消、棋钟，谁先到</div>
+    </div>
+    <div class="demo">
+      <div class="ctrl-grid">
+        <label>模型在第 <b id="d1-rv">3</b> 次请求提交 <input id="d1-r" type="range" min="1" max="12" value="3"></label>
+        <label>每次请求调 <b id="d1-tv">2</b> 个工具 <input id="d1-t" type="range" min="1" max="4" value="2"></label>
+        <label>每次请求耗时 <b id="d1-lv">8</b> 秒 <input id="d1-l" type="range" min="2" max="30" value="8"></label>
+        <label>机器方剩余时间 <b id="d1-cv">180</b> 秒 <input id="d1-c" type="range" min="10" max="300" step="5" value="180"></label>
+        <label>人类在第 <b id="d1-xv">不取消</b> 秒取消 <input id="d1-x" type="range" min="0" max="120" step="5" value="0"></label>
+      </div>
+      <div class="tl" id="d1-tl"></div>
+      <div class="status-row" id="d1-status"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">试三组：① 每次请求 4 个工具、第 5 次提交：第 17 次工具调用遭 block，提交永远进不去；② 每次请求 20 秒、第 6 次提交：90 秒技术超时先到；③ 剩余时间调到 30 秒：棋钟判负先到，它不看 Agent 在做什么。<span class="data-note">简化模型：每次请求耗时相同，工具执行不计时。提交是该次请求的最后一个工具。模型遭 block 后仍按原计划继续。剩余时间把基本用时和读秒合成一个数。数字只说明机制，不是测量结果。</span></div>
+  </div>
+  <div class="callout note"><span class="ttl">补充：工具预算耗尽后为什么还会继续请求</span>block 只拦住一次工具调用，不结束 run。模型收到“预算耗尽”的工具结果后，还可以再回复。所以工具预算耗尽后，最终通常由请求预算或技术超时收尾。这是课程作者按代码逻辑的推演。</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>刻意没有使用的回调</h2>
+  <p>先说结论：Pi 1.4.0 有很多能改变流程的插入点。弈境能改变流程的扩展回调只用了 <code>tool_call</code> 一个。其余的，宿主已经替它做了。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>回调</th><th>通常用途</th><th>弈境为什么不需要</th></tr>
+    <tr><td><code>before_agent_start</code></td><td>每次 run 前改写系统提示词或工具集</td><td>系统提示词在创建 Session <strong>之前</strong>由宿主装配，每手一个 Session</td></tr>
+    <tr><td><code>context</code></td><td>每次请求前改写消息列表</td><td>上下文本来就是新的，没有需要裁剪的历史</td></tr>
+    <tr><td><code>agent_end</code> / <code>agent_before_settle</code></td><td>催促续跑（TillDone 的做法）</td><td>停机条件由 L1 掌握：要么提交，要么预算或超时用尽；不希望模型被“劝”着继续</td></tr>
+    <tr><td><code>session_start</code> / <code>session_tree</code></td><td>从会话历史恢复状态</td><td>状态的权威在 L3，不在会话里</td></tr>
+    <tr><td><code>input</code>、<code>registerCommand</code></td><td>用户输入与斜杠命令</td><td>没有人类聊天输入，模型唯一的输入是宿主模板</td></tr>
+    <tr><td><code>before_provider_request</code></td><td>改写发给 provider 的原始请求体</td><td>不需要改写传输层</td></tr>
+    <tr><td><code>tool_result</code></td><td>改写工具结果</td><td>工具结果本来就由本扩展的 <code>execute()</code> 生成</td></tr>
+    <tr><td><code>turn_end</code></td><td>要求再跑一个 turn</td><td>不希望延长回合</td></tr>
+  </table></div>
+  <blockquote class="src">状态和流程控制的权威越是留在宿主，扩展需要挂的回调就越少。<cite>白皮书 §3.6</cite></blockquote>
+  <p>“权威能留在宿主”是选择进程内 SDK 的直接结果（<a href="L03-sdk-vs-rpc.html">L03</a>）。对照一下边牧：TillDone 是 TUI 扩展，状态在会话里。它要用 <code>agent_end</code> 督促续跑，用 <code>input</code> 复位督促闩锁，用 <code>session_start</code> 回放恢复状态。</p>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书 §3.6 说“five-llm 只用了其中的 <code>tool_call</code> 一个”。v2（提交 <code>642481a</code>）起，L2 另挂了观察类的 <code>pi.on('turn_start')</code>，给反馈打请求序号（<code>gomoku.ts:26</code>）。准确的说法是：能改流程的扩展回调只用 <code>tool_call</code>；观察类的 <code>turn_start</code> 用来记证据序号。上表列的回调仍然一个都没用。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>动手看：把权威搬进会话会怎样</h2>
+  <p>下面每张卡是一个没用的回调。点一张卡看取舍。再打开开关，假设弈境像 TUI 扩展那样把状态放进 Pi 会话，看这个回调会不会变成必需。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">回调取舍卡：权威在宿主时不需要，权威在会话里时就要补上</div>
+    </div>
+    <div class="demo">
+      <div class="player-bar">
+        <label class="ctrl"><input type="checkbox" id="d2-sess"> 假设：权威状态搬进 Pi 会话，Session 跨手长期存在（不是弈境的做法）</label>
+      </div>
+      <div class="cards" id="d2-cards"></div>
+      <div class="status-row" id="d2-status"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">先不勾开关，点几张卡，读“为什么不需要”。再勾上开关，看“必需的回调”数量怎样上升，以及会多出哪些第二状态源。<span class="data-note">“通常用途”与“为什么不需要”依据白皮书 §3.6；勾上开关后的推演是课程作者的补充。它用来说明这条结论，不是原文内容，也不是弈境的设计。</span></div>
+  </div>
+  <div class="callout note"><span class="ttl">补充：第二状态源</span>开关打开后，会话里也有一份棋局进度。它和 L3 的 <code>GameState</code> 可能不一致，这就是<a class="term" href="glossary.html#second-state-source">第二状态源</a>。白皮书在 §4.6 否决 <code>.five-llm/state</code> 目录，用的是同一个理由。</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>自测与速记</h2>
+  <div class="quiz" data-answer="1">
+    <div class="q">模型连续思考到 90 秒，L1 中止了回合。此时棋局会怎样？</div>
+    <div class="opts"><button>机器方立即判负</button><button>本次尝试失败，显示可重试；棋局继续，棋钟照走</button><button>棋钟暂停，等待重试</button><button>L3 替模型落子</button></div>
+    <div class="explain">技术超时只结束这一次 Agent 尝试。棋局超时由 L3 的棋钟判定。代码注释写明：请求错误、重试和取消从不重置比赛棋钟（<code>game-service.ts:187</code>）。</div>
+  </div>
+  <div class="quiz" data-answer="2">
+    <div class="q">第 17 次工具调用会怎样？</div>
+    <div class="opts"><button>run 立即崩溃</button><button>L1 立即 abort()</button><button>tool_call 返回 block，模型收到“预算耗尽”的工具结果</button><button>工具照常执行，只写一条日志</button></div>
+    <div class="explain">预算闸在 L2 的 <code>tool_call</code>（<code>gomoku.ts:82</code>）。block 变成工具错误结果，run 不崩溃。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">弈境为什么不需要 <code>session_start</code> 回放恢复状态？</div>
+    <div class="opts"><button>状态的权威在 L3，Pi 会话每手用完即弃</button><button>Pi 不支持这个事件</button><button>恢复太慢</button><button>扩展工厂替它做了恢复</button></div>
+    <div class="explain">白皮书 §3.6：状态的权威在 L3，不在会话里。每手一个内存 Session，用完 <code>dispose()</code>。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">按代码现状，下面哪句最准确？</div>
+    <div class="opts"><button>L2 只挂了 tool_call 一个事件</button><button>L2 用 agent_end 督促模型继续</button><button>L2 用 context 钩子裁剪历史</button><button>能改流程的扩展回调只有 tool_call；L2 另挂了观察类的 turn_start 记请求序号</button></div>
+    <div class="explain">白皮书 v1.0 说只用了 tool_call。v2 起 L2 另挂了 <code>pi.on('turn_start')</code>（<code>gomoku.ts:26</code>）。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>请求预算</td><td>8 次；L1 数 <code>turn_start</code>，第 9 次 abort</td></tr>
+    <tr><td>工具预算</td><td>16 次；L2 <code>tool_call</code> 返回 block</td></tr>
+    <tr><td>技术超时</td><td>90 秒；只结束本次尝试，可重试</td></tr>
+    <tr><td>取消</td><td><code>invalidate()</code> → abort；<code>ensureActive()</code> 抛错；<code>valid()</code> 拒绝迟到提交</td></tr>
+    <tr><td>棋钟</td><td>L3 计算，200 ms 心跳；超时判负，与 Agent 无关</td></tr>
+    <tr><td>不用的回调</td><td>权威留在宿主，扩展挂的回调就少；改流程的只有 <code>tool_call</code></td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L06-knowledge-routing.html"><small>下一课 · L06</small>知识包、两级路由与信号契约</a>
+    <a href="L04-loop-hooks.html"><small>L04</small>双循环接入点：提交即停</a>
+    <a href="L03-sdk-vs-rpc.html"><small>L03</small>Pi SDK 接入：每手一个 Session</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L05-gates-unused.html"></nav>
+<p class="disclaimer">原文：《弈境 · Five LLM 技术白皮书》v1.0 §3.6–3.7、附录 C.2，以及《弈境代码现状勘误》（对照提交 4f65e37）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 闸门压力测试 ---- */
+  function draw1() {
+    const R = +CL.$("#d1-r").value, T = +CL.$("#d1-t").value, L = +CL.$("#d1-l").value, CLK = +CL.$("#d1-c").value, X = +CL.$("#d1-x").value;
+    CL.$("#d1-rv").textContent = R; CL.$("#d1-tv").textContent = T; CL.$("#d1-lv").textContent = L; CL.$("#d1-cv").textContent = CLK;
+    CL.$("#d1-xv").textContent = X ? X : "不取消";
+    const commitOk = R <= 8 && R * T <= 16;
+    const firstBlockReq = Math.floor(16 / T) + 1; // 第一个含被拦工具的请求
+    const cands = [];
+    if (commitOk) cands.push({ t: R * L, k: "commit" });
+    cands.push({ t: 8 * L, k: "req" });
+    cands.push({ t: 90, k: "timeout" });
+    if (X) cands.push({ t: X, k: "cancel" });
+    cands.push({ t: CLK, k: "clock" });
+    // 同时发生时：棋钟先结算（commit 第一行 charge），取消先于提交
+    const prio = { clock: 0, cancel: 1, timeout: 2, req: 3, commit: 4 };
+    cands.sort((a, b) => a.t - b.t || prio[a.k] - prio[b.k]);
+    const win = cands[0], end = win.t;
+    const maxT = Math.max(100, Math.min(Math.max(8 * L, R * L) + L, 260), CLK + 5, X + 5);
+    const pct = (t) => (100 * Math.min(t, maxT)) / maxT;
+    let h = "", reqs = 0, tools = 0, blocked = 0;
+    for (let i = 1; i <= 8; i++) {
+      const t0 = (i - 1) * L, t1 = i * L;
+      if (t0 >= maxT) break;
+      const cut = t0 >= end;
+      const part = !cut && t1 > end;
+      if (!cut) {
+        reqs++;
+        if (!part) { const k1 = Math.min(i * T, 16) - Math.min((i - 1) * T, 16); tools += k1; blocked += T - k1; }
+      }
+      const blk = !cut && i >= firstBlockReq;
+      h += '<div class="seg' + (cut ? " cut" : "") + (blk ? " blocked" : "") + '" style="left:' + pct(t0) + "%;width:calc(" + (pct(t1) - pct(t0)) + '% - 2px)">#' + i + (i === R && commitOk ? " 提交" : blk ? " block" : "") + "</div>";
+    }
+    const NAME = { commit: "提交", req: "第 9 次请求", timeout: "90 秒超时", cancel: "人类取消", clock: "棋钟判负" };
+    cands.forEach((c) => {
+      const right = pct(c.t) > 75, top = 30;
+      h += '<div class="mark' + (c === win ? " win" : "") + '" style="left:' + pct(c.t) + '%"><span style="' + (right ? "left:auto;right:3px;" : "") + "top:" + top + 'px">' + NAME[c.k] + " " + c.t + "s</span></div>";
+    });
+    CL.$("#d1-tl").innerHTML = h;
+    CL.$("#d1-status").innerHTML =
+      '<span class="pill ' + (win.k === "commit" ? "hot" : "slow") + '">先到：' + NAME[win.k] + "（" + end + " 秒）</span>" +
+      '<span class="pill">已发出请求：' + reqs + " / 8</span>" +
+      '<span class="pill">执行的工具：' + tools + " / 16</span>" +
+      '<span class="pill ' + (blocked ? "slow" : "") + '">遭 block 的调用：' + blocked + "</span>" +
+      '<span class="pill">棋钟已扣：' + Math.min(end, CLK) + " 秒</span>";
+    const SEE = {
+      commit: ["L2 门禁通过，port.commit 成功；L1 abort()，提交即停。", "模型：收到 accepted: true，回合结束。", "界面：轮到人类；手记里有公开理由。", "棋钟：扣掉 " + end + " 秒，切换到人类。"],
+      req: ["L1：第 9 次 turn_start → abort()；prompt() 返回后抛“已达到单回合 8 次 LLM 请求上限”。", "模型：第 9 次请求没有发出，它什么也看不到。", "界面：状态 = 错误，可重试或换模型。", "棋钟：照走，已扣 " + end + " 秒。"],
+      timeout: ["L1：90 秒定时器 → abort()；stopped() 抛“LLM 思考超时（90 秒），可重试或换模型”。", "模型：当前请求中止。", "界面：状态 = 错误，可重试或换模型。这不是棋局超时。", "棋钟：照走，已扣 " + end + " 秒；机器方还剩 " + (CLK - end) + " 秒。"],
+      cancel: ["L3：invalidate() → revision++，controller.abort()；L1 监听 port.signal 后 abort()。", "模型：之后的工具调用都收到 ensureActive() 的“本回合已取消”。", "界面：回到人类操作；迟到的提交会被 valid() 拒绝。", "棋钟：取消不退还时间，已扣 " + end + " 秒。"],
+      clock: ["L3：charge() 发现机器方时间用完 → finish() 判负，并 invalidate() 中止当前回合。", "模型：不管它在做什么，回合都结束了。", "界面：本局结束，人类获胜。", "棋钟：200 ms 心跳和每次操作前都结算，与 Agent 状态无关。"],
+    };
+    let msg = SEE[win.k].join("\n");
+    if (!commitOk && R <= 8) msg += "\n注意：计划在第 " + R + " 次请求提交，但那是第 " + R * T + " 次工具调用，超过 16，遭 block。提交永远进不去。";
+    if (R > 8) msg += "\n注意：模型计划在第 " + R + " 次请求才提交，超过请求预算 8。";
+    if (blocked && win.k !== "commit") msg += "\n第 " + firstBlockReq + " 次请求起，超出 16 的工具调用都收到“单回合工具调用预算已耗尽”。";
+    CL.$("#d1-out").textContent = msg;
+  }
+  ["#d1-r", "#d1-t", "#d1-l", "#d1-c", "#d1-x"].forEach((s) => CL.$(s).addEventListener("input", draw1));
+  draw1();
+
+  /* ---- 2. 回调取舍卡 ---- */
+  // [回调, 通常用途, 弈境为什么不需要, 权威在会话里时：是否必需, 那时要做什么 / 第二状态源]
+  const CB = [
+    ["before_agent_start", "每次 run 前改写系统提示词或工具集", "系统提示词在创建 Session 之前由宿主装配，每手一个 Session。", true, "Session 跨手存在时，每手都要在这里换入新剧本和新信号。会话里旧剧本和新剧本并存。"],
+    ["context", "每次请求前改写消息列表", "上下文本来就是新的，没有需要裁剪的历史。", true, "历史会越积越长，需要在这里裁剪，并把棋谱、信号这类受保护内容重新注入。"],
+    ["agent_end / agent_before_settle", "催促续跑（TillDone 的做法）", "停机条件由 L1 掌握：要么提交，要么预算或超时用尽。", false, "仍不需要。弈境不希望模型被“劝”着继续，这和状态放在哪里无关。"],
+    ["session_start / session_tree", "从会话历史恢复状态", "状态的权威在 L3，不在会话里。", true, "要从会话回放出棋局进度。会话成了第二状态源，可能和 GameState 不一致。"],
+    ["input / registerCommand", "用户输入与斜杠命令", "没有人类聊天输入，模型唯一的输入是宿主模板。", false, "仍不需要。弈境没有人在和模型聊天。"],
+    ["before_provider_request", "改写发给 provider 的原始请求体", "不需要改写传输层。", false, "仍不需要。状态放在哪里不影响传输层。"],
+    ["tool_result", "改写工具结果", "工具结果本来就由本扩展的 execute() 生成。", false, "仍不需要。工具仍由本扩展生成结果。"],
+    ["turn_end", "要求再跑一个 turn", "不希望延长回合。", false, "仍不需要。"],
+  ];
+  let pick = 0;
+  function draw2() {
+    const sess = CL.$("#d2-sess").checked;
+    CL.$("#d2-cards").innerHTML = CB.map((c, i) => '<button class="btn' + (i === pick ? " on" : "") + '" data-i="' + i + '">' + c[0] + (sess && c[3] ? " ⚠" : "") + "</button>").join("");
+    CL.$$("#d2-cards [data-i]").forEach((b) => b.addEventListener("click", () => { pick = +b.dataset.i; draw2(); }));
+    const need = sess ? CB.filter((c) => c[3]).length : 0;
+    CL.$("#d2-status").innerHTML =
+      '<span class="pill">权威在：' + (sess ? "Pi 会话 + L3（两份）" : "L3 GameState（一份）") + "</span>" +
+      '<span class="pill ' + (need ? "slow" : "hot") + '">表中必需的回调：' + need + " / " + CB.length + "</span>" +
+      '<span class="pill ' + (sess ? "slow" : "") + '">第二状态源：' + (sess ? "有" : "无") + "</span>";
+    const c = CB[pick];
+    let msg = c[0] + "\n通常用途：" + c[1] + "\n弈境为什么不需要：" + c[2];
+    if (sess) msg += "\n假设权威搬进会话：" + (c[3] ? "变成必需。" : "") + c[4];
+    if (sess) msg += "\n结论：权威离开宿主，扩展就要挂更多回调，还要维护两份状态的一致。";
+    else msg += "\n结论：权威留在宿主时，这些回调都可以不挂。";
+    CL.$("#d2-out").textContent = msg;
+  }
+  CL.$("#d2-sess").addEventListener("change", draw2);
+  draw2();
+});
+</script>
+</body>
+</html>

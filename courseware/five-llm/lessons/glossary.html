@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>弈境结构精读 · 术语表</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/glossary-backlinks.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .g-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 22px 0 8px; position: sticky; top: 52px; background: var(--bg); padding: 10px 0; z-index: 5; }
+  .g-tools input { flex: 1 1 260px; font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
+  .g-alpha { font-size: 13px; color: var(--ink-3); margin: 6px 0 0; }
+  .g-cat { margin-top: 34px; }
+  .g-cat > h2 { font-family: var(--serif); color: var(--brand); font-size: 22px; border-bottom: 2px solid var(--line); padding-bottom: 6px; margin: 0 0 6px; }
+  .g-item { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 20px; margin: 12px 0; box-shadow: var(--shadow); scroll-margin-top: 130px; }
+  .g-item:target { outline: 2px solid var(--accent); }
+  .g-item h3 { margin: 0; font-size: 18px; }
+  .g-item h3 .en { font-weight: 400; color: var(--ink-3); font-size: 14px; margin-left: 8px; }
+  .g-item h3 a.anchor { color: var(--ink-3); font-size: 13px; margin-left: 6px; opacity: 0; }
+  .g-item:hover h3 a.anchor { opacity: 1; }
+  .g-item .short { color: var(--ink); font-weight: 500; margin: 6px 0 2px; }
+  .g-item .body { color: var(--ink-2); font-size: 15px; }
+  .g-item .body p { margin: 6px 0; }
+  .g-item .foot { font-size: 13px; color: var(--ink-3); margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+  .g-item .foot a { white-space: nowrap; }
+  .g-wrap { max-width: 900px; margin: 0 auto; padding: 24px 16px 80px; }
+  .g-count { font-size: 13px; color: var(--ink-3); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+<div class="g-wrap">
+  <div class="hero">
+    <div class="kicker">共用术语表 · Glossary</div>
+    <h1>弈境结构精读 术语表</h1>
+    <p>所有课程共用这一份术语表。每个词先用一句话说清是什么，再讲怎么用。课程正文里带虚线下划线的词，鼠标移上去就能看到定义，点击跳到这里。</p>
+  </div>
+  <div class="g-tools">
+    <input id="q" type="search" placeholder="搜索术语：中文、英文或缩写，例如 中文、英文或缩写">
+    <select id="cat" class="btn"></select>
+    <span class="g-count" id="count"></span>
+  </div>
+  <div id="list"></div>
+  <p class="disclaimer">术语解释力求简明，以原文为准。</p>
+</div>
+<script>
+CL.onReady(function () {
+  const G = window.CL_GLOSSARY || {}, BL = window.CL_BACKLINKS || {};
+  const order = window.CL_GLOSSARY_CATS || [];  // 分类顺序在 glossary-data.js 里定义
+  const cats = [...new Set(Object.values(G).map((t) => t.cat))].sort((a, b) => (order.indexOf(a) + 99 * (order.indexOf(a) < 0)) - (order.indexOf(b) + 99 * (order.indexOf(b) < 0)));
+  const sel = document.getElementById("cat");
+  sel.innerHTML = '<option value="">全部分类</option>' + cats.map((c) => "<option>" + c + "</option>").join("");
+  const lessonTitle = Object.fromEntries(CL.LESSONS.map((l) => [l.file, l.id + " " + l.title]));
+  function render() {
+    const q = document.getElementById("q").value.trim().toLowerCase(), cf = sel.value;
+    let html = "", n = 0;
+    for (const c of cats) {
+      if (cf && c !== cf) continue;
+      const ids = Object.keys(G).filter((id) => G[id].cat === c).sort((a, b) => G[a].term.localeCompare(G[b].term, "zh-CN"));
+      const items = ids.filter((id) => { const t = G[id]; return !q || (t.term + " " + (t.en || "") + " " + id + " " + t.short).toLowerCase().includes(q); });
+      if (!items.length) continue;
+      html += '<section class="g-cat"><h2>' + c + "</h2>";
+      for (const id of items) {
+        const t = G[id]; n++;
+        const see = (t.see || []).filter((s) => G[s]).map((s) => '<a href="#' + s + '">' + G[s].term + "</a>").join("、");
+        const back = (BL[id] || []).map((f) => '<a href="' + f + '">' + (lessonTitle[f] || f) + "</a>").join("");
+        html += '<div class="g-item" id="' + id + '"><h3>' + t.term + '<span class="en">' + (t.en || "") + '</span><a class="anchor" href="#' + id + '">#</a></h3>' +
+          '<div class="short">' + t.short + "</div>" + (t.body ? '<div class="body">' + t.body + "</div>" : "") +
+          '<div class="foot">' + (see ? "<span>相关：" + see + "</span>" : "") + (back ? "<span>出现在课程：</span>" + back : "") + "</div></div>";
+      }
+      html += "</section>";
+    }
+    document.getElementById("list").innerHTML = html || "<p>没有找到匹配的术语。</p>";
+    document.getElementById("count").textContent = "共 " + n + " 条";
+  }
+  document.getElementById("q").addEventListener("input", render);
+  sel.addEventListener("change", render);
+  render();
+  if (location.hash) { const el = document.getElementById(location.hash.slice(1)); if (el) el.scrollIntoView(); }
+});
+</script>
+</body>
+</html>

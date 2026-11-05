@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>弈境结构精读 · 学习笔记</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/course-lib.js"></script>
+<style>
+  .n-wrap { max-width: 1380px; margin: 0 auto; padding: 24px 16px 80px; }
+  .hero code { background: rgba(255,255,255,.14); color: var(--hero-ink); border: 1px solid rgba(255,255,255,.22); }
+  .n-grid { display: grid; grid-template-columns: 260px minmax(0, 1fr) 210px; gap: 32px; margin-top: 24px; align-items: start; }
+
+  /* 左：笔记列表 */
+  .n-list { position: sticky; top: 72px; max-height: calc(100vh - 90px); overflow-y: auto; font-family: var(--sans); }
+  .n-list input { width: 100%; font: inherit; font-size: 14px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); margin-bottom: 12px; }
+  .n-list a { display: block; padding: 10px 12px; border-left: 3px solid transparent; border-radius: 0 8px 8px 0; color: var(--ink); text-decoration: none; margin-bottom: 4px; }
+  .n-list a:hover { background: var(--surface-2); }
+  .n-list a.cur { background: var(--surface); border-left-color: var(--accent); box-shadow: var(--shadow); }
+  .n-list a b { display: block; font-size: 14px; font-weight: 600; line-height: 1.5; }
+  .n-list a small { display: block; font-size: 12px; color: var(--ink-3); margin-top: 3px; }
+  .n-empty { color: var(--ink-2); font-size: 14.5px; }
+  .n-empty pre { background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12.5px; white-space: pre-wrap; }
+
+  /* 中：笔记文档 */
+  .note-doc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 44px 56px 48px; font-family: var(--sans); font-size: 15.5px; line-height: 1.85; color: var(--ink); }
+  .note-doc.n-empty { padding: 28px 32px; }
+  .nd-head { padding-bottom: 22px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .nd-eyebrow { font-size: 12px; letter-spacing: .14em; color: var(--accent); font-weight: 600; text-transform: uppercase; }
+  .nd-title { font-family: var(--head-font); color: var(--brand); font-size: 32px; line-height: 1.32; margin: 8px 0 14px; letter-spacing: .01em; }
+  .nd-lead { font-size: 17px; line-height: 1.75; color: var(--ink-2); margin: 0 0 18px; }
+  .nd-lead .lbl { display: inline-block; font-size: 12px; font-weight: 600; color: var(--surface); background: var(--brand); border-radius: 4px; padding: 0 7px; margin-right: 8px; vertical-align: 2px; letter-spacing: .05em; }
+  .nd-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; font-size: 12.5px; color: var(--ink-3); }
+  .nd-meta a { color: var(--brand-2); }
+  .nd-meta .sep { width: 1px; height: 12px; background: var(--line); }
+  .nd-tools { display: flex; gap: 6px; margin-left: auto; }
+  .nd-tools .btn { font-size: 12.5px; padding: 3px 10px; }
+
+  .note-body { max-width: 760px; }
+  .note-body h2 { font-family: var(--head-font); color: var(--brand); font-size: 22px; line-height: 1.4; margin: 40px 0 14px; display: flex; align-items: baseline; gap: 12px; scroll-margin-top: 80px; }
+  .note-body h2 .no { font-family: var(--mono); font-size: 13px; color: var(--accent); font-weight: 700; letter-spacing: .05em; }
+  .note-body h2::after { content: ""; flex: 1; height: 1px; background: var(--line); align-self: center; margin-left: 4px; }
+  .note-body h3 { font-family: var(--sans); font-size: 17px; font-weight: 700; color: var(--ink); margin: 28px 0 8px; scroll-margin-top: 80px; }
+  .note-body h4 { font-family: var(--sans); font-size: 15.5px; margin: 18px 0 4px; }
+  .note-body p { margin: 10px 0; }
+  .note-body ul, .note-body ol { padding-left: 1.3em; margin: 10px 0; }
+  .note-body li { margin: 5px 0; }
+  .note-body li::marker { color: var(--ink-3); }
+  .note-body b { color: var(--ink); }
+  .note-body code { font-family: var(--mono); font-size: .86em; background: var(--surface-2); border: 1px solid var(--line); padding: 0 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  .note-body blockquote { margin: 14px 0; padding: 10px 16px; border-left: 3px solid var(--brand-2); background: var(--surface-2); border-radius: 0 6px 6px 0; color: var(--ink-2); }
+  .note-body .md-tbl { margin: 16px 0; }
+  .note-body .md-tbl table { font-size: 14px; line-height: 1.65; }
+  .note-body .md-code { font-size: 13px; }
+  .note-body .aux { display: inline-block; font-size: 12px; line-height: 1.6; color: var(--ink-3); border: 1px dashed var(--line); border-radius: 10px; padding: 0 8px; margin: 0 2px; vertical-align: 1px; white-space: nowrap; }
+
+  /* 核心要点卡片 */
+  .note-body ul.keypoints { list-style: none; padding: 16px 20px; margin: 12px 0 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); counter-reset: kp; }
+  .note-body ul.keypoints li { counter-increment: kp; position: relative; padding-left: 34px; margin: 8px 0; }
+  .note-body ul.keypoints li::before { content: counter(kp); position: absolute; left: 0; top: 4px; width: 22px; height: 22px; border-radius: 50%; background: var(--brand); color: var(--surface); font-size: 12px; font-weight: 700; line-height: 22px; text-align: center; font-family: var(--mono); }
+
+  /* 易混 / 待思考 */
+  .note-body ul.pits { list-style: none; padding: 0; }
+  .note-body ul.pits li { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; align-items: baseline; padding: 10px 0; margin: 0; border-bottom: 1px solid var(--line); }
+  .note-body ul.pits li:last-child { border-bottom: 0; }
+  .note-body .badge { font-size: 12px; font-weight: 600; text-align: center; border-radius: 4px; padding: 1px 0; white-space: nowrap; }
+  .note-body .badge.warn { color: var(--down); border: 1px solid var(--down); }
+  .note-body .badge.think { color: var(--brand-2); border: 1px solid var(--brand-2); }
+
+  /* Mermaid：跟随课程配色，限制尺寸 */
+  .note-body .md-mermaid { margin: 18px 0; padding: 20px 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); display: flex; justify-content: center; }
+  .note-body .md-mermaid svg { max-width: min(100%, 600px) !important; max-height: 760px; height: auto; }
+  .note-body .md-mermaid .node rect, .note-body .md-mermaid .node polygon, .note-body .md-mermaid .node circle { fill: var(--surface) !important; stroke: var(--brand-2) !important; stroke-width: 1.3px !important; }
+  .note-body .md-mermaid .node rect { rx: 6px; ry: 6px; }
+  .note-body .md-mermaid .node polygon { stroke: var(--accent) !important; }
+  .note-body .md-mermaid .nodeLabel, .note-body .md-mermaid .node .label { color: var(--ink) !important; fill: var(--ink) !important; font-family: var(--sans) !important; font-size: 14px !important; }
+  .note-body .md-mermaid .flowchart-link, .note-body .md-mermaid .edgePath path { stroke: var(--ink-3) !important; stroke-width: 1.3px !important; }
+  .note-body .md-mermaid marker path { fill: var(--ink-3) !important; stroke: var(--ink-3) !important; }
+  .note-body .md-mermaid .edgeLabel, .note-body .md-mermaid .edgeLabel p, .note-body .md-mermaid .labelBkg { background: var(--surface-2) !important; color: var(--ink-2) !important; font-family: var(--sans) !important; font-size: 13px !important; }
+  .note-body .md-mermaid .edgeLabel rect { fill: var(--surface-2) !important; }
+
+  /* 附：原始对话 */
+  details.transcript { margin-top: 44px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+  details.transcript > summary { cursor: pointer; padding: 14px 20px; font-family: var(--head-font); font-size: 17px; color: var(--brand); list-style: none; display: flex; align-items: center; gap: 10px; }
+  details.transcript > summary::-webkit-details-marker { display: none; }
+  details.transcript > summary::before { content: "▸"; color: var(--accent); transition: transform .15s; }
+  details.transcript[open] > summary::before { transform: rotate(90deg); }
+  details.transcript > summary small { font-family: var(--sans); font-size: 12.5px; color: var(--ink-3); }
+  .turns { padding: 4px 20px 20px; display: grid; gap: 14px; font-size: 14.5px; }
+  .turn .q { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px 10px 10px 2px; padding: 10px 14px; color: var(--ink); }
+  .turn .a { background: var(--surface); border: 1px solid var(--line); border-radius: 10px 10px 2px 10px; padding: 6px 16px; margin-top: 8px; }
+  .turn .who { display: block; font-size: 12px; font-weight: 600; letter-spacing: .06em; color: var(--ink-3); margin: 4px 0 2px; }
+  .turn .q .who { color: var(--accent); }
+  .turn .a > :first-child + * { margin-top: 2px; }
+
+  /* 右：本篇目录 */
+  .n-toc { position: sticky; top: 72px; font-family: var(--sans); font-size: 13px; }
+  .n-toc h4 { font-size: 12px; letter-spacing: .12em; color: var(--ink-3); margin: 6px 0 10px; }
+  .n-toc a { display: block; color: var(--ink-2); text-decoration: none; padding: 4px 0 4px 12px; border-left: 2px solid var(--line); line-height: 1.5; }
+  .n-toc a.l3 { padding-left: 24px; font-size: 12.5px; color: var(--ink-3); }
+  .n-toc a:hover { color: var(--brand-2); }
+  .n-toc a.on { color: var(--brand); border-left-color: var(--accent); font-weight: 600; }
+
+  @media (max-width: 1280px) { .n-grid { grid-template-columns: 240px minmax(0, 1fr); } .n-toc { display: none; } }
+  @media (max-width: 900px) {
+    .n-grid { grid-template-columns: minmax(0, 1fr); }
+    .n-list { position: static; max-height: none; }
+    .note-doc { padding: 24px 18px; }
+    .nd-title { font-size: 25px; }
+    .nd-tools { margin-left: 0; }
+  }
+  @media print {
+    @page { size: A4; margin: 18mm 16mm; }
+    .topbar, .hero, .n-list, .n-toc, .nd-tools, #cl-topbar { display: none !important; }
+    .n-wrap { padding: 0; max-width: none; }
+    .n-grid { display: block; margin: 0; }
+    #doc, .note-doc { border: 0 !important; box-shadow: none !important; background: none !important; padding: 0; font-size: 11pt; }
+    .note-body { max-width: none; }
+    .note-body h2, .note-body h3 { break-after: avoid; }
+    .note-body .md-mermaid, .note-body .md-tbl, .turn { break-inside: avoid; }
+    details.transcript { border: 0; background: none; }
+  }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+<div class="n-wrap">
+  <div class="hero">
+    <div class="kicker">学习笔记 · Study notes</div>
+    <h1>弈境结构精读 学习笔记</h1>
+    <p>这里是从 AI 助教对话里整理出的笔记。在任意一课的助教面板点“记笔记”，勾选对话，再点“整理为笔记”。笔记是 Markdown 文件，存在 <code>lessons/study-notes/</code>，可以直接放进 Obsidian。</p>
+  </div>
+  <div class="n-grid">
+    <nav class="n-list" aria-label="笔记列表"><input id="q" type="search" placeholder="搜索笔记标题或课程"><div id="list"></div></nav>
+    <article id="doc"></article>
+    <nav class="n-toc" id="toc" aria-label="本篇目录"></nav>
+  </div>
+</div>
+<script>
+CL.onReady(function () {
+  const listEl = document.getElementById("list"), doc = document.getElementById("doc"), q = document.getElementById("q"), tocEl = document.getElementById("toc");
+  let notes = [], raw = "", spy = null;
+  const isHttp = location.protocol === "http:" || location.protocol === "https:";
+  const enc = (f) => encodeURIComponent(f);
+
+  function offline(msg) {
+    listEl.innerHTML = ""; tocEl.innerHTML = "";
+    doc.innerHTML = '<div class="note-doc n-empty"><b>' + msg + "</b><p>在终端运行：</p><pre>cd lessons\nuv run --no-project python tools/serve.py</pre>" +
+      '<p>然后打开 <a href="http://127.0.0.1:8772/lessons/notes.html">http://127.0.0.1:8772/lessons/notes.html</a>。</p></div>';
+  }
+  function renderList() {
+    const k = q.value.trim().toLowerCase(), cur = decodeURIComponent(location.hash.slice(1));
+    const items = notes.filter((n) => !k || (n.title + " " + n.lesson + " " + n.file).toLowerCase().includes(k));
+    listEl.innerHTML = items.length ? items.map((n) => '<a href="#' + enc(n.file) + '"' + (n.file === cur ? ' class="cur"' : "") + "><b>" + CL.esc(n.title) + "</b><small>" + CL.esc(n.date) + " · " + CL.esc(n.lesson) + "</small></a>").join("")
+      : '<p class="n-empty">' + (notes.length ? "没有匹配的笔记。" : "还没有笔记。") + "</p>";
+  }
+  function splitFront(text) {
+    const m = text.match(/^---\n([\s\S]*?)\n---\n/);
+    const meta = {};
+    if (m) m[1].split("\n").forEach((l) => { const i = l.indexOf(":"); if (i > 0) { let v = l.slice(i + 1).trim(); try { if (v.startsWith('"')) v = JSON.parse(v); } catch (e) { /* keep */ } meta[l.slice(0, i).trim()] = v; } });
+    return { meta, body: m ? text.slice(m[0].length) : text };
+  }
+
+  /* 把 CL.md 的通用输出排成文档：标题页、编号小节、要点卡片、易混标签、折叠的原始对话 */
+  const AUX = /（([^（）]{0,24}(?:补充|推断|未说|尚未验证|未验证)[^（）]{0,24})）/g;
+  const text = (el) => (el ? el.textContent.trim() : "");
+  function buildTranscript(body) {
+    const hr = [...body.querySelectorAll(":scope > hr")].find((h) => /原始对话/.test(text(h.nextElementSibling)));
+    if (!hr) return null;
+    const heading = hr.nextElementSibling, rest = [];
+    for (let n = heading.nextElementSibling; n; n = n.nextElementSibling) rest.push(n);
+    hr.remove(); heading.remove();
+    const turns = [];
+    for (const n of rest) {
+      if (n.tagName === "H3" && /^问\s*\d+/.test(text(n))) { turns.push({ no: text(n).match(/^问\s*(\d+)/)[1], q: null, a: [] }); n.remove(); continue; }
+      const t = turns[turns.length - 1];
+      if (!t) continue;
+      if (!t.q && n.tagName === "BLOCKQUOTE") t.q = n; else t.a.push(n);
+    }
+    const box = document.createElement("details"); box.className = "transcript";
+    box.innerHTML = "<summary>附：原始对话 <small>" + turns.length + " 问，助教原话，未经整理</small></summary>";
+    const list = document.createElement("div"); list.className = "turns";
+    for (const t of turns) {
+      const turn = document.createElement("div"); turn.className = "turn";
+      const qd = document.createElement("div"); qd.className = "q";
+      qd.innerHTML = '<span class="who">问 ' + t.no + "</span>" + (t.q ? t.q.innerHTML.replace(/(<br>\s*){2,}/g, "<br>") : "");
+      if (t.q) t.q.remove();
+      const ad = document.createElement("div"); ad.className = "a";
+      ad.innerHTML = '<span class="who">助教</span>';
+      t.a.forEach((n) => ad.appendChild(n));
+      turn.append(qd, ad); list.appendChild(turn);
+    }
+    box.appendChild(list);
+    return box;
+  }
+  function enhance(body) {
+    const transcript = buildTranscript(body);
+    // 正文里的“（助教补充）”这类来源标注
+    body.querySelectorAll("p, li, td").forEach((el) => { if (AUX.test(el.innerHTML)) el.innerHTML = el.innerHTML.replace(AUX, '<span class="aux">$1</span>'); AUX.lastIndex = 0; });
+    // 小节编号 + 目录
+    const toc = [];
+    let n2 = 0, n3 = 0;
+    body.querySelectorAll(":scope > h2, :scope > h3").forEach((h) => {
+      if (h.tagName === "H2") { n2++; n3 = 0; h.id = "s" + n2; toc.push({ id: h.id, t: text(h), l: 2 }); h.insertAdjacentHTML("afterbegin", '<span class="no">' + String(n2).padStart(2, "0") + "</span>"); }
+      else { n3++; h.id = "s" + n2 + "-" + n3; toc.push({ id: h.id, t: text(h), l: 3 }); }
+      // 按小节类型给紧随的列表加样式
+      if (h.tagName !== "H2") return;
+      const ul = h.nextElementSibling && h.nextElementSibling.tagName === "UL" ? h.nextElementSibling : null;
+      if (!ul) return;
+      if (/要点|摘要|结论/.test(text(h))) ul.classList.add("keypoints");
+      if ([...ul.children].some((li) => /^(易混|易错|注意|待思考)/.test(text(li.firstElementChild)))) {
+        ul.classList.add("pits");
+        [...ul.children].forEach((li) => {
+          const b = li.firstElementChild, k = b && b.tagName === "B" ? text(b) : "";
+          if (!/^(易混|易错|注意|待思考)/.test(k)) return;
+          b.remove(); li.innerHTML = li.innerHTML.replace(/^\s*[：:]\s*/, "");
+          li.innerHTML = '<span class="badge ' + (/^待思考/.test(k) ? "think" : "warn") + '">' + CL.esc(k) + "</span><span>" + li.innerHTML + "</span>";
+        });
+      }
+    });
+    if (transcript) body.appendChild(transcript);
+    return toc;
+  }
+  function renderToc(toc) {
+    if (spy) spy.disconnect();
+    tocEl.innerHTML = toc.length ? "<h4>本篇目录</h4>" + toc.map((x) => '<a class="l' + x.l + '" href="#' + x.id + '" data-id="' + x.id + '">' + CL.esc(x.t) + "</a>").join("") : "";
+    tocEl.querySelectorAll("a").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); document.getElementById(a.dataset.id).scrollIntoView({ behavior: "smooth" }); }));
+    spy = new IntersectionObserver((es) => es.forEach((e) => {
+      if (!e.isIntersecting) return;
+      tocEl.querySelectorAll("a").forEach((a) => a.classList.toggle("on", a.dataset.id === e.target.id));
+    }), { rootMargin: "-80px 0px -70% 0px" });
+    toc.forEach((x) => spy.observe(document.getElementById(x.id)));
+  }
+  function renderDoc() {
+    const { meta, body } = splitFront(raw);
+    const file = decodeURIComponent(location.hash.slice(1));
+    const wrap = document.createElement("div"); wrap.className = "note-body"; wrap.innerHTML = CL.md(body);
+    // 标题与“一句话摘要”提到标题页
+    const h1 = wrap.querySelector(":scope > h1"), title = text(h1) || meta.title || "学习笔记";
+    let lead = "";
+    if (h1) {
+      const bq = h1.nextElementSibling;
+      if (bq && bq.tagName === "BLOCKQUOTE") {
+        const m = bq.innerHTML.match(/^\s*(一句话摘要|摘要|一句话)[：:]\s*([\s\S]*)$/);
+        lead = m ? '<span class="lbl">' + m[1] + "</span>" + m[2] : bq.innerHTML;
+        bq.remove();
+      }
+      h1.remove();
+    }
+    const toc = enhance(wrap);
+    const turns = (raw.match(/^### 问 \d+/gm) || []).length;
+    const src = String(meta.source || "").match(/由\s*(.+?)\s*整理/);
+    doc.innerHTML = '<div class="note-doc"><header class="nd-head">' +
+      '<div class="nd-eyebrow">学习笔记' + (meta.lesson ? " · " + CL.esc(String(meta.lesson).split(/\s+/)[0]) : "") + "</div>" +
+      '<h1 class="nd-title">' + CL.esc(title) + "</h1>" +
+      (lead ? '<p class="nd-lead">' + lead + "</p>" : "") +
+      '<div class="nd-meta">' +
+      (meta.date ? "<span>" + CL.esc(meta.date) + "</span><span class=\"sep\"></span>" : "") +
+      (meta.lesson ? '<span>课程 <a href="' + CL.esc(meta.lesson_file || "index.html") + '">' + CL.esc(meta.lesson) + "</a></span><span class=\"sep\"></span>" : "") +
+      "<span>整理自 " + turns + " 问对话" + (src ? "，" + CL.esc(src[1]) : "") + "</span>" +
+      '<span class="nd-tools"><button class="btn" type="button" data-act="copy">复制 Markdown</button>' +
+      '<a class="btn" href="study-notes/' + enc(file) + '" download>下载 .md</a><button class="btn" type="button" data-act="print">打印 / PDF</button></span>' +
+      "</div></header></div>";
+    doc.firstChild.appendChild(wrap);
+    renderToc(toc);
+    CL.renderMermaid(wrap);
+  }
+  async function show() {
+    const file = decodeURIComponent(location.hash.slice(1)) || (notes[0] && notes[0].file);
+    renderList();
+    if (!file) { tocEl.innerHTML = ""; doc.innerHTML = '<div class="note-doc n-empty"><p>还没有笔记。打开任意一课，在右侧 AI 助教面板点“记笔记”。</p></div>'; return; }
+    if (!location.hash) { history.replaceState(null, "", "#" + enc(file)); renderList(); }
+    try {
+      const r = await fetch("study-notes/" + enc(file), { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      raw = await r.text(); renderDoc(); window.scrollTo(0, 0);
+    } catch (e) { tocEl.innerHTML = ""; doc.innerHTML = '<div class="note-doc n-empty"><p>读不到这篇笔记（' + CL.esc(e.message) + "）。</p></div>"; }
+  }
+  doc.addEventListener("click", async (e) => {
+    const b = e.target.closest("button[data-act]"); if (!b) return;
+    if (b.dataset.act === "print") window.print();
+    if (b.dataset.act === "copy") { try { await navigator.clipboard.writeText(raw); b.textContent = "已复制 ✓"; } catch (err) { b.textContent = "复制失败"; } setTimeout(() => (b.textContent = "复制 Markdown"), 1500); }
+  });
+  window.addEventListener("beforeprint", () => doc.querySelectorAll("details.transcript").forEach((d) => { d.dataset.wasOpen = d.open ? "1" : ""; d.open = true; }));
+  window.addEventListener("afterprint", () => doc.querySelectorAll("details.transcript").forEach((d) => { d.open = d.dataset.wasOpen === "1"; }));
+  q.addEventListener("input", renderList);
+  window.addEventListener("hashchange", show);
+  CL.onTheme(() => { if (raw) renderDoc(); });
+
+  if (!isHttp) return offline("笔记列表需要本地服务。");
+  fetch("/api/notes").then((r) => r.json()).then((j) => { notes = j.notes || []; show(); }).catch(() => offline("连不上本地服务。"));
+});
+</script>
+</body>
+</html>

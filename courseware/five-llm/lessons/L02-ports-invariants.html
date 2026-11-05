@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>端口、单写者与 revision · L02</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .map-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; font-size: 13.5px; color: var(--ink-3); }
+  .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+  .msgs li.block { outline: 2px solid var(--brand-2); }
+  .msgs li.skip { opacity: .35; }
+  .turns { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+  .turns th, .turns td { border-bottom: 1px solid var(--line); padding: 5px 6px; text-align: center; }
+  .turns th:first-child, .turns td:first-child { text-align: left; }
+  .turns .ok { color: var(--ink-2); }
+  .turns .no { color: var(--brand-2); font-weight: 700; }
+  .codebox { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">L3 只认两个接口</a></li>
+    <li><a href="#s2">组合根与替身 driver</a></li>
+    <li><a href="#s3">六条不变量</a></li>
+    <li><a href="#s4">动手看：攻击不变量</a></li>
+    <li><a href="#s5">revision 贯穿四层</a></li>
+    <li><a href="#s6">动手看：在途回合还有效吗</a></li>
+    <li><a href="#s7">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L02 · 问题与全景</div>
+  <h1>端口、单写者与 revision</h1>
+  <p>L01 说“权威留在宿主”。这一课讲它怎样落到代码。L3 只认两个接口，棋谱只有一个写者，每个回合都带着版本号。多道检查拦下迟到、过期、重复的提交。</p>
+  <div class="meta"><span>原文：白皮书 §2.3–2.5 + 代码现状勘误</span><span>阅读约 18 分钟</span><span>含 3 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>说出 <a class="term" href="glossary.html#turn-port">TurnPort</a> 的四个成员，以及 <a class="term" href="glossary.html#agent-driver">AgentDriver</a> 为什么只有一个方法。</li>
+    <li>解释<a class="term" href="glossary.html#dependency-inversion">依赖倒置</a>怎样让 L3 不知道 Pi 存在。</li>
+    <li>列出六条不变量，并说出每条由哪一层、哪一行守护。</li>
+    <li>对一次可疑提交，指出拦下它的层和模型收到的错误。</li>
+    <li>用 <a class="term" href="glossary.html#valid-check">valid() 五条件</a>判断一个在途回合是否仍然有效。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>L3 只认两个接口</h2>
+  <p>先说结论：运行时链路不等于编译依赖。运行时，L3 调用 Agent；编译时，Agent 依赖 L3。L3 只定义两个接口，不 import Pi 或 Electron。</p>
+  <div class="codebox">// 摘自 game-service.ts:7-14
+// Dependency inversion: the domain knows this port, not Pi's implementation.
+export interface TurnPort {
+  state: GameState;          // 回合开始时的快照
+  signal: AbortSignal;       // 取消信号
+  log(layer, text): void;    // 写链路日志
+  commit(point, reason, decision?): void;   // 唯一的写入通道
+}
+export interface AgentDriver { run(port: TurnPort): Promise&lt;void&gt; }</div>
+  <div class="grid-2">
+    <div class="kp"><div class="k">端口</div><div class="v">TurnPort</div><p>L3 每个回合发一个。它是本回合独有的“写入凭证”。L2 的工具只能通过 <code>port.commit()</code> 写棋谱。</p></div>
+    <div class="kp"><div class="k">驱动</div><div class="v">AgentDriver</div><p>只有 <code>run(port)</code> 一个方法。L3 不关心对方是 Pi、替身，还是别的 Agent 框架。</p></div>
+  </div>
+  <ul>
+    <li>L1 的 <code>PiDriver implements AgentDriver</code>。</li>
+    <li>L2 的 <code>gomokuExtension(port)</code> 接收同一个 <code>TurnPort</code>。</li>
+    <li>L1 和 L2 都 import 业务层的纯函数（<code>engine</code>、<code>decision</code>）。反方向的 import 一个都没有。</li>
+  </ul>
+  <blockquote class="src">这就是典型的六边形（Ports &amp; Adapters）架构：L1 和 L2 是“Agent 适配器”，L4 是“UI 与持久化适配器”。<cite>白皮书 §2.3</cite></blockquote>
+  <div class="callout note"><span class="ttl">补充：port.state 是快照</span><code>startAgent()</code> 用 <code>structuredClone</code> 给端口一份快照（<code>game-service.ts:168</code>）。之后 L3 的真实状态继续变化，端口里的状态不变。所以 L2 拿快照里的 revision 和模型传来的 revision 比较，就能发现模型抄错了版本。</div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>组合根与替身 driver</h2>
+  <p>先说结论：<a class="term" href="glossary.html#composition-root">组合根</a> <code>main.ts</code> 决定给 <code>GameService</code> 注入哪个 driver。换 driver，业务层一行不改。</p>
+  <p><code>main.ts</code> 的 <code>initialize()</code> 里有三种 driver。正常启动时用 <code>PiDriver</code>（<code>main.ts:67</code>）。冒烟测试和初始化失败时，换成<a class="term" href="glossary.html#test-double-driver">替身 driver</a>。</p>
+
+  <div class="chart-card" id="demo0">
+    <div class="chart-head">
+      <div class="chart-title">动手看：同一个 GameService，换三种 driver</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">注入：
+        <span class="btn-group" id="d0-sel">
+          <button class="btn on" data-d="pi">PiDriver（正常启动）</button>
+          <button class="btn" data-d="smoke">冒烟替身</button>
+          <button class="btn" data-d="fail">初始化失败替身</button>
+        </span>
+      </div>
+      <div class="codebox" id="d0-code"></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d0-out"></div></div>
+    <div class="chart-foot">三种 driver 都只碰 <code>port</code> 的四个成员。GameService 的回合检查、棋钟、valid() 对三者完全一样。<span class="data-note">代码依据 <code>main.ts</code> 的 <code>initialize()</code>，有删节。</span></div>
+  </div>
+  <div class="callout tip"><span class="ttl">看图要点</span>替身 driver 能直接测 L3 和 L4，不花一分钱 API 费用。<code>tests/service.test.ts</code> 也用替身测试两类行为：L3 拒绝迟到响应；模型不调用落子工具时棋盘不变。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>六条不变量</h2>
+  <p>先说结论：弈境的“权威”由六条不变量撑起来。每条都在代码里有固定的守护位置。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>不变量</th><th>守护位置</th><th>机制</th></tr>
+    <tr><td>棋谱只有一个写者</td><td><code>GameService</code></td><td>所有写入都走 <code>calculate()</code>；渲染器只读快照（<a class="term" href="glossary.html#single-writer">单写者</a>）</td></tr>
+    <tr><td>过期回合不能落子</td><td><code>game-service.ts:170</code> 的 <code>valid()</code></td><td>五个条件：未取消、未终局、同一局、同一 revision、仍是当前控制器</td></tr>
+    <tr><td>迟到的响应赢不了已经超时的棋钟</td><td><code>commit</code> 第一行 <code>this.charge()</code></td><td>先结算时间，再判断回合是否有效</td></tr>
+    <tr><td>每回合只提交一次</td><td><code>committed</code> 标志（L2 和 L3 各一个）</td><td>双重防护</td></tr>
+    <tr><td>坐标、占用、终局合法</td><td><code>rules.ts</code> 的 <code>play()</code></td><td>每次提交后从完整棋谱<a class="term" href="glossary.html#replay">重放</a></td></tr>
+    <tr><td>规则是自由五子棋，无禁手</td><td><code>RULESET = 'free-gomoku/v1'</code></td><td>知识包只能建议，不能改写规则（<a class="term" href="glossary.html#free-gomoku">自由五子棋</a>）</td></tr>
+  </table></div>
+  <p><code>commit</code> 的完整顺序是这样的（<code>game-service.ts:174-185</code>）：</p>
+  <ol>
+    <li><code>this.charge()</code>：先结算棋钟。超时就当场判负，并 <code>invalidate()</code>。</li>
+    <li><code>valid()</code> 为假或 <code>committed</code> 已为真：抛“过期、超时或重复的落子请求已拒绝”。</li>
+    <li>不是机器方回合：抛“不是机器方回合”。</li>
+    <li><code>reason</code> 为空或超过 600 字：抛“请提供不超过 600 字的简短落子理由”。</li>
+    <li><code>play()</code> 校验坐标和占用；通过后置 <code>committed = true</code>，记手记，<code>calculate()</code>。</li>
+  </ol>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书 §2.2 写 L2 拥有“6 个工具”。代码现状是 8 个（<code>gomoku.ts:11</code>），新增 <code>check_forcing_sequences</code> 和 <code>find_forcing_win</code>。本课讲的不变量都没变：<code>valid()</code> 仍是五个条件，仍在 <code>game-service.ts:170</code>。</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>动手看：攻击不变量</h2>
+  <p>下面的沙盘列出七种可疑提交。选一种，看它依次经过哪些检查、哪一层拦下它、谁收到错误文本。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">攻击沙盘：哪一层拦下可疑提交</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">攻击：
+        <span class="btn-group" id="d1-sel">
+          <button class="btn on" data-a="oldrev">模型抄错 revision</button>
+          <button class="btn" data-a="occupied">落在已有棋子上</button>
+          <button class="btn" data-a="cancel">取消后迟到提交</button>
+          <button class="btn" data-a="undo">悔棋后提交</button>
+          <button class="btn" data-a="dup">同批重复提交</button>
+          <button class="btn" data-a="timeout">超时后提交</button>
+          <button class="btn" data-a="forge">渲染器伪造落子</button>
+        </span>
+      </div>
+      <div class="status-row" id="d1-status"></div>
+      <ul class="msgs" id="d1-list"></ul>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">逐个点完七种攻击，注意“错误去向”。发给模型的错误在下一个 turn 进入上下文，模型可以修正。发给渲染器的错误只显示在界面上。七种攻击都没有错误地改动棋盘。<span class="data-note">简化模型：检查顺序和错误文本取自 <code>gomoku.ts</code>、<code>game-service.ts</code>、<code>main.ts</code> 的源码；revision 数字是例子。“若到达”一行表示前一道检查万一没拦住时的后备防线。</span></div>
+  </div>
+  <div class="callout note"><span class="ttl">补充：为什么要多道防线</span>L2 检查回合开始时的快照和取消信号。L3 的 <code>valid()</code> 检查此刻的真实状态。两者时间点不同，所以各自都要有。比如超时：心跳若已判负，L2 就拦下；若还没结算，<code>commit</code> 第一行的 <code>charge()</code> 会补上这一步。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>revision 贯穿四层</h2>
+  <p>先说结论：<a class="term" href="glossary.html#revision">revision</a> 是一个整数版本号。它从 L4 一直传到 L2，任何改变棋盘或回合有效性的操作都会让它变化。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>层</th><th>revision 在这里做什么</th></tr>
+    <tr><td>L4</td><td>渲染器发 <code>five:command {move, x, y, revision}</code>，必须带上它看到的 revision</td></tr>
+    <tr><td>L3</td><td><code>humanMove</code> 比对 revision，不符就报“棋盘已更新或本局已结束，请重新确认”；<code>calculate()</code> 和 <a class="term" href="glossary.html#invalidate">invalidate()</a> 让它加 1</td></tr>
+    <tr><td>L1</td><td>把 revision 写进用户提示词：“revision=17”</td></tr>
+    <tr><td>L2</td><td><code>validate_move</code>、<code>place_stone</code> 等工具要求模型传 revision；不符就报“版本错误：当前 revision=17”</td></tr>
+  </table></div>
+  <p>哪些操作会改变 revision：</p>
+  <ul>
+    <li>人类落子、LLM 成功提交：<code>calculate()</code> 加 1。</li>
+    <li>悔棋、取消、换模型、终局结算：<code>invalidate()</code> 加 1，并中止当前回合。</li>
+    <li>新局、下一盘：先 <code>invalidate()</code>，再换成一局全新的状态。新局的 revision 从 0 开始，局 ID 也换了。</li>
+  </ul>
+  <div class="callout rule"><span class="ttl">本节核心句</span>revision 回到 0 时，L3 仍然拒绝旧回合。因为 <code>valid()</code> 还比较局 ID 和当前控制器，不只比较 revision。</div>
+  <p>悔棋有一个前提：比赛设置里启用了练习悔棋。默认的正式模式不允许悔棋（<code>game-service.ts:134</code>）。悔棋也不返还已用的时间和读秒次数。</p>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>动手看：在途回合还有效吗</h2>
+  <p>下面的模拟器维护一局棋的 revision 和局 ID。每次机器回合开始，都会生成一个“在途回合”。点操作按钮，看表格里每个回合的 <code>valid()</code> 五个条件怎样变化。最后点“LLM 提交”，让最新的在途回合尝试落子。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">revision 时间线：哪个回合还能提交</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">人类操作：
+        <button class="btn" data-op="move">人类落子</button>
+        <button class="btn" data-op="undo">悔棋（练习模式）</button>
+        <button class="btn" data-op="cancel">取消思考</button>
+        <button class="btn" data-op="model">换模型</button>
+        <button class="btn" data-op="retry">重试</button>
+        <button class="btn" data-op="new">新局</button>
+      </div>
+      <div class="map-row">机器与棋钟：
+        <button class="btn" data-op="commit">LLM 提交（最近的回合）</button>
+        <button class="btn" data-op="commitOld">LLM 提交（最早的回合）</button>
+        <button class="btn" data-op="timeout">机器方超时</button>
+        <button class="btn" data-op="reset">重来</button>
+      </div>
+      <div class="status-row" id="d2-status"></div>
+      <div class="tbl-wrap"><table class="turns" id="d2-turns"></table></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">先按顺序点：人类落子、取消思考、重试。再点两次提交：先“最早的回合”，后“最近的回合”。取消后，第一个回合的 revision 再也对不上，L3 拒绝它。重试产生的新回合可以提交。然后点：人类落子、新局。新局的 revision 从 0 开始，旧回合仍因“同一局”不符而失效。<span class="data-note">简化模型：只模拟 revision、局 ID、取消与终局，不模拟棋盘和棋钟数值。人类执黑先行。规则依据 <code>game-service.ts</code> 的 <code>startAgent</code>、<code>valid()</code>、<code>invalidate()</code>、<code>calculate()</code>、<code>newGame()</code>。</span></div>
+  </div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>自测与速记</h2>
+  <div class="quiz" data-answer="1">
+    <div class="q"><code>TurnPort</code> 里哪个成员是跨层写入的唯一通道？</div>
+    <div class="opts"><button>state</button><button>commit</button><button>signal</button><button>log</button></div>
+    <div class="explain">L2 的工具只能通过 <code>port.commit()</code> 请求落子。L3 在 commit 里结算棋钟、检查 valid()、校验规则，然后才写入。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">冒烟测试换上一个替身 driver。哪一层的代码需要修改？</div>
+    <div class="opts"><button>L3 的 GameService</button><button>L2 的 gomoku 扩展</button><button>L4 的渲染器</button><button>都不用改，只在组合根 main.ts 里换注入对象</button></div>
+    <div class="explain">依赖倒置：L3 只认 <code>AgentDriver</code> 接口。<code>main.ts</code> 在冒烟模式下注入替身，业务层一行不改。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">模型思考时机器方的棋钟耗尽，随后模型调用了 <code>place_stone</code>。为什么不会落子？</div>
+    <div class="opts"><button>commit 先 charge() 结算棋钟，判负并 invalidate()，然后 valid() 为假</button><button>Pi 的技术超时先触发</button><button>渲染器拒绝显示这手棋</button><button>L2 的工具调用预算已用完</button></div>
+    <div class="explain">“迟到的响应赢不了已经超时的棋钟”。<code>commit</code> 第一行是 <code>this.charge()</code>。技术超时（90 秒）是另一回事。</div>
+  </div>
+  <div class="quiz" data-answer="2">
+    <div class="q">新局让 revision 回到 0。一个旧回合恰好也带着 revision 0 提交。结果是什么？</div>
+    <div class="opts"><button>落子成功，因为 revision 相同</button><button>落子成功，但被下一次心跳撤销</button><button>被拒绝：局 ID 和当前控制器都不符，旧回合的信号也已中止</button><button>L1 重新发起一次请求</button></div>
+    <div class="explain"><code>valid()</code> 有五个条件，不只比较 revision。新局会 <code>invalidate()</code>，换局 ID，并新建控制器。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">模型把 revision 抄错了。错误文本发给了谁？</div>
+    <div class="opts"><button>渲染器，弹出错误框</button><button>模型：它变成一条 isError 工具结果，下一个 turn 进入上下文</button><button>日志文件，不通知任何人</button><button>Pi 运行时，让 run 崩溃</button></div>
+    <div class="explain"><code>place_stone</code> 的 <code>checkRevision</code> 抛“版本错误：当前 revision=17”。Pi 把异常转成工具错误结果，模型据此修正。L07 会讲这条“错误即提示词”回路。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>两个接口</td><td><code>TurnPort {state, signal, log, commit}</code>；<code>AgentDriver {run(port)}</code></td></tr>
+    <tr><td>依赖方向</td><td>L1、L2、L4 import L3；L3 不 import Pi 或 Electron</td></tr>
+    <tr><td>组合根</td><td><code>main.ts</code> 注入 PiDriver、冒烟替身或失败替身</td></tr>
+    <tr><td>commit 顺序</td><td>charge → valid()/committed → 机器方回合 → reason ≤ 600 → play → calculate</td></tr>
+    <tr><td>valid() 五条件</td><td>未取消、未终局、同一局、同一 revision、仍是当前控制器</td></tr>
+    <tr><td>revision 变化</td><td>落子/提交经 calculate() 加 1；悔棋/取消/换模型/终局经 invalidate() 加 1；新局归 0 并换局 ID</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L03-sdk-vs-rpc.html"><small>下一课 · L03</small>Pi SDK 接入：每手一个 Session</a>
+    <a href="L05-gates-unused.html"><small>L05</small>三道闸与刻意不用的回调</a>
+    <a href="L07-context-rebuild.html"><small>L07</small>上下文工程：用重建取代压缩</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L02-ports-invariants.html"></nav>
+<p class="disclaimer">原文：《弈境 · Five LLM 技术白皮书》v1.0 §2.3–2.5（2026-10-30）。代码对照：课程作者整理的《弈境代码现状勘误》（提交 4f65e37）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 0. 换 driver ---- */
+  const DRV = {
+    pi: ["const pi = await PiDriver.create(app.getPath('userData'));\nmodels = await pi.models(); driver = pi;\n// run(port)：创建内存 Session → prompt → 模型调工具 → place_stone → port.commit()",
+      "正常启动注入 PiDriver。它每手创建一个 Pi Session，模型通过 place_stone 间接调用 port.commit()。"],
+    smoke: ["driver = { async run(port) {\n  await new Promise(resolve => setTimeout(resolve, 200));\n  if (port.signal.aborted) return;\n  const move = port.state.analysis.candidates[0];\n  port.log('extension', 'UI fixture · place_stone');\n  port.commit(move, '仅用于桌面自动化测试的固定应答。');\n} };",
+      "冒烟测试注入替身：等 200 ms，取启发式第一名直接 port.commit()。不调用 LLM，不花 API 费用。它仍要遵守 signal 和 commit 的全部检查。"],
+    fail: ["setupError = `Pi 初始化失败：${message}`;\ndriver = { async run() { throw new Error(setupError!); } };",
+      "Pi 初始化失败时注入一个只会抛错的 driver。GameService 照常运行：棋钟继续走，界面显示错误，棋盘不变。"],
+  };
+  function draw0(k) {
+    CL.$("#d0-code").textContent = DRV[k][0];
+    CL.$("#d0-out").textContent = DRV[k][1] + "\nGameService 的代码：未改动。它只调用 driver.run(port)。";
+  }
+  CL.$$("#d0-sel [data-d]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d0-sel [data-d]").forEach((x) => x.classList.toggle("on", x === b)); draw0(b.dataset.d);
+  }));
+  draw0("pi");
+
+  /* ---- 1. 攻击沙盘 ---- */
+  // 每步：[层, 检查, 结果 pass|block|skip|backup, 说明]
+  const A = {
+    oldrev: { name: "模型抄错 revision", to: "模型", steps: [
+      ["Pi", "TypeBox 参数校验（坐标 0–14 整数、revision ≥ 0）", "pass", "参数形状合法"],
+      ["L2", "tool_call 钩子：ensureActive()，调用计数 ≤ 16", "pass", "回合仍有效"],
+      ["L2", "place_stone：checkRevision(16)", "block", "版本错误：当前 revision=17"],
+      ["L3", "commit", "skip", "没有到达"],
+    ], fix: "模型在下一个 turn 读到错误，改传 revision 17 后重试。" },
+    occupied: { name: "落在已有棋子上", to: "模型", steps: [
+      ["L2", "tool_call 钩子：ensureActive()", "pass", "回合仍有效"],
+      ["L2", "place_stone：checkRevision、已观察", "pass", "revision 正确，已有观察证据"],
+      ["L2", "validateCandidate() 调用 rules.ts 的 play()", "block", "该交叉点已有棋子"],
+      ["L3", "若到达 commit：play() 再校验一次", "backup", "该交叉点已有棋子"],
+    ], fix: "L2 在提交前就用权威规则试落一次，所以非法点在 L2 被拦下。L2 和 L3 都没有置 committed。模型可以改选一个空点再提交。" },
+    cancel: { name: "取消后迟到提交", to: "模型（回合已中止，通常不再有下一个 turn）", steps: [
+      ["L3", "人类点“取消”：invalidate()，revision 17 → 18，controller.abort()", "pass", "旧回合的 signal 进入 aborted"],
+      ["L1", "监听 port.signal → session.abort()", "pass", "run 被中止"],
+      ["L2", "tool_call 钩子：ensureActive()", "block", "本回合已取消"],
+      ["L3", "若到达 commit：valid()", "backup", "过期、超时或重复的落子请求已拒绝"],
+    ], fix: "棋钟不暂停。人类可以点“重试”，L3 用新的 revision 启动一个新回合。" },
+    undo: { name: "悔棋后提交", to: "模型（回合已中止）", steps: [
+      ["L3", "undo()：charge()，检查 allowUndo，invalidate()，revision 17 → 18", "pass", "撤回人类上一手，旧回合中止"],
+      ["L2", "tool_call 钩子：ensureActive()", "block", "本回合已取消"],
+      ["L2", "若到达 place_stone：checkRevision(17)", "backup", "快照仍是 17，这一步本身不会拦"],
+      ["L3", "若到达 commit：valid()", "backup", "revision 17 ≠ 18 → 过期、超时或重复的落子请求已拒绝"],
+    ], fix: "L2 的 checkRevision 比较的是回合快照，不是此刻的真实 revision。真正的后备防线是 L3 的 valid()。" },
+    dup: { name: "同批重复提交", to: "模型", steps: [
+      ["L2", "第 1 个 place_stone：门禁通过 → port.commit()", "pass", "落子成功，L3 committed = true"],
+      ["L1", "tool_execution_end 看到 accepted:true → abort()", "block", "同批第 2 个 place_stone 被跳过"],
+      ["L2", "若到达：ensureActive()", "backup", "本回合已经落子"],
+      ["L3", "若到达 commit：valid() / committed", "backup", "过期、超时或重复的落子请求已拒绝（落子后 revision 已变）"],
+    ], fix: "“每回合只提交一次”有三道防线：L1 的 abort、L2 的 committed、L3 的 committed 与 valid()。" },
+    timeout: { name: "超时后提交", to: "模型；棋局结果推送给界面", steps: [
+      ["L2", "tool_call 钩子：ensureActive()", "pass", "假设心跳还没结算，signal 未中止"],
+      ["L2", "place_stone：checkRevision、已观察", "pass", "快照里的 revision 正确"],
+      ["L3", "commit 第一行：charge()", "pass", "发现机器方最后一次读秒耗尽 → finish(人类胜) → invalidate()"],
+      ["L3", "valid()", "block", "过期、超时或重复的落子请求已拒绝"],
+    ], fix: "先结算时间，再判断有效性。迟到的响应赢不了已经超时的棋钟。若心跳先结算，L2 的 ensureActive() 会更早拦下。" },
+    forge: { name: "渲染器伪造落子", to: "渲染器（界面显示错误）", steps: [
+      ["L4", "trusted(event)：发送方必须是主窗口的主框架", "pass", "假设请求来自主窗口"],
+      ["L4", "validCommand()：命令形状校验", "pass", "{type:'move', x, y, revision} 形状合法"],
+      ["L3", "humanMove：charge()，比对 revision", "pass", "revision 正确"],
+      ["L3", "humanMove：status 必须是 human，且轮到人类", "block", "请等待机器方行棋"],
+    ], fix: "渲染器根本没有“替 LLM 落子”的命令。它只能发人类的 move，而机器回合里 humanMove 会拒绝。来源不对时，trusted() 报“不受信任的 IPC 来源”。" },
+  };
+  function draw1(k) {
+    const a = A[k];
+    const cls = { pass: "fast", block: "act block", skip: "skip", backup: "slow" };
+    const mark = { pass: "通过", block: "拦下", skip: "—", backup: "若到达" };
+    CL.$("#d1-list").innerHTML = a.steps.map((s) => '<li class="' + cls[s[2]] + '"><span class="src">' + CL.esc(s[0]) + "</span><span>" + CL.esc(s[1]) + "：" + CL.esc(s[3]) + '</span><span class="verdict">' + mark[s[2]] + "</span></li>").join("");
+    const blk = a.steps.find((s) => s[2] === "block");
+    CL.$("#d1-status").innerHTML =
+      '<span class="pill hot">拦截层：' + blk[0] + "</span>" +
+      '<span class="pill">错误去向：' + CL.esc(a.to) + "</span>" +
+      '<span class="pill">棋盘：' + (k === "dup" ? "只落 1 子" : "未被错误改动") + "</span>";
+    CL.$("#d1-out").textContent = "攻击：" + a.name + "\n拦下它的检查：" + blk[0] + " · " + blk[1] + "\n错误文本：" + blk[3] + "\n" + a.fix;
+  }
+  CL.$$("#d1-sel [data-a]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d1-sel [data-a]").forEach((x) => x.classList.toggle("on", x === b)); draw1(b.dataset.a);
+  }));
+  draw1("oldrev");
+
+  /* ---- 2. revision 时间线 ---- */
+  let S, turns, log, ctrlSeq;
+  function reset() {
+    S = { gid: "A", rev: 0, status: "human", outcome: null, active: null, humanMoves: [] };
+    turns = []; log = ["新比赛开始：局 A，revision 0，轮到人类（执黑）。"]; ctrlSeq = 0;
+  }
+  function invalidate() { S.rev++; if (S.active) { S.active.aborted = true; S.active = null; } }
+  function startAgent() {
+    const t = { no: turns.length + 1, gid: S.gid, rev: S.rev, ctrl: ++ctrlSeq, aborted: false, committed: false };
+    turns.push(t); S.active = t; S.status = "thinking";
+    log.push("机器回合 #" + t.no + " 启动：快照 revision " + t.rev + "，局 " + t.gid + "。");
+  }
+  function checks(t) {
+    return [
+      ["未取消", !t.aborted],
+      ["未终局", !S.outcome],
+      ["同一局", t.gid === S.gid],
+      ["同一 revision", t.rev === S.rev],
+      ["当前控制器", S.active === t],
+    ];
+  }
+  function commit(t) {
+    if (!t) { log.push("没有在途回合可以提交。"); return; }
+    const c = checks(t), bad = c.filter((x) => !x[1]).map((x) => x[0]);
+    if (bad.length || t.committed) {
+      log.push("回合 #" + t.no + " 提交被拒绝：" + (t.committed ? "已经提交过" : "不满足 " + bad.join("、")) + "。错误：过期、超时或重复的落子请求已拒绝。");
+      return;
+    }
+    t.committed = true; S.rev++; S.active = null; S.status = "human";
+    log.push("回合 #" + t.no + " 提交成功：calculate() 让 revision 变为 " + S.rev + "，轮到人类。");
+  }
+  const OPS = {
+    move() {
+      if (S.outcome) return log.push("本局已结束，人类不能落子。");
+      if (S.status !== "human") return log.push("人类落子被拒绝：请等待机器方行棋。");
+      S.rev++; S.humanMoves.push(S.rev);
+      log.push("人类落子：calculate() 让 revision 变为 " + S.rev + "。");
+      startAgent();
+    },
+    undo() {
+      if (S.outcome) return log.push("已结算的棋局不能悔棋。");
+      if (!S.humanMoves.length) return log.push("还没有人类落子，悔棋只会让 revision 加 1。"), invalidate();
+      invalidate(); S.humanMoves.pop(); S.status = "human";
+      log.push("悔棋：invalidate() 让 revision 变为 " + S.rev + "，中止在途回合，撤回人类上一手。");
+    },
+    cancel() {
+      if (S.status !== "thinking") return log.push("当前没有在思考的回合，取消不做任何事。");
+      invalidate(); S.status = "paused";
+      log.push("取消：invalidate() 让 revision 变为 " + S.rev + "。棋钟继续，可重试。");
+    },
+    model() {
+      invalidate(); S.status = S.outcome ? "over" : S.status === "thinking" ? "paused" : S.status;
+      log.push("换模型：invalidate() 让 revision 变为 " + S.rev + "，中止在途回合。");
+    },
+    retry() {
+      if (S.status === "thinking") return log.push("重试被拒绝：机器方正在思考。");
+      if (S.outcome || S.status === "human") return log.push("现在轮到人类或已终局，重试不会启动回合。");
+      startAgent();
+    },
+    new() {
+      invalidate(); S.gid = String.fromCharCode(S.gid.charCodeAt(0) + 1);
+      S.rev = 0; S.status = "human"; S.outcome = null; S.humanMoves = [];
+      log.push("新局：先 invalidate()，再换成局 " + S.gid + "，revision 回到 0。");
+    },
+    commit() { commit(S.active || turns[turns.length - 1]); },
+    commitOld() { commit(turns[0]); },
+    timeout() {
+      if (S.outcome) return log.push("本局已经结算。");
+      if (S.status === "human") return log.push("现在走的是人类的棋钟，机器方不会超时。");
+      invalidate(); S.outcome = "人类胜（机器方超时）"; S.status = "over";
+      log.push("机器方读秒耗尽：finish() → invalidate()，revision 变为 " + S.rev + "，人类胜。");
+    },
+    reset() { reset(); },
+  };
+  function draw2() {
+    CL.$("#d2-status").innerHTML =
+      '<span class="pill">局：' + S.gid + "</span>" +
+      '<span class="pill hot">当前 revision：' + S.rev + "</span>" +
+      '<span class="pill">状态：' + ({ human: "轮到人类", thinking: "LLM 思考中", paused: "已暂停（可重试）", over: "已终局" }[S.status]) + "</span>" +
+      (S.outcome ? '<span class="pill slow">' + S.outcome + "</span>" : "");
+    const head = "<tr><th>回合</th><th>快照</th><th>未取消</th><th>未终局</th><th>同一局</th><th>同一 revision</th><th>当前控制器</th><th>结论</th></tr>";
+    const rows = turns.slice(-6).map((t) => {
+      const c = checks(t), ok = c.every((x) => x[1]) && !t.committed;
+      return "<tr><td>#" + t.no + "</td><td>局 " + t.gid + " · rev " + t.rev + "</td>" +
+        c.map((x) => '<td class="' + (x[1] ? "ok" : "no") + '">' + (x[1] ? "✓" : "✗") + "</td>").join("") +
+        '<td class="' + (ok ? "ok" : "no") + '">' + (t.committed ? "已提交" : ok ? "可提交" : "会被拒绝") + "</td></tr>";
+    }).join("");
+    CL.$("#d2-turns").innerHTML = head + (rows || '<tr><td colspan="8">还没有机器回合。先点“人类落子”。</td></tr>');
+    const live = turns.filter((t) => checks(t).every((x) => x[1]) && !t.committed).length;
+    CL.$("#d2-out").textContent = log.slice(-4).join("\n") + "\n—— 共 " + turns.length + " 个机器回合，此刻能提交的有 " + live + " 个（最多 1 个）。";
+  }
+  CL.$$("#demo2 [data-op]").forEach((b) => b.addEventListener("click", () => { OPS[b.dataset.op](); draw2(); }));
+  reset(); draw2();
+});
+</script>
+</body>
+</html>

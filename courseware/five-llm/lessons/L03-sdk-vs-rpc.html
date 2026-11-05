@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pi SDK 接入：每手一个 Session · L03</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .map-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; font-size: 13.5px; color: var(--ink-3); }
+  .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+  .sw-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 14px; }
+  @media (max-width: 760px) { .sw-grid { grid-template-columns: 1fr; } }
+  .sw-list label { display: flex; gap: 8px; align-items: flex-start; padding: 6px 4px; border-bottom: 1px dashed var(--line); font-size: 13.5px; color: var(--ink-2); cursor: pointer; }
+  .sw-list code { font-size: 12.5px; }
+  .sec { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; font-size: 13px; background: var(--bg-2); color: var(--ink-2); }
+  .sec b { font-family: var(--mono); font-size: 12px; }
+  .sec.extra { border-color: var(--brand-2); }
+  .sec.extra b { color: var(--brand-2); }
+  .score { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .score th, .score td { border-bottom: 1px solid var(--line); padding: 6px 6px; text-align: left; vertical-align: top; }
+  .score .mk { font-weight: 700; white-space: nowrap; }
+  .score .y { color: var(--ink-2); }
+  .score .p { color: var(--accent); }
+  .score .n { color: var(--brand-2); }
+  .codebox { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">驱动 Pi 的四种方式</a></li>
+    <li><a href="#s2">RPC 还是 SDK</a></li>
+    <li><a href="#s3">动手看：需求打分</a></li>
+    <li><a href="#s4">PiDriver 怎样创建一个 Session</a></li>
+    <li><a href="#s5">动手看：屏蔽项开关台</a></li>
+    <li><a href="#s6">提示词怎样“按局面切换”</a></li>
+    <li><a href="#s7">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L03 · 循环工程</div>
+  <h1>Pi SDK 接入：每手一个 Session</h1>
+  <p>弈境不启动 pi 子进程。它在 Electron 主进程里直接调用 Pi 的 TypeScript SDK，每手棋创建一个全新的内存 Session。这一课讲为什么这样选，以及 <code>PiDriver</code> 怎样把 Pi 收窄成一个只会下棋的引擎。</p>
+  <div class="meta"><span>原文：白皮书 §5.2、§6.2、§2.0 末段 + 代码现状勘误</span><span>阅读约 18 分钟</span><span>含 2 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>列出<a class="term" href="glossary.html#pi-drive-modes">驱动 Pi 的四种方式</a>，说出哪两种能支撑桌面应用。</li>
+    <li>用一句话说出 <a class="term" href="glossary.html#rpc-mode">RPC</a> 和 <a class="term" href="glossary.html#pi-sdk">SDK</a> 的选型原则，并说出 SDK 的三项代价。</li>
+    <li>按顺序讲出 <code>PiDriver.run()</code> 创建 Session 的五步。</li>
+    <li>说出每个屏蔽项挡住了什么，以及哪两项共同挡住 read / bash。</li>
+    <li>解释弈境怎样不用 <code>before_agent_start</code> 就“切换”系统提示词。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>驱动 Pi 的四种方式</h2>
+  <p>先说结论：程序可以用四种方式驱动 Pi。前两种是一次性的，适合脚本。能支撑交互式桌面应用的只有 RPC 和 SDK。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>方式</th><th>形态</th><th>适合</th></tr>
+    <tr><td>print</td><td>跑一次，打印最终回答</td><td>脚本、一次性任务</td></tr>
+    <tr><td>JSON 事件流</td><td>跑一次，把事件逐行输出</td><td>脚本、子 agent</td></tr>
+    <tr><td>RPC</td><td>独立子进程，stdin / stdout 收发 JSONL</td><td>长时间交互；边牧</td></tr>
+    <tr><td>TypeScript SDK</td><td><code>createAgentSession()</code>，嵌进宿主进程</td><td>把 Pi 当引擎；弈境、楚河</td></tr>
+  </table></div>
+  <p>同一个仓库里两种选择都有，可以直接对照：</p>
+  <div class="codebox">// 边牧：apps/tilldone/src/rpc.ts:25 + config.ts:26
+spawn(piBin, ["--mode", "rpc", "--no-extensions", "--model", model, "-e", extension, …])
+
+// 弈境：apps/five-llm/src/agent/pi-driver.ts:58
+createAgentSession({ resourceLoader, tools: GAME_TOOLS, noTools: 'builtin',
+                     sessionManager: SessionManager.inMemory(cwd), … })</div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>RPC 还是 SDK</h2>
+  <blockquote class="src">要“复用一个现成的 Pi 体验”就用 RPC；要“把 Pi 当成引擎嵌进一个领域应用”就用 SDK。<cite>白皮书 §5.2</cite></blockquote>
+  <div class="vs">
+    <div><h4>边牧：给现成扩展换一张脸</h4>
+      <ul>
+        <li>扩展 <code>extensions/tilldone</code> 原样加载，一行不改。</li>
+        <li>一个长寿命子进程，对话持续累积。</li>
+        <li>业务状态只能从事件流<strong>推断</strong>：<code>reduce(state, rpcRecord)</code>。</li>
+        <li>扩展的 TUI 绘制代码在桌面上失效。</li>
+      </ul>
+      <p><span class="good">进程隔离</span>：Pi 崩溃不拖垮界面。</p>
+    </div>
+    <div><h4>弈境：把 Pi 当引擎</h4>
+      <ul>
+        <li>内联工厂 <code>gomokuExtension(port, playbook)</code>，为本应用量身定做，不落盘。</li>
+        <li>每手一个内存 Session，用完 <code>dispose()</code>。</li>
+        <li>工具里<strong>同步调用</strong> <code>port.commit()</code>，直接走业务层的权威校验。</li>
+        <li>不用扩展 UI；界面状态全部来自 <code>GameState</code>。</li>
+      </ul>
+      <p><span class="bad">同进程</span>：错误以异常形式回到 <code>GameService</code>。</p>
+    </div>
+  </div>
+  <p>弈境需要的五项能力，只有 SDK 能干净地提供：</p>
+  <ol>
+    <li><strong>每手一个全新 Session</strong>，从权威棋谱重建上下文。RPC 要做到这一点，就得每手重启进程。</li>
+    <li><strong>系统提示词按局面切换</strong>。SDK 在创建 Session 时整段传入。</li>
+    <li><strong>工具隔离</strong>：只开放领域工具，并在运行时校验。</li>
+    <li><strong>同步、权威的提交</strong>：<code>place_stone</code> 在同一进程里调用 <code>port.commit()</code>，校验当场完成，错误当场返回给模型。</li>
+    <li><strong>精细的循环控制</strong>：订阅 <code>turn_start</code> 实现请求预算，订阅 <code>tool_execution_end</code> 实现提交即停。</li>
+  </ol>
+  <div class="callout warn"><span class="ttl">SDK 的代价</span>Pi 和应用同处一个进程，失去进程级的故障隔离。Pi 的版本锁进应用依赖（<code>package.json</code> 锁定 1.4.0），升级要随应用发版。内存 Session 不落盘，失败回合的完整过程无法事后恢复。</div>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书 §5.2 第 3 项写“只开放 6 个领域工具”。代码现状是 8 个（<code>gomoku.ts:11</code> 的 <code>GAME_TOOLS</code>），新增 <code>check_forcing_sequences</code> 和 <code>find_forcing_win</code>。选型理由不变。</div>
+  <div class="callout note"><span class="ttl">层的边界跟着进程边界走</span>边牧的 README 把“Electron 运行时 + 外部 pi 可执行文件”整体算作 L1。弈境把 Pi 扩展算作 L2，把 <a class="term" href="glossary.html#pi-driver">PiDriver</a> 算作 L1。原因是：用 RPC 时 Pi 是一个黑盒进程；用 SDK 时 Pi 的扩展面直接向宿主敞开（白皮书 §5.2 末段、§2.0 末段）。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>动手看：需求打分</h2>
+  <p>下面列出两个应用各自的关键需求。先选应用，再切换接入方式，看每项需求能否干净满足、代价是什么。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">需求打分：同一组需求，RPC 和 SDK 各满足几项</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">应用：
+        <span class="btn-group" id="d1-app">
+          <button class="btn on" data-app="five">弈境 five-llm</button>
+          <button class="btn" data-app="till">边牧 TillDone Desk</button>
+        </span>
+        接入方式：
+        <span class="btn-group" id="d1-mode">
+          <button class="btn on" data-mode="sdk">进程内 SDK</button>
+          <button class="btn" data-mode="rpc">RPC 子进程</button>
+        </span>
+      </div>
+      <div class="status-row" id="d1-status"></div>
+      <div class="tbl-wrap"><table class="score" id="d1-tbl"></table></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">四种组合都看一遍。弈境配 SDK、边牧配 RPC 时，所有需求都干净满足；交换之后，每项都要付出额外代价或做不到。选型取决于需求，不是哪种方式更先进。<span class="data-note">简化模型：弈境五项需求和各自的代价取自白皮书 §5.2；边牧的需求依据同节对照表整理。标“补充”的判断是课程作者的推断，原文没有逐项打分。</span></div>
+  </div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>PiDriver 怎样创建一个 Session</h2>
+  <p>先说结论：<code>PiDriver.run()</code> 每手做五步。前四步把 Pi 收窄成一个只会下棋的引擎，第五步保证用完即弃。</p>
+  <ol class="steps">
+    <li><b>设置</b>（<code>pi-driver.ts:42-45</code>）：<code>SettingsManager.inMemory</code> 关闭压缩，重试最多 1 次，关闭 <code>cacheWarming</code>、安装遥测和统计。</li>
+    <li><b>资源加载器</b>（<code>:46-54</code>）：<a class="term" href="glossary.html#resource-loader">DefaultResourceLoader</a> 设五个屏蔽项，只传一个内联<a class="term" href="glossary.html#extension-factory">扩展工厂</a>。宿主装配的 <code>systemPrompt</code> 整段替换默认前言。</li>
+    <li><b>加载与检查</b>（<code>:55-57</code>）：<code>await resourceLoader.reload()</code> 执行扩展工厂；扩展有加载错误就抛“五子棋扩展加载失败”。</li>
+    <li><b>创建 Session</b>（<code>:58-67</code>）：<code>createAgentSession({ thinkingLevel: 'low', tools: GAME_TOOLS, noTools: 'builtin', sessionManager: SessionManager.inMemory(cwd) })</code>，然后做<a class="term" href="glossary.html#tool-isolation">工具隔离校验</a>。</li>
+    <li><b>释放</b>（<code>:97</code>）：<code>finally</code> 里清定时器、取消订阅、<code>session.dispose()</code>。回合之间没有任何对话残留。</li>
+  </ol>
+  <div class="callout rule"><span class="ttl">本节核心句</span>每手一个<a class="term" href="glossary.html#in-memory-session">内存 Session</a>，只调一次 <code>prompt()</code>，用完 <code>dispose()</code>。Pi 的会话从来不是状态的权威。</div>
+  <div class="callout note"><span class="ttl">补充：为什么还要工具隔离校验</span><code>tools: GAME_TOOLS</code> 本身就是白名单（Pi SDK 的说明：给出列表时只启用匹配的工具）。<code>noTools: 'builtin'</code> 又关掉内置工具。两项配置之后，PiDriver 仍在运行时检查一遍：活跃工具必须都在 <code>GAME_TOOLS</code> 里，而且包含 <code>place_stone</code>。配置写错时，这一步让回合在发出任何请求之前失败。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>动手看：屏蔽项开关台</h2>
+  <p>Pi 默认是一个编码助手。它会自动读入用户和项目的很多东西。弈境用下面这些设置把它们全部挡在外面（白皮书 §6.2）：</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>设置</th><th>屏蔽了什么</th></tr>
+    <tr><td><code>systemPrompt</code>（customPrompt）</td><td>Pi 默认的编码助手前言，以及默认的 tools、rules、docs 段</td></tr>
+    <tr><td><code>appendSystemPromptOverride: () =&gt; []</code></td><td>用户或项目的 <a class="term" href="glossary.html#append-system-prompt">APPEND_SYSTEM.md</a></td></tr>
+    <tr><td><code>noContextFiles: true</code></td><td><a class="term" href="glossary.html#context-files">AGENTS.md / CLAUDE.md 等上下文文件</a></td></tr>
+    <tr><td><code>noSkills: true</code></td><td>Pi 技能清单段落</td></tr>
+    <tr><td><code>noExtensions: true</code> + 只给内联工厂</td><td>用户 / 项目扩展（它们可能修改提示词）</td></tr>
+    <tr><td><code>noTools: 'builtin'</code> + <code>tools: GAME_TOOLS</code></td><td>read / bash / edit / write 等编码工具</td></tr>
+  </table></div>
+  <p>另外两项 <code>noPromptTemplates</code>、<code>noThemes</code> 关掉斜杠模板和主题。弈境没有人类在聊天，用不到它们。</p>
+  <p>下面的开关台从弈境的真实配置出发。取消勾选一项，看三件事：系统提示词多出哪一段，工具清单多出什么，工具隔离校验能否通过。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">屏蔽项开关台：拿掉一项，Pi 会混进来什么</div>
+      <button class="btn" id="d2-reset">恢复弈境配置</button>
+    </div>
+    <div class="demo">
+      <div class="sw-grid">
+        <div class="sw-list" id="d2-sw"></div>
+        <div>
+          <div class="status-row" id="d2-status"></div>
+          <div id="d2-secs"></div>
+        </div>
+      </div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">先只取消 <code>noTools: 'builtin'</code>：read / bash 不会回来，因为 <code>tools</code> 白名单还在。再取消 <code>tools: GAME_TOOLS</code>：编码工具回来了，工具隔离校验失败，本回合不发请求。再只取消 <code>noSkills</code>：技能段也不出现，因为 Pi 只在 read 或 bash 可用时才列技能。<span class="data-note">简化模型：段落名和出现条件依据 Pi 1.4.0 的 <code>system-prompt.js</code>（<code>buildSystemPromptSections</code>）与 <code>sdk.d.ts</code> 的 <code>tools</code> / <code>noTools</code> 说明。“若存在”表示只有本机真的有这些文件或扩展时才会混入；文字内容是示意。</span></div>
+  </div>
+  <div class="callout warn"><span class="ttl">仍然留下的一段</span>无论怎样设置，Pi 都会附加一个 <code>&lt;cwd&gt;</code> 段。弈境的 cwd 是 <code>userData</code> 目录，所以本机路径会进入系统提示词。白皮书 §7.2 第 4 条把它列为风险：与任务无关，还暴露本机路径。</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>提示词怎样“按局面切换”</h2>
+  <p>先说结论：弈境不在会话里切换系统提示词，也不用 <code>before_agent_start</code>。它每手新建 Session，用新选出的剧本装配一份新的系统提示词。</p>
+  <ol>
+    <li><code>turnGuidance(port.state, Date.now())</code> 按局面选一个剧本：opening、midgame、endgame 或 time-pressure。</li>
+    <li><code>systemPrompt = SYSTEM + knowledgeContext(playbook)</code>：固定的棋手角色，加上知识包入口、索引和选中剧本的全文。</li>
+    <li>这份提示词只属于这一手的 Session。下一手重新选、重新装配。</li>
+  </ol>
+  <p>所以从一局棋的角度看，系统提示词是按局面切换的。开局注入 opening；出现立即成五点时换成 endgame；读秒紧张时换成 time-pressure。</p>
+  <div class="callout note"><span class="ttl">原文接受的代价</span>回合中途，<code>evaluate_threats</code> 可能返回一个不同的推荐剧本（比如时间突然变紧）。系统提示词里的剧本全文不会随之更换。设计文档接受这一点：证据里记录回合开始时实际注入的剧本；模型需要时，可以用 <code>read_knowledge</code> 读取新剧本的全文（白皮书 §6.2）。L06、L07 会展开剧本路由和上下文装配。</div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>自测与速记</h2>
+  <div class="quiz" data-answer="2">
+    <div class="q">下面哪项需求最能说明弈境为什么不用 RPC？</div>
+    <div class="opts"><button>需要显示 Canvas 棋盘</button><button>需要背景音乐</button><button><code>place_stone</code> 要在同一进程里同步调用 <code>port.commit()</code>，当场完成权威校验</button><button>需要按量计费的模型</button></div>
+    <div class="explain">界面需求两种方式都能做。同步、权威的提交是 SDK 独有的：经过 RPC，这一步要变成跨进程的请求 / 应答。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">只把 <code>noTools: 'builtin'</code> 去掉，保留 <code>tools: GAME_TOOLS</code>。read / bash 会出现吗？</div>
+    <div class="opts"><button>不会；tools 列表是白名单，只启用匹配的工具</button><button>会；内置工具总是启用</button><button>会，但只有 read</button><button>Pi 会报错退出</button></div>
+    <div class="explain">Pi SDK 的说明：给出 <code>tools</code> 时只启用匹配的工具。<code>noTools: 'builtin'</code> 是第二道保险，工具隔离校验是第三道。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">弈境怎样在一局棋里“切换”系统提示词？</div>
+    <div class="opts"><button>在 <code>before_agent_start</code> 里改写</button><button>在 <code>context</code> 钩子里替换第一条消息</button><button>用斜杠命令加载剧本</button><button>每手新建 Session，用新选出的剧本重新装配</button></div>
+    <div class="explain">白皮书 §6.2：没有在会话里切换，也没有用 <code>before_agent_start</code>。每手一个 Session，每个 Session 一份按局面装配的提示词。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">下面哪一项是 SDK 方案的代价，而不是 RPC 方案的代价？</div>
+    <div class="opts"><button>扩展的 TUI 绘制代码在桌面上失效</button><button>失去进程级的故障隔离，Pi 版本锁进应用依赖</button><button>业务状态只能从事件流推断</button><button>新会话要重启子进程</button></div>
+    <div class="explain">其余三项都是 RPC 方案的特点。SDK 的代价：同进程无故障隔离、Pi 版本随应用发版、内存 Session 不落盘。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>四种方式</td><td>print、JSON 事件流（一次性）；RPC、SDK（交互式）</td></tr>
+    <tr><td>选型</td><td>复用现成 Pi 体验用 RPC；把 Pi 当引擎嵌进领域应用用 SDK</td></tr>
+    <tr><td>SDK 五项能力</td><td>每手新 Session、提示词切换、工具隔离、同步提交、精细循环控制</td></tr>
+    <tr><td>SDK 三项代价</td><td>无进程隔离；Pi 版本锁进依赖；内存 Session 不落盘</td></tr>
+    <tr><td>创建五步</td><td>设置 → 资源加载器 → reload 与检查 → createAgentSession + 隔离校验 → dispose</td></tr>
+    <tr><td>屏蔽</td><td>customPrompt、APPEND 清空、noContextFiles、noSkills、noExtensions、noTools + tools 白名单；只剩 <code>&lt;cwd&gt;</code> 段</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L04-loop-hooks.html"><small>下一课 · L04</small>双循环接入点：提交即停</a>
+    <a href="L07-context-rebuild.html"><small>L07</small>上下文工程：用重建取代压缩</a>
+    <a href="L02-ports-invariants.html"><small>上一课 · L02</small>端口、单写者与 revision</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L03-sdk-vs-rpc.html"></nav>
+<p class="disclaimer">原文：《弈境 · Five LLM 技术白皮书》v1.0 §5.2、§6.2、§2.0（2026-10-30）。代码对照：课程作者整理的《弈境代码现状勘误》（提交 4f65e37）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 需求打分 ---- */
+  // [需求, SDK 标记, SDK 说明, RPC 标记, RPC 说明]  y=干净满足 p=能做但有代价 n=做不到
+  const REQ = {
+    five: [
+      ["每手一个全新 Session", "y", "SessionManager.inMemory() + dispose()", "p", "子进程是长寿命的，要每手重启进程"],
+      ["系统提示词按局面切换", "y", "创建 Session 时整段传入 systemPrompt", "p", "Pi 默认组装提示词；要换剧本只能重启进程或让扩展改写（补充）"],
+      ["只开放领域工具，并在运行时校验", "y", "noTools + tools 白名单 + getActiveToolNames() 校验", "p", "由 CLI 参数和扩展决定；校验要另做（补充）"],
+      ["同步、权威的提交", "y", "place_stone 在同一进程直接调用 port.commit()", "p", "变成跨进程的请求 / 应答"],
+      ["精细的循环控制", "y", "subscribe turn_start 数请求；tool_execution_end 提交即停", "p", "发 abort 命令；请求计数从事件流推断（补充）"],
+    ],
+    till: [
+      ["原样复用磁盘上的 TUI 扩展", "p", "要宿主自己补齐扩展需要的 UI 能力（补充）", "y", "-e extensions/tilldone，扩展一行不改"],
+      ["长寿命会话，对话持续累积", "y", "SDK 也能保留同一个 Session", "y", "一个长寿命子进程；“新会话”= 重启子进程"],
+      ["Pi 崩溃不拖垮界面", "n", "同进程，没有进程级隔离", "y", "进程隔离，界面显示“重启 Pi”"],
+      ["直接用本机装好的 pi", "n", "Pi 版本锁进 package.json，随应用发版", "y", "spawn 本机的 pi 可执行文件"],
+      ["扩展的 confirm / select 对话", "p", "要宿主自己实现 UI 上下文（补充）", "y", "降级为 RPC 请求 / 应答"],
+    ],
+  };
+  const MK = { y: ["✓", "干净满足"], p: ["△", "能做，有代价"], n: ["✗", "做不到"] };
+  let app = "five", mode = "sdk";
+  function draw1() {
+    const rows = REQ[app], off = mode === "sdk" ? 1 : 3;
+    let cnt = { y: 0, p: 0, n: 0 };
+    const body = rows.map((r) => { const m = r[off]; cnt[m]++; return '<tr><td>' + CL.esc(r[0]) + '</td><td class="mk ' + m + '">' + MK[m][0] + " " + MK[m][1] + "</td><td>" + CL.esc(r[off + 1]) + "</td></tr>"; }).join("");
+    CL.$("#d1-tbl").innerHTML = "<tr><th>需求</th><th>" + (mode === "sdk" ? "进程内 SDK" : "RPC 子进程") + "</th><th>怎样做 / 代价</th></tr>" + body;
+    CL.$("#d1-status").innerHTML = '<span class="pill hot">✓ ' + cnt.y + "</span><span class=\"pill\">△ " + cnt.p + "</span><span class=\"pill slow\">✗ " + cnt.n + "</span>";
+    const native = (app === "five" && mode === "sdk") || (app === "till" && mode === "rpc");
+    const name = app === "five" ? "弈境" : "边牧";
+    CL.$("#d1-out").textContent = name + " + " + (mode === "sdk" ? "SDK" : "RPC") + "：5 项需求中 " + cnt.y + " 项干净满足，" + cnt.p + " 项有代价，" + cnt.n + " 项做不到。\n" +
+      (native ? "这是仓库里的实际选择。需求和接入方式对上了。" : "这不是仓库里的实际选择。" + (app === "five" ? "弈境要把 Pi 当引擎，RPC 让每项都多一层进程边界。" : "边牧要复用现成扩展并保住进程隔离，SDK 给不了这两点。"));
+  }
+  CL.$$("#d1-app [data-app]").forEach((b) => b.addEventListener("click", () => { app = b.dataset.app; CL.$$("#d1-app [data-app]").forEach((x) => x.classList.toggle("on", x === b)); draw1(); }));
+  CL.$$("#d1-mode [data-mode]").forEach((b) => b.addEventListener("click", () => { mode = b.dataset.mode; CL.$$("#d1-mode [data-mode]").forEach((x) => x.classList.toggle("on", x === b)); draw1(); }));
+  draw1();
+
+  /* ---- 2. 屏蔽项开关台 ---- */
+  const SW = [
+    ["custom", "<code>systemPrompt</code>：宿主装配的提示词整段替换前言"],
+    ["append", "<code>appendSystemPromptOverride: () =&gt; []</code>"],
+    ["ctx", "<code>noContextFiles: true</code>"],
+    ["skills", "<code>noSkills: true</code>"],
+    ["ext", "<code>noExtensions: true</code>（只给内联工厂）"],
+    ["builtin", "<code>noTools: 'builtin'</code>"],
+    ["allow", "<code>tools: GAME_TOOLS</code>（白名单）"],
+  ];
+  const GAME = ["analyze_position", "evaluate_threats", "validate_move", "read_knowledge", "simulate_moves", "check_forcing_sequences", "find_forcing_win", "place_stone"];
+  let on;
+  function resetSw() { on = {}; SW.forEach((s) => (on[s[0]] = true)); }
+  CL.$("#d2-sw").innerHTML = SW.map((s) => '<label><input type="checkbox" data-sw="' + s[0] + '"><span>' + s[1] + "</span></label>").join("");
+  function draw2() {
+    CL.$$("#d2-sw [data-sw]").forEach((c) => (c.checked = on[c.dataset.sw]));
+    // 工具
+    let tools;
+    if (on.allow) tools = GAME.slice();
+    else {
+      tools = (on.builtin ? [] : ["read", "bash", "edit", "write"]).concat(GAME);
+      if (!on.ext) tools.push("用户扩展注册的工具（若存在）");
+    }
+    const coding = tools.filter((t) => ["read", "bash", "edit", "write"].includes(t));
+    const isolationOk = tools.every((t) => GAME.includes(t)) && tools.includes("place_stone");
+    // 段落：[名称, 内容, 是否为额外混入]
+    const secs = [];
+    if (on.custom) secs.push(["preamble", "你是一位认真下自由五子棋的棋手，不是编程助手。……（SYSTEM + 知识包入口 + 索引 + 选中剧本）", false]);
+    else {
+      secs.push(["preamble", "You are an expert coding assistant operating inside pi……", true]);
+      secs.push(["tools", "工具一行一条说明", true]);
+      secs.push(["rules", "Be concise……Show file paths clearly……", true]);
+      secs.push(["docs", "Pi 文档路径与阅读指引", true]);
+    }
+    if (!on.append) secs.push(["addendum", "用户或项目的 APPEND_SYSTEM.md（若存在）", true]);
+    if (!on.ctx) secs.push(["project_context", "工作目录与全局的 AGENTS.md / CLAUDE.md（若存在），例如用户的编码规范", true]);
+    if (!on.skills && (tools.includes("read") || tools.includes("bash"))) secs.push(["skills", "用户与项目技能清单，提示用 read 按路径读 SKILL.md", true]);
+    secs.push(["cwd", "userData 目录的本机路径（总会附加）", false]);
+    const extHook = !on.ext;
+    CL.$("#d2-secs").innerHTML = '<div class="sec"><b>系统提示词的段落</b></div>' +
+      secs.map((s) => '<div class="sec' + (s[2] ? " extra" : "") + '"><b>&lt;' + s[0] + "&gt;</b> " + CL.esc(s[1]) + (s[2] ? " ← 混入" : "") + "</div>").join("") +
+      (extHook ? '<div class="sec extra"><b>扩展钩子</b> 用户扩展可在 before_agent_start 改写提示词、在 tool_call 拦截工具（若存在） ← 混入</div>' : "") +
+      '<div class="sec"><b>活跃工具</b> ' + CL.esc(tools.join("、")) + "</div>";
+    const extra = secs.filter((s) => s[2]).length + (extHook ? 1 : 0);
+    CL.$("#d2-status").innerHTML =
+      '<span class="pill ' + (extra ? "slow" : "") + '">混入：' + extra + " 处</span>" +
+      '<span class="pill ' + (coding.length ? "slow" : "") + '">编码工具：' + (coding.length ? coding.join("/") : "无") + "</span>" +
+      '<span class="pill ' + (isolationOk ? "hot" : "slow") + '">工具隔离校验：' + (isolationOk ? "通过" : "失败") + "</span>";
+    const notes = [];
+    if (!extra && isolationOk) notes.push("这是弈境的真实配置。系统提示词只剩弈境自己的内容和一个 <cwd> 段，工具只有 8 个领域工具。");
+    if (!on.builtin && on.allow) notes.push("noTools 已去掉，但 tools 白名单还在，read / bash 不会回来。");
+    if (coding.length) notes.push("编码工具回来了：模型可以按路径读文件、执行命令。PiDriver 的工具隔离校验会抛“工具隔离校验失败”，本回合不发请求。");
+    if (!on.allow && on.builtin && !on.ext) notes.push("用户扩展注册的工具可能进入活跃列表，工具隔离校验同样会失败。");
+    if (!on.skills && !(tools.includes("read") || tools.includes("bash"))) notes.push("noSkills 已去掉，但没有 read / bash，Pi 不会列出技能。这正是弈境不用 Pi 技能机制的原因之一：它不开放文件工具。");
+    if (!on.ctx) notes.push("上下文文件会把用户目录里的编码规范混进棋手的提示词。");
+    if (!on.custom) notes.push("默认前言让模型以为自己是编码助手，并附带一大段与下棋无关的规则和文档指引。");
+    CL.$("#d2-out").textContent = notes.join("\n") || "当前组合没有混入额外内容。";
+  }
+  CL.$$("#d2-sw [data-sw]").forEach((c) => c.addEventListener("change", () => { on[c.dataset.sw] = c.checked; draw2(); }));
+  CL.$("#d2-reset").addEventListener("click", () => { resetSw(); draw2(); });
+  resetSw(); draw2();
+});
+</script>
+</body>
+</html>

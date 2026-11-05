@@ -1,0 +1,8 @@
+# five-llm 课程：本地静态服务 + AI 助教（DeepSeek，按量计费）
+
+default:
+    @just --list
+
+# Serve the course + AI tutor, e.g.: just courses 9000
+courses port="8772":
+    uv run --no-project python tools/serve.py --port {{port}}

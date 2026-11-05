@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>连续冲四：反证、强杀与提交前反馈 · L08</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  /* 棋盘和棋子是内容（木纹盘、黑白子），不随主题反转，否则暗色主题下黑子看不见。 */
+  .bd { --stone-b: #1d1d1f; --stone-w: #fbfbf8; --board: #e3c88f; --board-line: #6b5330; width: 100%; max-width: 520px; display: block; margin: 0 auto; background: var(--board); border-radius: 6px; }
+  .bd .grid { stroke: var(--board-line); stroke-width: 1; opacity: .7; }
+  .bd .lbl { font-family: var(--mono); font-size: 10px; fill: var(--board-line); }
+  .bd .sb { fill: var(--stone-b); stroke: var(--stone-b); }
+  .bd .sw { fill: var(--stone-w); stroke: #555; stroke-width: 1; }
+  .bd .old { opacity: .78; }
+  .bd .num { font-family: var(--mono); font-size: 10px; font-weight: 700; pointer-events: none; }
+  .bd .num.onb { fill: var(--stone-w); } .bd .num.onw { fill: var(--stone-b); }
+  .bd .cand { stroke: #1565c0; stroke-width: 3; fill: none; }
+  .bd .last { stroke: #e65100; stroke-width: 3; fill: none; }
+  .bd .goal { stroke: #c62828; stroke-width: 2.5; fill: none; stroke-dasharray: 4 3; }
+  .bd .goal-x { stroke: #c62828; stroke-width: 2.5; }
+  .bd-wrap { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  .player-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13.5px; color: var(--ink-3); }
+  .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+  .msgs li.future { opacity: .25; }
+  .msgs li.now { outline: 2px solid var(--brand-2); }
+  .msgs li.skip { opacity: .45; text-decoration: line-through; }
+  .chain { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13.5px; margin: 10px 0; }
+  .chain span { padding: 3px 10px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  .chain i { color: var(--ink-3); font-style: normal; }
+  .res td.st { font-family: var(--mono); font-size: 12.5px; }
+  .res td.found { color: var(--down); font-weight: 700; }
+  .res td.inc { color: var(--note-bd); font-weight: 700; }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">两局实战暴露的问题</a></li>
+    <li><a href="#s2">连续冲四是什么</a></li>
+    <li><a href="#s3">动手看：在棋盘上走强制线路</a></li>
+    <li><a href="#s4">结果三态与预算</a></li>
+    <li><a href="#s5">一个内核，两个用途</a></li>
+    <li><a href="#s6">提交前反馈门禁</a></li>
+    <li><a href="#s7">动手看：门禁怎样拦提交</a></li>
+    <li><a href="#s8">验证了什么，没验证什么</a></li>
+    <li><a href="#s9">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L08 · 业务层与上下文</div>
+  <h1>连续冲四：反证、强杀与提交前反馈</h1>
+  <p>白皮书 v1.0 之后，L3 又加了两个确定性工具和一道提交前门禁。这一课讲清三件事：它们从哪两局实战来；搜索算什么、不算什么；门禁怎样让关键反馈赶在落子之前进入上下文。</p>
+  <div class="meta"><span>原文：L3 v2/v3 设计记录 + 代码现状勘误 §3.1–3.4</span><span>阅读约 25 分钟</span><span>含 3 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>讲出 H7 与 G10 两个实战局面各暴露了什么缺口。</li>
+    <li>说明<a class="term" href="glossary.html#continuous-four">连续冲四</a>搜索怎样生成着法、何时停、证明长什么样。</li>
+    <li>区分三种结果状态，解释为什么 <code>not-found-within-budget</code> 不等于安全。</li>
+    <li>按 <code>place_stone</code> 的真实分支顺序，判断一次提交会落子还是返回 <a class="term" href="glossary.html#needs-review">needsReview</a>。</li>
+    <li>说出这套机制验证了什么、没有证明什么。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>两局实战暴露的问题</h2>
+  <p>先说结论：一步验证只看对手下一手能不能成五。它挡不住“连续逼着走”的杀法，也发现不了自己的强杀。两局真实对局各暴露了一个缺口。</p>
+  <div class="grid-2">
+    <div class="kp"><div class="k">v2 · 防守缺口</div><div class="v">白 H7 遭到反杀</div><p>2026-10-30 人类胜局，第 21 手后白走 H7。H7 通过了一步验证。但黑可以 I7 → 白 H6 → 黑 M11 → 白 L10 → 黑 L11，得到 I11、N11 两个成五点。白棋曾保存的 H7 → 黑 I11 → 白 I8 有利分支，前提是黑棋配合。</p></div>
+    <div class="kp"><div class="k">v3 · 进攻缺口</div><div class="v">白 G10 漏掉强杀</div><p>另一局白第 14 手前，白 G10 迫黑 G8，再白 J7 形成 F11、K6 两个成五点。白实际下了防守分更高的 H6。H6 和 G10 都通过了“对手反杀”检查，这个负结果比不出进攻质量。</p></div>
+  </div>
+  <blockquote class="src">后来黑棋超时不改变这个决策时刻，也不能将 H6 标为正确。<cite>own-forcing-win.md · 实战问题</cite></blockquote>
+  <p>两次修补走的是同一条落地链。每一环都是一个具体文件：</p>
+  <div class="chain">
+    <span>实战局面</span><i>→</i><span>原则 principle-evidence / tactics</span><i>→</i><span>剧本 midgame</span><i>→</i><span>技能 check-forcing-sequences / find-forcing-win</span><i>→</i><span>确定性工具 forcing.ts</span><i>→</i><span>候选级证据 candidateReview</span><i>→</i><span>回归测试 forcing-case / missed-win-case</span>
+  </div>
+  <p>两轮都没有引入第二个模型，也没有自动代下。工具只返回证据，不推荐落点。</p>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>连续冲四是什么</h2>
+  <p>先说结论：连续冲四是一串“每步都造四”的进攻。对手每步只能堵一个点，直到进攻方同时拥有两个成五点，或直接成五。</p>
+  <p><code>forcing.ts</code> 的搜索按下面的规则走。全部计算只改棋盘副本，不碰真棋盘：</p>
+  <ol>
+    <li><b>先看能否直接成五。</b>进攻方有成五点，就以 <code>five</code> 结束。</li>
+    <li><b>再看对手的立即胜。</b>防守方有 2 个以上成五点，这条线不成立。只有 1 个时，进攻方必须先占这一点。</li>
+    <li><b>生成造四着。</b>扫描全部<a class="term" href="glossary.html#five-cell-window">五格窗口</a>。窗口里有 3 颗进攻子和 2 个空点，两个空点都是候选造四着。不用启发式排名剪枝。</li>
+    <li><b>造四后检查反杀。</b>防守方此时能先成五，这一着作废。</li>
+    <li><b>沿<a class="term" href="glossary.html#unique-block">唯一防点</a>继续。</b>只有 1 个成五点时，防守方只能堵它；其他应手下一手就输。所以只需递归这一个应手。</li>
+    <li><b>两个成五点即终点。</b>防守方无立即胜，进攻方有 ≥ 2 个成五点，返回 <code>two-winning-points</code>。</li>
+  </ol>
+  <div class="callout rule"><span class="ttl">本节核心句</span>证明覆盖防守方的每一种应手，不是一条“对手配合”的单线。这正是 H7 案例里有利单线 H7 → I11 → I8 不算数的原因。</div>
+  <div class="callout warn"><span class="ttl">范围</span>只搜连续冲四。不搜连续活三，不做完整博弈树，不求全局最佳落点。返回任意一条已证明的线路，不承诺最短或唯一。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>动手看：在棋盘上走强制线路</h2>
+  <p>下面的棋盘载入两个实战局面。选局面和候选，再点“下一步”。注意每一步的“唯一防点”，以及终点的两个成五点（红色虚线圈）。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">逐步播放：候选之后的强制线路，与对照候选</div>
+    </div>
+    <div class="demo">
+      <div class="player-bar">局面：
+        <span class="btn-group" id="d1-case">
+          <button class="btn on" data-case="h7">10-30 人类胜局（白第 22 手）</button>
+          <button class="btn" data-case="g10">G10 局面（白第 14 手）</button>
+        </span>
+      </div>
+      <div class="player-bar">候选：<span class="btn-group" id="d1-line"></span></div>
+      <div class="player-bar">
+        <button class="btn" id="d1-next">下一步</button><button class="btn" id="d1-all">播完</button><button class="btn" id="d1-reset">重来</button>
+        <label class="ctrl"><input type="checkbox" id="d1-nums"> 显示原局手数</label>
+      </div>
+      <div class="bd-wrap"><svg class="bd" id="d1-board" viewBox="0 0 470 470" role="img" aria-label="15 路棋盘"></svg></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">先在 H7 局面播完“H7（实际）”，再换“I11（改选）”对比终点。再到 G10 局面，比较“H6（实际）”和两条 G10 线路。<span class="data-note">局面与线路取自 <code>tests/fixtures/human-win-2026-10-30.json</code>、<code>missed-white-win-g10.json</code>。搜索结果、节点数由课程作者在快照上用 <code>forcing.ts</code> 默认预算实测。蓝圈 = 候选，橙圈 = 最新一手，红虚线圈 = 成五点。</span></div>
+  </div>
+  <div class="callout note"><span class="ttl">补充：为什么 G10 有两条线</span>测试固定的是 G10 → G8 → J7。默认预算搜索返回的是 G10 → G8 → G13 → G12 → F11。两条都有效，起手都是 G10。设计记录写明：测试只验证证明有效，不硬编码搜索必须输出某一条变化。</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>结果三态与预算</h2>
+  <p>先说结论：只有 <code>found-*</code> 带证明。另外两种状态都不是安全证明。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>状态</th><th>含义</th><th>不能怎样理解</th></tr>
+    <tr><td><code>found-forced-loss</code> / <code>found-forced-win</code></td><td>找到连续冲四强制线路，带 <a class="term" href="glossary.html#forcing-proof">proof</a></td><td>不是唯一胜法，也不是最短或最优</td></tr>
+    <tr><td><code>not-found-within-budget</code></td><td>指定深度内没找到</td><td>不等于安全、必胜、必和或最优；不代表没有胜法</td></tr>
+    <tr><td><code>incomplete</code></td><td>节点、时间、取消或棋钟预算不足</td><td>不得声称检查已完成</td></tr>
+  </table></div>
+  <p><a class="term" href="glossary.html#forcing-budget">搜索预算</a>有三项。默认值和上限如下：</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>预算</th><th>默认</th><th>工具参数上限</th><th>业务函数硬上限</th></tr>
+    <tr><td>造四延伸 <code>maxAttackMoves</code></td><td>3</td><td>1–4</td><td>4</td></tr>
+    <tr><td>节点 <code>maxNodes</code></td><td>6000</td><td>≤ 6000</td><td>20000</td></tr>
+    <tr><td>时间 <code>maxMs</code></td><td>200 ms</td><td>≤ 200</td><td>500</td></tr>
+  </table></div>
+  <ul>
+    <li>时间用单调时钟（<code>performance.now()</code>）。搜索开始时，以及约每 32 个节点，让出一次事件循环。这样取消、棋钟心跳和 IPC 都能运行。</li>
+    <li>工具层还把 <code>maxMs</code> 压到“距丢失当前时段 − 2 秒”以内。时间紧迫（≤ 15 秒）时 <code>maxMs</code> 为 0，结果是 <code>incomplete / clock-budget</code>。</li>
+    <li>截止后才找到的证明也报 <code>incomplete</code>，不冒充已完成。</li>
+    <li>棋钟照常扣时。检查和反馈等待不暂停、不退款。</li>
+  </ul>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">动手看：同一局面，预算不同，结论不同</div>
+    </div>
+    <div class="demo">
+      <div class="player-bar">造四延伸 maxAttackMoves：<span class="btn-group" id="d2-depth"></span></div>
+      <div class="player-bar">节点 maxNodes：<span class="btn-group" id="d2-nodes"></span>
+        <label class="ctrl"><input type="checkbox" id="d2-urgent"> 时间紧迫（maxMs = 0）</label>
+      </div>
+      <div class="tbl-wrap"><table class="tbl res" id="d2-table"></table></div>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">把节点留在 6000，把延伸从 3 调到 2：H7 的反证从“找到”变成“没找到”。再把延伸调回 3、节点调到 8：H7 仍有反证，I11 却变成 <code>incomplete</code>。<span class="data-note">数据由课程作者在快照 4f65e37 上调用 <code>checkForcingSequences</code> / <code>findOwnForcingWin</code> 实测，时间上限用默认 200 ms，这些组合都在时限内算完。“时间紧迫”一栏依据代码推出：<code>maxMs = 0</code> 时搜索在第一个节点前停止。工具层会把 <code>time-budget</code> 改名为 <code>clock-budget</code>。</span></div>
+  </div>
+  <p>设计记录给出本机测量：H7 找到反证用 8 个节点，中位约 1.29 ms、p95 约 2.89 ms；I11 预算内未发现，13 个节点，中位约 1.30 ms、p95 约 2.55 ms。这是该局面的本机测量，不是所有局面的延迟保证。</p>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>一个内核，两个用途</h2>
+  <p>先说结论：反证和强杀用同一个搜索内核 <code>searchContinuousFours</code>。区别只在“谁是进攻方”。</p>
+  <div class="vs">
+    <div><h4>对手反证（v2）</h4>
+      <ul>
+        <li>入口 <code>checkForcingSequences(position, candidate)</code>。</li>
+        <li>先用权威 <code>play</code> 落下候选，再以对手为进攻方搜索。</li>
+        <li><code>scope: opponent-continuous-four-only</code>。</li>
+        <li>工具 <a class="term" href="glossary.html#forcing-check">check_forcing_sequences</a>，第 7 个工具。</li>
+      </ul>
+    </div>
+    <div><h4>己方强杀（v3）</h4>
+      <ul>
+        <li>入口 <code>findOwnForcingWin(position)</code>。</li>
+        <li>从当前行棋方开始搜索，返回 <code>winningCandidate</code>。</li>
+        <li><code>scope: own-continuous-four-only</code>。</li>
+        <li>工具 <a class="term" href="glossary.html#own-forcing-win">find_forcing_win</a>，第 8 个工具。</li>
+      </ul>
+    </div>
+  </div>
+  <p>v3 还把强杀搜索挂到观察上。条件是普通中盘：≥ 8 手、无立即胜负、不紧迫。模型第一次调用 <code>analyze_position</code> 或 <code>evaluate_threats</code> 时，L2 自动搜索。结果放进 <code>ownForcingWin</code> 字段。模型不必先想到 G10，也不必额外调用工具。</p>
+  <ul>
+    <li>同一回合缓存结果，重复观察不重算。</li>
+    <li>自动搜索不占 16 次工具调用预算，但计算时间照常扣棋钟。</li>
+    <li>显式零预算或浅层负结果，不能抑制这次默认搜索。</li>
+    <li><code>place_stone</code> 在提交前还有一次兜底搜索（来源 <code>pre-commit</code>），不依赖提示词自觉。</li>
+  </ul>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书 v1.0 写“6 个工具”“只挂了 <code>tool_call</code> 一个扩展事件”。现在是 8 个工具（<code>gomoku.ts:11</code>），L2 还挂了 <code>pi.on('turn_start')</code> 给反馈打<a class="term" href="glossary.html#model-turn">请求序号</a>（<code>gomoku.ts:26</code>）。工具调用上限 16、请求上限 8 都没变。</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>提交前反馈门禁</h2>
+  <p>先说结论：工具算出证据还不够。证据必须在模型<strong>下一次请求</strong>之前返回，模型才算“读过”。<code>place_stone</code> 用请求序号检查这一点；不满足就返回 <code>accepted: false, needsReview: true</code>，不落子，回合不结束。</p>
+  <p>按 <code>gomoku.ts:188-242</code> 的顺序，一次 <code>place_stone</code> 依次过这几关：</p>
+  <ol>
+    <li><b>证据门禁。</b>本回合没观察过局面，抛错。</li>
+    <li><b>是否需要审查。</b>已下 ≥ 8 手、无立即胜负、不紧迫，才需要。需要审查但还没自动搜过强杀，先补搜一次（<code>pre-commit</code>）。</li>
+    <li><b>漏胜关。</b>已证明有己方强杀，而且证明是本次请求才返回的，返回 <code>unread-forced-win</code>。选了别的点又没带 <a class="term" href="glossary.html#acknowledge-missed-win">acknowledgeMissedWin</a>，返回 <code>missed-forced-win</code>。</li>
+    <li><b>反证关。</b>选的不是已读的证明起手时：没做对手反证，就当场补做并返回结果；反证是本次请求才返回的，也返回；结果是 <code>found-forced-loss</code> 或 <code>incomplete</code> 又没带 <a class="term" href="glossary.html#acknowledge-risk">acknowledgeRisk</a>，还是返回。</li>
+    <li><b>提交。</b>调用 <code>port.commit()</code>，返回 <code>accepted: true</code> 和 <code>terminate: true</code>。</li>
+  </ol>
+  <p>几条细则：</p>
+  <ul>
+    <li><b>同批预排不算已读。</b>同一条模型回复里“检查 + 提交”，检查结果的请求序号等于当前序号，所以不算读过。代码不声称能看出模型是否理解了结果。</li>
+    <li><b>两个确认参数分开。</b><code>acknowledgeRisk</code> 只确认对手反证的风险，不能绕过漏胜关。</li>
+    <li><b><a class="term" href="glossary.html#shallow-negative">浅层负结果</a>不抹正证明。</b>同一候选有过 <code>found-forced-loss</code>，门禁优先取它，后来的浅层 <code>not-found</code> 不算数。</li>
+    <li><b>不强迫额外等待的情形。</b>开局、当前立即胜负、时间紧迫。一步警告仍然只提示，不阻止合法提交，避免在已经无解的局面里循环重试。</li>
+    <li><b>只有 <code>accepted: true</code> 才结束回合。</b>所有拒绝都不改真棋盘。</li>
+  </ul>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书 §6.3 和 §7.2 第 8 条把“有风险的提交先返回 <code>needs_review</code>”写成改进建议。v2/v3 已经实现，字段名是 <code>needsReview</code>。但它只针对连续冲四：<code>validateCandidate</code> 的一步警告（如“对手下一手仍可成五”）仍然不阻止提交。</div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>动手看：门禁怎样拦提交</h2>
+  <p>下面的播放器按 <code>place_stone</code> 的真实分支顺序判定。每一步是一次工具调用；“T2”表示第 2 次模型请求。选一个场景，点“下一步”，看返回给模型的 JSON。</p>
+
+  <div class="chart-card" id="demo3">
+    <div class="chart-head">
+      <div class="chart-title">逐步播放：哪些提交会落子，哪些返回 needsReview</div>
+    </div>
+    <div class="demo">
+      <div class="player-bar">场景：<span class="btn-group" id="d3-sc"></span></div>
+      <div class="player-bar">
+        <button class="btn" id="d3-next">下一步</button><button class="btn" id="d3-all">播完</button><button class="btn" id="d3-reset">重来</button>
+      </div>
+      <div class="status-row" id="d3-status"></div>
+      <ul class="msgs" id="d3-list"></ul>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d3-out"></div></div>
+    <div class="chart-foot">先播“同批预排检查+提交”。再播“发现己方强杀却选别的点”，它要连过两关才落子。最后播“时间紧迫”：不做额外审查，直接落子。<span class="data-note">简化模型：判定函数照抄 <code>gomoku.ts:188-242</code> 的分支顺序与 <code>:34-56</code> 的自动搜索条件。搜索结果按本课第 03 节的实测填入（H7 局面：H7 found-forced-loss、I11 not-found，己方无强杀；G10 局面：己方强杀起手 G10，H6 反证 not-found）。省略了 revision 校验、16 次调用上限和棋钟扣时。JSON 只显示关键字段。</span></div>
+  </div>
+</section>
+
+<!-- ============ 8 ============ -->
+<section class="lesson-sec" id="s8">
+  <h2><span class="num">08</span>验证了什么，没验证什么</h2>
+  <p>先说结论：回归测试验证的是 Harness 的证据传递和门禁。它们不证明真实模型会下得更好。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>测试</th><th>验证了什么</th></tr>
+    <tr><td><code>forcing-case</code></td><td>H7 一步验证无警告，但强制线路成立；I11 拆掉这条杀法（只剩 N11 一个成五点）</td></tr>
+    <tr><td><code>missed-win-case</code>（7 项）</td><td>G10 迫 G8：黑其他任何应手都输；G8 后 J7：黑任何应手都挡不住；八种旋转/镜像下同样成立</td></tr>
+    <tr><td><code>forcing</code>（12 项）、<code>own-forcing</code>（7 项）</td><td>立即胜优先、对手反杀优先、跳四、长连、满盘和棋；零预算、节点/时间预算、取消、非法输入</td></tr>
+    <tr><td><code>pi-integration</code></td><td>真实 Pi SDK + 本地 SSE 替身：提交前反馈、改选、显式确认、同批不能冒充已读、浅负不抹正、紧迫跳过、迟到判负</td></tr>
+  </table></div>
+  <blockquote class="src">本地 SSE 测试验证真实 Pi Harness 的证据传递与门禁，不验证外部真实模型棋力。系统仍可能因预算、未覆盖的杀法或模型明确放弃已知胜法而漏胜；这不是全局必胜求解器。<cite>own-forcing-win.md · 验证与边界</cite></blockquote>
+  <p>还要记住三条边界：</p>
+  <ul>
+    <li>失败、取消且未提交的尝试，不会持久化为落子手记。完整工具审计不在这一轮范围内。</li>
+    <li>“reviewed”只表示反馈跨过了请求边界，不证明模型理解了它。</li>
+    <li>门禁不改写合法性、revision 或棋钟。迟到的提交照常判负。</li>
+  </ul>
+  <div class="callout note"><span class="ttl">补充：这一课在全课中的位置</span>L07 讲“把计算委派给确定性工具”。本课是它的最新一步：委派还不够，还要让结果<strong>在对的时机</strong>进入上下文。L09 讲这些证据怎样写进 <code>candidateReview</code>。</div>
+</section>
+
+<!-- ============ 9 ============ -->
+<section class="lesson-sec" id="s9">
+  <h2><span class="num">09</span>自测与速记</h2>
+  <div class="quiz" data-answer="2">
+    <div class="q">对候选 I11 的反证返回 <code>not-found-within-budget</code>。下面哪种说法正确？</div>
+    <div class="opts"><button>I11 是安全的</button><button>I11 是全局最佳落点</button><button>在指定连续冲四深度内没找到对手的强制反杀，仅此而已</button><button>检查没做完，不能提交</button></div>
+    <div class="explain">负结果不等于安全、必胜或最优，也不覆盖连续活三。“没做完”对应的是 <code>incomplete</code>。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">模型在同一条回复里调用 <code>check_forcing_sequences(I11)</code> 和 <code>place_stone(I11)</code>。结果是什么？</div>
+    <div class="opts"><button>正常落子，因为检查先执行</button><button>返回 needsReview，不落子；下一次请求再提交</button><button>两个工具都被拦截</button><button>检查被跳过，直接落子</button></div>
+    <div class="explain">检查结果的请求序号等于当前序号，门禁判定“模型还没读过”。同批预排不算已读。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">观察结果显示己方有强杀，起手 G10。模型坚持下 H6，并带上 <code>acknowledgeRisk: true</code>。结果是什么？</div>
+    <div class="opts"><button>落子 H6</button><button>自动改下 G10</button><button>抛错并结束回合</button><button>返回 missed-forced-win，不落子</button></div>
+    <div class="explain"><code>acknowledgeRisk</code> 只确认对手反证风险，不能绕过漏胜关。需要 <code>acknowledgeMissedWin: true</code>，而且 H6 还要过对手反证关。工具从不自动替换落点。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">H7 局面里，延伸 2 次时没找到反证，延伸 3 次时找到了。模型先做 3 次的检查，再做一次 2 次的复查，然后不带确认参数提交 H7。结果是什么？</div>
+    <div class="opts"><button>返回 needsReview：门禁优先取已有的 found-forced-loss</button><button>落子，因为最新一次检查是 not-found</button><button>落子，因为两次检查都读过了</button><button>报错：同一候选不能检查两次</button></div>
+    <div class="explain">较浅的负结果不能抹掉同一候选已有的正反证（<code>gomoku.ts</code> 用 <code>findLast(... 'found-forced-loss')</code> 优先取它）。坚持 H7 需要 <code>acknowledgeRisk: true</code>。</div>
+  </div>
+  <div class="quiz" data-answer="2">
+    <div class="q">下面哪项不是这套机制的目标？</div>
+    <div class="opts"><button>让关键反馈在提交前进入上下文</button><button>记录候选级证据和覆盖范围</button><button>证明真实模型的棋力提升</button><button>保持合法性和棋钟由业务层裁决</button></div>
+    <div class="explain">设计记录明确说：测试验证 Harness 的证据传递与门禁，不验证外部真实模型棋力。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>两个缺口</td><td>H7：一步验证挡不住连续冲四反杀；G10：反杀检查比不出进攻质量</td></tr>
+    <tr><td>搜索</td><td>只改副本；五格窗口生成造四着；唯一防点只走一条；两个成五点即终点</td></tr>
+    <tr><td>三态</td><td>found 带证明；not-found 不等于安全；incomplete 不得称完成</td></tr>
+    <tr><td>预算</td><td>默认 3 / 6000 / 200 ms；工具上限 1–4 / 6000 / 200；硬上限 4 / 20000 / 500</td></tr>
+    <tr><td>内核</td><td>同一个 <code>searchContinuousFours</code>；对手反证与己方强杀只换进攻方</td></tr>
+    <tr><td>门禁</td><td>观察 → 漏胜关 → 反证关 → 提交；反馈须在更早的请求返回；只有 accepted:true 才 terminate</td></tr>
+    <tr><td>边界</td><td>验证 Harness，不证明棋力；一步警告仍不阻止提交</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L09-evidence-desktop.html"><small>下一课 · L09</small>决策证据与桌面层</a>
+    <a href="L07-context-rebuild.html"><small>L07</small>上下文工程：用重建取代压缩</a>
+    <a href="L04-loop-hooks.html"><small>L04</small>双循环接入点：提交即停</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L08-forcing-search.html"></nav>
+<p class="disclaimer">原文：《L3 v2：候选的连续先手反证与提交前反馈》《L3 v3：己方强杀发现与提交前漏胜反馈》，以及课程作者整理的《弈境代码现状勘误》（对照提交 4f65e37）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---------- 共用：坐标与棋盘 ---------- */
+  const N = 15, M = 25, S = 30; // 边距、格距
+  const pt = (t) => ({ x: t.charCodeAt(0) - 65, y: 15 - Number(t.slice(1)) });
+  const px = (p) => [M + p.x * S, M + p.y * S];
+
+  function drawBoard(svg, base, extra, opt) {
+    // base：原局手（黑先交替）；extra：[{t, color, mark}]，mark = "cand" | "line"
+    let h = "";
+    for (let i = 0; i < N; i++) {
+      h += '<line class="grid" x1="' + M + '" y1="' + (M + i * S) + '" x2="' + (M + 14 * S) + '" y2="' + (M + i * S) + '"/>';
+      h += '<line class="grid" x1="' + (M + i * S) + '" y1="' + M + '" x2="' + (M + i * S) + '" y2="' + (M + 14 * S) + '"/>';
+      h += '<text class="lbl" x="' + (M + i * S) + '" y="' + (M + 14 * S + 17) + '" text-anchor="middle">' + String.fromCharCode(65 + i) + "</text>";
+      h += '<text class="lbl" x="' + (M - 14) + '" y="' + (M + i * S + 3) + '" text-anchor="middle">' + (15 - i) + "</text>";
+    }
+    base.forEach((t, i) => {
+      const [x, y] = px(pt(t)), black = i % 2 === 0;
+      h += '<circle class="' + (black ? "sb" : "sw") + ' old" cx="' + x + '" cy="' + y + '" r="12"/>';
+      if (opt.nums) h += '<text class="num ' + (black ? "onb" : "onw") + '" x="' + x + '" y="' + (y + 3.5) + '" text-anchor="middle">' + (i + 1) + "</text>";
+    });
+    extra.forEach((e, k) => {
+      const [x, y] = px(pt(e.t)), black = e.color === 1;
+      h += '<circle class="' + (black ? "sb" : "sw") + '" cx="' + x + '" cy="' + y + '" r="12"/>';
+      h += '<text class="num ' + (black ? "onb" : "onw") + '" x="' + x + '" y="' + (y + 3.5) + '" text-anchor="middle">' + (e.label || "") + "</text>";
+      if (e.mark === "cand") h += '<circle class="cand" cx="' + x + '" cy="' + y + '" r="15"/>';
+      if (k === extra.length - 1 && e.mark !== "cand") h += '<circle class="last" cx="' + x + '" cy="' + y + '" r="15"/>';
+    });
+    (opt.goals || []).forEach((t) => {
+      const [x, y] = px(pt(t));
+      h += '<circle class="goal" cx="' + x + '" cy="' + y + '" r="12"/><line class="goal-x" x1="' + (x - 5) + '" y1="' + (y - 5) + '" x2="' + (x + 5) + '" y2="' + (y + 5) + '"/><line class="goal-x" x1="' + (x + 5) + '" y1="' + (y - 5) + '" x2="' + (x - 5) + '" y2="' + (y + 5) + '"/>';
+    });
+    svg.innerHTML = h;
+  }
+
+  /* ---------- 1. 棋盘播放 ---------- */
+  // 数据核对自 tests/fixtures/*.json、tests/forcing-case.test.ts、tests/missed-win-case.test.ts，
+  // 以及课程作者用 forcing.ts 默认预算实测的输出。
+  const CASES = {
+    h7: {
+      base: ["H8", "H9", "H10", "G9", "I9", "G7", "J8", "G11", "J10", "G8", "G10", "G6", "G5", "I10", "K11", "L12", "J11", "J9", "F7", "K7", "K9"],
+      intro: "第 21 手后，白棋（○）行棋。一步验证对 H7 没有任何警告。",
+      lines: {
+        actual: { label: "H7（实际）", cand: "H7", color: 2,
+          steps: [["I7", "黑造四。白没有立即胜，唯一防点是 H6。"], ["H6", "白被迫堵 H6。"], ["M11", "黑再造四。唯一防点是 L10。"], ["L10", "白被迫堵 L10。"], ["L11", "黑造出活四。"]],
+          goals: ["I11", "N11"], end: "终点：黑同时有 I11、N11 两个成五点，白堵不全。\n反证结果：found-forced-loss，8 个节点，terminal = two-winning-points。\n这条线覆盖白的每一种应手：每一步白要么堵唯一防点，要么下一手输。" },
+        alt: { label: "I11（改选）", cand: "I11", color: 2,
+          steps: [["I7", "黑仍走同样的造四。唯一防点 H6。"], ["H6", "白堵 H6。"], ["M11", "黑造四。唯一防点 L10。"], ["L10", "白堵 L10。"], ["L11", "黑再走 L11。"]],
+          goals: ["N11"], end: "终点：I11 已被白占，黑只剩 N11 一个成五点，白可以堵住。\n反证结果：not-found-within-budget，13 个节点。\n注意：这只说明 I11 拆掉了这条杀法，不是全局安全证明。" },
+        coop: { label: "H7 → I11 → I8（有利单线）", cand: "H7", color: 2,
+          steps: [["I11", "假设黑走 I11。"], ["I8", "白走 I8，局面对白有利。"]],
+          goals: [], end: "这是白棋曾保存的有利分支。它的前提是黑配合下 I11。\n黑有 I7 的连续冲四，不会配合。一条自选应手的单线不能反驳强制线路。" },
+      },
+    },
+    g10: {
+      base: ["H8", "H9", "H10", "G9", "I9", "G7", "J8", "G11", "K7", "L6", "I7", "I8", "K9"],
+      intro: "第 13 手后，白棋（○）行棋。双方都没有立即成五点。",
+      lines: {
+        actual: { label: "H6（实际）", cand: "H6", color: 2, steps: [],
+          goals: [], end: "白实际下了防守分更高的 H6。\n对手反证：not-found-within-budget（5 个节点），H6 通过了反杀检查。\n但这个负结果比不出进攻质量：白在这里有一条强杀，H6 错过了它。设计记录强调：这不证明 H6 会输。" },
+        fixture: { label: "G10 → G8 → J7（测试固定）", cand: "G10", color: 2,
+          steps: [["G8", "G10 不是立即成五，但造成一个成五点。黑没有立即胜，唯一防点是 G8。"], ["J7", "白 J7 造出两个成五点。"]],
+          goals: ["F11", "K6"], end: "终点：白有 F11、K6 两个成五点。\n测试穷举了黑在两步中的全部合法应手，并在八种旋转/镜像下复验。" },
+        search: { label: "G10（默认预算搜索返回）", cand: "G10", color: 2,
+          steps: [["G8", "黑唯一防点 G8。"], ["G13", "白再造四。唯一防点是 G12。"], ["G12", "黑被迫堵 G12。"], ["F11", "白造出两个成五点。"]],
+          goals: ["E12", "J7"], end: "终点：白有 E12、J7 两个成五点。\n己方强杀结果：found-forced-win，8 个节点，winningCandidate = G10。\n这条线与测试固定的线不同，但同样有效，起手同样是 G10。" },
+      },
+    },
+  };
+  let cs = "h7", ln = "actual", st = 0;
+  const svg1 = CL.$("#d1-board");
+  function lineButtons() {
+    const L = CASES[cs].lines;
+    CL.$("#d1-line").innerHTML = Object.keys(L).map((k) => '<button class="btn' + (k === ln ? " on" : "") + '" data-ln="' + k + '">' + CL.esc(L[k].label) + "</button>").join("");
+    CL.$$("#d1-line [data-ln]").forEach((b) => b.addEventListener("click", () => { ln = b.dataset.ln; st = 0; lineButtons(); draw1(); }));
+  }
+  function draw1() {
+    const C = CASES[cs], L = C.lines[ln];
+    const extra = [{ t: L.cand, color: L.color, mark: "cand", label: "★" }];
+    let color = L.color;
+    for (let i = 0; i < st; i++) { color = 3 - color; extra.push({ t: L.steps[i][0], color, label: String(i + 1) }); }
+    const done = st === L.steps.length;
+    drawBoard(svg1, C.base, extra, { nums: CL.$("#d1-nums").checked, goals: done ? L.goals : [] });
+    let msg = C.intro + "\n候选 " + L.cand + "（★）。已走 " + st + " / " + L.steps.length + " 步。";
+    if (st > 0) msg += "\n第 " + st + " 步 " + L.steps[st - 1][0] + "：" + L.steps[st - 1][1];
+    if (done) msg += "\n" + L.end;
+    CL.$("#d1-out").textContent = msg;
+  }
+  CL.$$("#d1-case [data-case]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d1-case [data-case]").forEach((x) => x.classList.toggle("on", x === b));
+    cs = b.dataset.case; ln = "actual"; st = 0; lineButtons(); draw1();
+  }));
+  CL.$("#d1-next").addEventListener("click", () => { st = Math.min(st + 1, CASES[cs].lines[ln].steps.length); draw1(); });
+  CL.$("#d1-all").addEventListener("click", () => { st = CASES[cs].lines[ln].steps.length; draw1(); });
+  CL.$("#d1-reset").addEventListener("click", () => { st = 0; draw1(); });
+  CL.$("#d1-nums").addEventListener("change", draw1);
+  lineButtons(); draw1();
+
+  /* ---------- 2. 预算表（实测数据） ---------- */
+  // [H7 反证, I11 反证, G10 局面己方强杀]：[status, reason, nodes]
+  const R = {"1/4":[["incomplete","node-budget",4],["incomplete","node-budget",4],["incomplete","node-budget",4]],"1/8":[["not-found-within-budget","depth-exhausted",5],["not-found-within-budget","depth-exhausted",5],["not-found-within-budget","depth-exhausted",5]],"1/20":[["not-found-within-budget","depth-exhausted",5],["not-found-within-budget","depth-exhausted",5],["not-found-within-budget","depth-exhausted",5]],"1/6000":[["not-found-within-budget","depth-exhausted",5],["not-found-within-budget","depth-exhausted",5],["not-found-within-budget","depth-exhausted",5]],
+    "2/4":[["incomplete","node-budget",4],["incomplete","node-budget",4],["incomplete","node-budget",4]],"2/8":[["incomplete","node-budget",8],["incomplete","node-budget",8],["incomplete","node-budget",8]],"2/20":[["not-found-within-budget","depth-exhausted",10],["not-found-within-budget","depth-exhausted",9],["found-forced-win","continuous-four",10]],"2/6000":[["not-found-within-budget","depth-exhausted",10],["not-found-within-budget","depth-exhausted",9],["found-forced-win","continuous-four",10]],
+    "3/4":[["incomplete","node-budget",4],["incomplete","node-budget",4],["incomplete","node-budget",4]],"3/8":[["found-forced-loss","continuous-four",8],["incomplete","node-budget",8],["found-forced-win","continuous-four",8]],"3/20":[["found-forced-loss","continuous-four",8],["not-found-within-budget","depth-exhausted",13],["found-forced-win","continuous-four",8]],"3/6000":[["found-forced-loss","continuous-four",8],["not-found-within-budget","depth-exhausted",13],["found-forced-win","continuous-four",8]],
+    "4/4":[["incomplete","node-budget",4],["incomplete","node-budget",4],["incomplete","node-budget",4]],"4/8":[["incomplete","node-budget",8],["incomplete","node-budget",8],["incomplete","node-budget",8]],"4/20":[["found-forced-loss","continuous-four",10],["not-found-within-budget","depth-exhausted",13],["found-forced-win","continuous-four",12]],"4/6000":[["found-forced-loss","continuous-four",10],["not-found-within-budget","depth-exhausted",13],["found-forced-win","continuous-four",12]]};
+  const ROWS = ["H7 局面 · 对手反证 H7", "H7 局面 · 对手反证 I11", "G10 局面 · 己方强杀"];
+  let dep = 3, nod = 6000;
+  function grp(sel, vals, cur, set) {
+    CL.$(sel).innerHTML = vals.map((v) => '<button class="btn' + (v === cur ? " on" : "") + '" data-v="' + v + '">' + v + (v === 3 && sel === "#d2-depth" || v === 6000 ? "（默认）" : "") + "</button>").join("");
+    CL.$$(sel + " [data-v]").forEach((b) => b.addEventListener("click", () => { set(+b.dataset.v); grp(sel, vals, +b.dataset.v, set); draw2(); }));
+  }
+  function draw2() {
+    const urgent = CL.$("#d2-urgent").checked;
+    const rows = urgent ? [0, 1, 2].map(() => ["incomplete", "clock-budget", 0]) : R[dep + "/" + nod];
+    CL.$("#d2-table").innerHTML = "<tr><th>检查</th><th>status</th><th>reason</th><th>节点</th></tr>" + rows.map((r, i) =>
+      "<tr><td>" + ROWS[i] + '</td><td class="st ' + (r[0].startsWith("found") ? "found" : r[0] === "incomplete" ? "inc" : "") + '">' + r[0] + '</td><td class="st">' + r[1] + '</td><td class="st">' + r[2] + "</td></tr>").join("");
+    let msg = "预算：maxAttackMoves = " + dep + "，maxNodes = " + nod + (urgent ? "，maxMs = 0" : "") + "。";
+    if (urgent) msg += "\n时间紧迫：搜索在第一个节点前停止，三项都是 incomplete。工具层把 reason 记为 clock-budget。门禁也不强迫这一手做审查。";
+    else if (rows[0][0] === "not-found-within-budget" && dep < 3) msg += "\nH7 在这个深度“没找到反证”。可它在 3 次延伸时有反证。浅层负结果不是安全证明。";
+    else if (rows.some((r) => r[0] === "incomplete")) msg += "\n节点预算不够，结果是 incomplete。不得声称检查已完成。";
+    else msg += "\n预算充足：H7 有反证；I11 没找到反证；G10 局面找到己方强杀。";
+    CL.$("#d2-out").textContent = msg;
+  }
+  grp("#d2-depth", [1, 2, 3, 4], dep, (v) => (dep = v));
+  grp("#d2-nodes", [4, 8, 20, 6000], nod, (v) => (nod = v));
+  CL.$("#d2-urgent").addEventListener("change", draw2);
+  draw2();
+
+  /* ---------- 3. 门禁播放器 ---------- */
+  // ctx：局面事实与搜索结果（按第 03 节实测）。turns：每次模型请求里的工具调用。
+  const H7CTX = { moves: 21, immediate: false, urgent: false, own: { status: "not-found-within-budget" }, forcing: { H7: "found-forced-loss", I11: "not-found-within-budget" }, shallow: { H7: "not-found-within-budget" } };
+  const G10CTX = { moves: 13, immediate: false, urgent: false, own: { status: "found-forced-win", win: "G10" }, forcing: { H6: "not-found-within-budget", G10: "not-found-within-budget" }, shallow: {} };
+  const SC = [
+    { k: "plain", label: "直接提交未检查的候选", ctx: H7CTX, turns: [[{ t: "observe" }], [{ t: "place", c: "H7" }], [{ t: "place", c: "I11" }], [{ t: "place", c: "I11" }]] },
+    { k: "batch", label: "同批预排检查+提交", ctx: H7CTX, turns: [[{ t: "observe" }], [{ t: "check", c: "I11" }, { t: "place", c: "I11" }], [{ t: "place", c: "I11" }]] },
+    { k: "risk", label: "读过败势仍坚持 H7", ctx: H7CTX, turns: [[{ t: "observe" }], [{ t: "check", c: "H7" }], [{ t: "place", c: "H7" }], [{ t: "place", c: "H7", risk: true }]] },
+    { k: "shallow", label: "浅层复查想洗掉反证", ctx: H7CTX, turns: [[{ t: "observe" }], [{ t: "check", c: "H7" }], [{ t: "check", c: "H7", shallow: true }], [{ t: "place", c: "H7" }]] },
+    { k: "missed", label: "发现己方强杀却选别的点", ctx: G10CTX, turns: [[{ t: "observe" }], [{ t: "place", c: "H6" }], [{ t: "place", c: "H6", missed: true }], [{ t: "place", c: "H6", missed: true }]] },
+    { k: "wrongack", label: "用 acknowledgeRisk 绕漏胜", ctx: G10CTX, turns: [[{ t: "observe" }], [{ t: "place", c: "H6", risk: true }]] },
+    { k: "unread", label: "同批观察+提交证明起手", ctx: G10CTX, turns: [[{ t: "observe" }, { t: "place", c: "G10" }], [{ t: "place", c: "G10" }]] },
+    { k: "urgent", label: "时间紧迫", ctx: Object.assign({}, H7CTX, { urgent: true }), turns: [[{ t: "observe" }], [{ t: "place", c: "H7" }]] },
+  ];
+  function simulate(s) {
+    const ctx = s.ctx, own = [], checks = [], steps = [];
+    let observed = false, committed = false;
+    const hasAuto = () => own.some((c) => c.source !== "explicit-tool" || c.status === "found-forced-win");
+    const searchOwn = (source, T) => { const c = { id: "own-win-" + (own.length + 1), source, status: ctx.own.status, win: ctx.own.win, turn: T }; own.push(c); return c; };
+    const ownCheck = () => own.find((c) => c.status === "found-forced-win") || own[own.length - 1];
+    const review = (cand, source, T, shallow) => { const c = { id: "forcing-" + (checks.length + 1), cand, source, status: shallow ? ctx.shallow[cand] : ctx.forcing[cand], turn: T, depth: shallow ? 2 : 3 }; checks.push(c); return c; };
+    const ownJson = (c) => c && { id: c.id, source: c.source, status: c.status, winningCandidate: c.win, returnedOnTurn: c.turn };
+    const chkJson = (c) => ({ id: c.id, candidate: c.cand, source: c.source, status: c.status, maxAttackMoves: c.depth, returnedOnTurn: c.turn });
+    s.turns.forEach((calls, ti) => {
+      const T = ti + 1;
+      calls.forEach((call) => {
+        if (committed) { steps.push({ T, call, skip: true, text: "同批剩余工具被 abort() 跳过", reply: null }); return; }
+        let reply, verdict, cls = "slow", stone = false;
+        if (call.t === "observe") {
+          observed = true;
+          let note = "";
+          if (!hasAuto() && ctx.moves >= 8 && !ctx.immediate && !ctx.urgent) { searchOwn("observe", T); note = "自动搜索己方强杀"; } else if (ctx.urgent) note = "时间紧迫，不自动搜索";
+          reply = { ownForcingWin: ownJson(ownCheck()) || null };
+          verdict = note || "已观察"; cls = "fast";
+        } else if (call.t === "check") {
+          const c = review(call.c, "explicit-tool", T, call.shallow);
+          reply = { check: chkJson(c), limitation: "仅检查对手连续冲四；未发现或未完成都不是安全证明。" };
+          verdict = c.status; cls = "fast";
+        } else {
+          const cand = call.c;
+          if (!observed) { reply = { isError: true, text: "请先调用 analyze_position 或 evaluate_threats" }; verdict = "抛错"; cls = "act"; }
+          else {
+            const needsReview = ctx.moves >= 8 && !ctx.immediate && !ctx.urgent;
+            if (needsReview && !hasAuto()) searchOwn("pre-commit", T);
+            const o = ownCheck(), proven = o && o.status === "found-forced-win";
+            let done = false;
+            if (!ctx.immediate && !ctx.urgent && proven && (o.turn >= T || (cand !== o.win && !call.missed))) {
+              reply = { accepted: false, needsReview: true, reason: cand === o.win ? "unread-forced-win" : "missed-forced-win", candidate: cand, ownWinCheck: ownJson(o) };
+              verdict = "needsReview · " + reply.reason; cls = "act"; done = true;
+            }
+            const selects = proven && o.turn < T && cand === o.win;
+            if (!done) {
+              let c = checks.filter((x) => x.cand === cand && x.status === "found-forced-loss").pop() || checks.filter((x) => x.cand === cand).pop();
+              if (needsReview && !selects) {
+                if (!c) { c = review(cand, "pre-commit", T); reply = { accepted: false, needsReview: true, check: chkJson(c) }; verdict = "needsReview · 补做反证"; cls = "act"; done = true; }
+                else if (c.turn >= T || (c.status !== "not-found-within-budget" && !call.risk)) { reply = { accepted: false, needsReview: true, check: chkJson(c) }; verdict = "needsReview · " + (c.turn >= T ? "反证本请求才返回" : "需 acknowledgeRisk"); cls = "act"; done = true; }
+              }
+              if (!done) {
+                const reviewed = c && c.turn < T;
+                const coverage = selects ? "own-forcing-proof" : reviewed ? (c.status !== "incomplete" ? "bounded-refutation" : "incomplete-refutation") : "not-compared";
+                reply = { accepted: true, coordinate: cand, terminate: true, trace: { coverage,
+                  forcingReview: reviewed ? "reviewed" : ctx.immediate ? "not-required-immediate" : ctx.urgent ? "skipped-time-pressure" : "not-checked",
+                  ownWinReview: o && o.turn < T ? "reviewed" : ctx.urgent ? "skipped-time-pressure" : ctx.immediate ? "not-required-immediate" : "not-checked",
+                  declinedProvenWin: !!(proven && o.turn < T && cand !== o.win && call.missed),
+                  acknowledged: !!(reviewed && call.risk && c.status !== "not-found-within-budget") } };
+                verdict = "accepted · 落子"; cls = "fast"; stone = true; committed = true;
+              }
+            }
+          }
+        }
+        const args = call.t === "observe" ? "evaluate_threats()" : call.t === "check" ? "check_forcing_sequences(" + call.c + (call.shallow ? ", maxAttackMoves: 2" : "") + ")" :
+          "place_stone(" + call.c + (call.risk ? ", acknowledgeRisk" : "") + (call.missed ? ", acknowledgeMissedWin" : "") + ")";
+        steps.push({ T, call, text: args, reply, verdict, cls, stone, own: own.length, checks: checks.length });
+      });
+    });
+    return steps;
+  }
+  let si = 0, step3 = 0, steps3 = simulate(SC[0]);
+  CL.$("#d3-sc").innerHTML = SC.map((s, i) => '<button class="btn' + (i ? "" : " on") + '" data-i="' + i + '">' + CL.esc(s.label) + "</button>").join("");
+  function draw3() {
+    CL.$("#d3-list").innerHTML = steps3.map((e, i) => '<li class="' + (e.skip ? "skip" : e.cls) + (i >= step3 ? " future" : "") + (i === step3 - 1 ? " now" : "") + '"><span class="src">T' + e.T + "</span><span>" + CL.esc(e.text) + '</span><span class="verdict">' + (i < step3 ? CL.esc(e.skip ? "跳过" : e.verdict) : "") + "</span></li>").join("");
+    const seen = steps3.slice(0, step3), last = seen[seen.length - 1];
+    const stone = seen.some((e) => e.stone), turn = last ? last.T : 0, rej = seen.filter((e) => e.reply && e.reply.needsReview).length;
+    const ev = [...seen].reverse().find((e) => !e.skip) || { own: 0, checks: 0 };
+    CL.$("#d3-status").innerHTML =
+      '<span class="pill">modelTurn：' + turn + "</span>" +
+      '<span class="pill ' + (rej ? "slow" : "") + '">needsReview：' + rej + " 次</span>" +
+      '<span class="pill">证据：强杀检查 ' + ev.own + " · 反证 " + ev.checks + "</span>" +
+      '<span class="pill ' + (stone ? "hot" : "") + '">棋盘：' + (stone ? "已落子" : "未落子") + "</span>" +
+      '<span class="pill ' + (stone ? "hot" : "") + '">terminate：' + (stone ? "是" : "否") + "</span>";
+    let msg = "已播放 " + step3 + " / " + steps3.length + " 步。";
+    if (last) msg += "\n" + (last.skip ? "这一步没有执行：提交成功后，L1 的 abort() 跳过同批剩余工具。" : "返回给模型：\n" + JSON.stringify(last.reply, null, 1).replace(/\n\s*/g, " "));
+    if (step3 === steps3.length) {
+      const sc = SC[si].k;
+      const tail = { plain: "H7 被拦下并补做反证（found）。改选 I11 也要等一次请求，第 4 次请求才落子。",
+        batch: "同批的检查返回在第 2 次请求，提交也在第 2 次请求，所以不算读过。第 3 次请求才落子。",
+        risk: "读过败势后，不带确认参数仍被拦下。带上 acknowledgeRisk 才落子，记录里 acknowledged = true。",
+        shallow: "第二次浅层检查返回 not-found，但门禁优先取已有的 found-forced-loss。H7 仍被拦下，没有落子。",
+        missed: "要连过两关：先用 acknowledgeMissedWin 过漏胜关，再等 H6 的反证跨过一次请求。记录里 declinedProvenWin = true。",
+        wrongack: "acknowledgeRisk 不能代替 acknowledgeMissedWin，返回 missed-forced-win，没有落子。",
+        unread: "同批观察出的证明在当前请求才返回，所以先返回 unread-forced-win。下一次请求选证明起手 G10，不必再做对手反证，coverage = own-forcing-proof。",
+        urgent: "时间紧迫：观察不自动搜索，提交不要求审查，直接落子。记录如实写 skipped-time-pressure，没有假装检查过。" }[sc];
+      msg += "\n" + tail;
+    }
+    CL.$("#d3-out").textContent = msg;
+  }
+  CL.$$("#d3-sc [data-i]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d3-sc [data-i]").forEach((x) => x.classList.toggle("on", x === b)); si = +b.dataset.i; steps3 = simulate(SC[si]); step3 = 0; draw3();
+  }));
+  CL.$("#d3-next").addEventListener("click", () => { step3 = Math.min(step3 + 1, steps3.length); draw3(); });
+  CL.$("#d3-all").addEventListener("click", () => { step3 = steps3.length; draw3(); });
+  CL.$("#d3-reset").addEventListener("click", () => { step3 = 0; draw3(); });
+  draw3();
+});
+</script>
+</body>
+</html>

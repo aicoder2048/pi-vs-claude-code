@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知识包、两级路由与信号契约 · L06</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .ctrl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 18px; margin-bottom: 10px; font-size: 13.5px; color: var(--ink-2); }
+  .ctrl-grid label { display: flex; align-items: center; gap: 8px; }
+  .ctrl-grid input[type=range] { flex: 1; min-width: 0; }
+  .map-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; font-size: 13.5px; color: var(--ink-3); }
+  .rules { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; }
+  .rules li { display: grid; grid-template-columns: 2.2em minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+  .rules li .n { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+  .rules li .r { font-size: 12.5px; font-weight: 600; white-space: nowrap; color: var(--ink-3); }
+  .rules li.skip { opacity: .45; }
+  .rules li.hit { border-color: var(--rule-bd); background: var(--rule-bg); }
+  .rules li.hit .r { color: var(--rule-bd); }
+  .json { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; overflow-x: auto; white-space: pre; margin: 0; }
+  .json .jk { cursor: pointer; border-radius: 4px; padding: 0 2px; color: var(--brand); }
+  .json .jk:hover { outline: 1px solid var(--brand-2); }
+  .json .jk.fact { background: var(--tip-bg); }
+  .json .jk.heur { background: var(--note-bg); }
+  .json .jk.proj { background: var(--warn-bg, var(--note-bg)); }
+  .json .jk.meta { background: var(--surface); }
+  .json .jk.dim { opacity: .35; background: none; }
+  .json .jk.sel { outline: 2px solid var(--rule-bd); }
+  .tree { font-family: var(--mono); font-size: 13px; line-height: 1.55; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; overflow-x: auto; white-space: pre; }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">四类知识，四种载体</a></li>
+    <li><a href="#s2">知识包：15 个条目</a></li>
+    <li><a href="#s3">两级路由</a></li>
+    <li><a href="#s4">动手看：宿主路由器</a></li>
+    <li><a href="#s5">信号契约</a></li>
+    <li><a href="#s6">动手看：拆开一份信号</a></li>
+    <li><a href="#s7">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L06 · 业务层与上下文</div>
+  <h1>知识包、两级路由与信号契约</h1>
+  <p>L3 决定什么进上下文、进多少、以什么形式进。这一课看三件事：知识按可信程度放在哪里；谁来挑本手要用的知识；模型实际看到的决策信号长什么样。</p>
+  <div class="meta"><span>原文：白皮书 §4.1–4.4 + 代码现状勘误 §3.5、§3.7</span><span>阅读约 20 分钟</span><span>含 2 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>说出<a class="term" href="glossary.html#knowledge-carriers">四类知识的四种载体</a>，以及各自的权威性。</li>
+    <li>说出<a class="term" href="glossary.html#knowledge-pack">知识包</a>的 15 个条目怎样分组，以及它为什么不走 Pi 的技能机制。</li>
+    <li>按 <a class="term" href="glossary.html#turn-guidance">turnGuidance</a> 的优先级，判断一个局面会选中哪个<a class="term" href="glossary.html#playbook">剧本</a>。</li>
+    <li>区分<a class="term" href="glossary.html#host-routing">宿主路由</a>和<a class="term" href="glossary.html#model-routing">模型路由</a>的分工。</li>
+    <li>读懂<a class="term" href="glossary.html#signal-contract">信号契约</a>的每个字段，指出哪些是事实、哪些是启发式、哪些是投影。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>四类知识，四种载体</h2>
+  <p>先说结论：弈境把知识按可信程度分成四类，每类放在不同的载体里。越可信的知识，越靠近代码。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>类别</th><th>例子</th><th>载体</th><th>权威性</th></tr>
+    <tr><td>硬规则</td><td>合法性、胜负、计时、一次提交</td><td><code>rules.ts</code>、<code>clock.ts</code>、<code>GameService</code></td><td>代码裁决，提示词无法改写</td></tr>
+    <tr><td>确定性事实</td><td>全盘所有立即成五点、对手立即成五点、一步不可防</td><td><code>decision.ts</code> 的 <code>positionSignals().facts</code></td><td>扫描全部空点，可以复算</td></tr>
+    <tr><td>启发式</td><td>五格窗口棋形、双三/双四标签、候选分数</td><td><code>tactics.ts</code> 的 <code>analyze()</code></td><td>明确标注“不是胜率、不是必胜证明”</td></tr>
+    <tr><td>流程知识 / 专家经验</td><td>原则、剧本、技能</td><td><code>knowledge/**/*.md</code></td><td>只是指导，不能改变规则</td></tr>
+  </table></div>
+  <p>三个要点：</p>
+  <ul>
+    <li><b>数据</b>是权威棋谱 <code>position.moves</code> 和逐手评估 <code>evaluations</code>。它们存在 <code>GameState</code> 里，每手全量重放。</li>
+    <li><b>领域计算</b>由 <code>analyze()</code> 完成：对每个空点、四个方向计算五格窗口。<code>positionSignals()</code> 再把结果分成 <code>facts</code>、<code>priority</code>、<code>heuristics</code> 三段。事实和启发式在数据结构层面就分开了。</li>
+    <li><b>专家经验</b>是剧本和原则。重构文档承认“没有开局定式数据库”。开局剧本只写了“中央、联络、空间”这类偏好。</li>
+  </ul>
+  <div class="callout rule"><span class="ttl">本节核心句</span>规则在代码里，事实在信号里，经验在 Markdown 里。三者的可信度在数据结构里显式标注。</div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>知识包：15 个条目</h2>
+  <p>知识包放在 <code>src/business/knowledge/</code>。按代码现状，它有 15 个条目，版本是 <code>gomoku-knowledge/v3</code>。</p>
+<div class="tree">src/business/knowledge/
+├── SKILL.md                      gomoku-coach：每回合入口（observe / compare / verify / commit）
+├── principles/                   5 条原则（索引始终可见）
+│   ├── principle-rules/          只按自由五子棋裁决：无禁手，长连也胜
+│   ├── principle-evidence/       一步安全不等于战术安全；有界未发现不是安全证明
+│   ├── principle-tactics/        先处理即时胜负，再找己方强杀；攻击计划要接受反证
+│   ├── principle-time/           网络与工具都计时；时间紧时缩短探索
+│   └── principle-commit/         只提交当前 revision 的一子；验证在提交之前
+├── playbooks/                    4 个剧本（宿主每手选 1 个，全文注入）
+│   └── opening.md  midgame.md  endgame.md  time-pressure.md
+└── skills/                       5 项技能（按需读取）
+    ├── evaluate-threats/  check-legality/  verify-board/
+    └── check-forcing-sequences/  find-forcing-win/      ← v2、v3 新增</div>
+  <p>每个条目写成同一种格式：触发条件 → 步骤 → 证据 → 局限。原则和技能还带 <code>name</code>、<code>description</code> 两个 frontmatter 字段，与 Pi 和 Claude 的技能格式兼容。下面是 <code>playbooks/time-pressure.md</code> 的摘录：</p>
+  <blockquote class="src">触发：投影快照距丢失当前读秒或包干耗尽不超过 15 秒。……<br>1. observe：用一次 evaluate_threats 或 analyze_position 获取即时事实。先自身立即胜，再对手立即胜。<br>……<br>证据：分析 + 自动提交前验证。未调用试算会以时间预算为由记录 skipped。<cite>knowledge/playbooks/time-pressure.md</cite></blockquote>
+  <p>15 个条目都登记在 <code>decision.ts:8-24</code> 的 <code>KNOWLEDGE_ITEMS</code> 里，每条有 ID、文件和一句话描述。这张表同时是三样东西：读取<b>白名单</b>、模型看到的<b>索引</b>、工具参数的 <b>schema 枚举</b>。</p>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书 §4.2 写的是 13 个条目、3 项技能、版本 <code>gomoku-knowledge/v1</code>。现在是 15 个条目、5 项技能、版本 v3。v2 加了 <code>check-forcing-sequences</code>，v3 加了 <code>find-forcing-win</code>（<code>decision.ts:7-24</code>）。入口 <code>SKILL.md</code> 的 compare 和 commit 步骤也改写了，加入了 <code>ownForcingWin</code> 和两个确认参数（L08 讲）。</div>
+  <h3>为什么不走 Pi 的技能机制</h3>
+  <p>这些文件借用了 SKILL.md 的<b>格式</b>，但不经过 Pi 的技能机制加载。<code>PiDriver</code> 显式设置了 <code>noSkills: true</code>（<code>pi-driver.ts:50</code>）。加载和路由完全由宿主控制。原因有两个：</p>
+  <ol>
+    <li>Pi 的技能机制要求模型用 <code>read</code> 或 <code>bash</code> 按路径读文件。弈境刻意不开放任何文件系统工具。</li>
+    <li>不从工作目录发现技能，就能防止用户或项目目录里的同名技能混进来。</li>
+  </ol>
+  <div class="callout note"><span class="ttl">补充：格式兼容有什么用</span>格式一致，人读起来方便，以后要移植到别的 harness 也容易。但“格式兼容”不等于“加载方式相同”。在弈境里，一个条目进不进上下文，只由宿主代码和白名单决定。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>两级路由</h2>
+  <p>先说结论：知识的路由分两级，两级都不是斜杠命令。能用代码确定的，由代码路由；需要判断的，交给模型，但只能在白名单里选。</p>
+  <p>弈境没有斜杠命令。它设了 <code>noPromptTemplates: true</code>，也没有 <code>registerCommand</code>。原因很简单：没有人类在和模型聊天。</p>
+  <div class="grid-2">
+    <div class="kp"><div class="k">第一级 · Who = 代码</div><div class="v">宿主路由</div><p><code>turnGuidance(state, now)</code> 是纯函数（<code>decision.ts:99-116</code>）。每手开始时调用一次，选出 1 个剧本。选中的剧本全文进系统提示词。</p></div>
+    <div class="kp"><div class="k">第二级 · Who = LLM</div><div class="v">模型路由</div><p>模型看到 15 个条目的一句话索引，自己决定调用 <code>read_knowledge('verify-board')</code> 之类。可以发生在 run 内循环的任意 turn。</p></div>
+  </div>
+  <p>宿主路由的优先级（<code>decision.ts:108-110</code>）：</p>
+  <ol>
+    <li>已终局：不选剧本，不启动 Agent。</li>
+    <li>时间紧迫（距丢失当前时段 ≤ 15 秒）：<code>time-pressure</code>。</li>
+    <li>任一方有立即成五点（<code>priority</code> 不是 <code>develop</code>）：<code>endgame</code>。</li>
+    <li>已下不足 8 手：<code>opening</code>。</li>
+    <li>其余：<code>midgame</code>。</li>
+  </ol>
+  <p>注意 <code>endgame</code> 的含义。它由<b>事实</b>触发，不按手数判断“进入终盘”。前 8 手里出现冲四，也会选 <code>endgame</code>（<code>tests/decision.test.ts:76</code>）。</p>
+  <p>模型路由有两道白名单：</p>
+  <ul>
+    <li><code>read_knowledge</code> 的参数 <code>id</code> 在 schema 里是 15 个字面量的 <code>Union</code>（<code>gomoku.ts:115</code>）。参数校验阶段就会挡住文件路径。</li>
+    <li>读取器 <code>readKnowledge()</code> 再用 <code>Object.hasOwn</code> 检查一次（<code>knowledge-loader.ts:8</code>）。测试覆盖了 <code>../RULES.md</code>、<code>/etc/passwd</code>、<code>__proto__</code> 等输入，全部报“未知知识条目”（<code>tests/knowledge.test.ts:37</code>）。</li>
+  </ul>
+  <div class="callout tip"><span class="ttl">读知识也要花钱</span>每次 <code>read_knowledge</code> 占一次工具调用预算（上限 16），读取时间也扣棋钟。入口 <code>SKILL.md</code> 写明：“不要逐项阅读全部条目。”</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>动手看：宿主路由器</h2>
+  <p>下面的路由器照抄 <code>turnGuidance</code> 的优先级。拖动滑块，或点一个预设局面。看哪条规则命中，选中哪个剧本。</p>
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">路由器：每手开始时，代码怎样选剧本</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">预设：
+        <button class="btn" data-pre="empty">空盘开局</button>
+        <button class="btn" data-pre="early4">第 7 手出现冲四</button>
+        <button class="btn" data-pre="urgentwin">读秒只剩 14 秒，自己有立即胜</button>
+        <button class="btn" data-pre="double">中盘，对手有两个成五点</button>
+        <button class="btn" data-pre="quiet">普通中盘</button>
+      </div>
+      <div class="ctrl-grid">
+        <label>已下手数 <b id="v-moves">0</b><input id="i-moves" type="range" min="0" max="60" value="0"></label>
+        <label>距丢失当前时段（秒） <b id="v-sec">60</b><input id="i-sec" type="range" min="0" max="120" value="60"></label>
+        <label>我方立即成五点 <b id="v-own">0</b><input id="i-own" type="range" min="0" max="3" value="0"></label>
+        <label>对方立即成五点 <b id="v-opp">0</b><input id="i-opp" type="range" min="0" max="3" value="0"></label>
+        <label><input id="i-term" type="checkbox"> 本局已分胜负</label>
+      </div>
+      <ul class="rules" id="d1-rules"></ul>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">点“读秒只剩 14 秒，自己有立即胜”。剧本是 time-pressure，但 priority 仍是 win-now。时间剧本第 1 步也写“先自身立即胜”。所以时间路由不会压过取胜事实。<span class="data-note">简化模型：用滑块直接给出“立即成五点个数”和“剩余秒数”。真实代码从棋盘扫描成五点，从棋钟推算 <code>untilPeriodLossMs</code>。包干制取基本用时；读秒制取基本用时加当前读秒。规则顺序依据 <code>decision.ts:99-116</code> 和 <code>tests/decision.test.ts:76-105</code>。</span></div>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>信号契约</h2>
+  <p>先说结论：<code>turnGuidance()</code> 的输出就是模型看到的决策信号。L1 把它 JSON 化，放进用户提示词。<code>evaluate_threats</code> 工具也返回同样的结构。</p>
+  <p>按代码现状，契约有四大块：</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>块</th><th>字段</th><th>来源与可信度</th></tr>
+    <tr><td><code>signals.facts</code></td><td><code>source</code>、<code>terminal</code>、<code>next</code>、<code>immediateWins</code>、<code>opponentImmediateWins</code>、<code>unavoidableLossInOne</code></td><td><code>all-empty-points-scan</code>：扫描全部空点，事实</td></tr>
+    <tr><td><code>signals.priority</code></td><td><code>terminal</code> / <code>win-now</code> / <code>answer-immediate-threat</code> / <code>develop</code></td><td>由事实推出（<code>decision.ts:91</code>）</td></tr>
+    <tr><td><code>signals.heuristics</code></td><td><code>source</code>、<code>candidates</code>（最多 12 个）、<code>limitations</code></td><td><code>local-five-cell-windows</code>：局部窗口，启发式</td></tr>
+    <tr><td><code>time</code></td><td><code>source</code>、<code>asOf</code>、<code>untilPeriodLossMs</code>、<code>untilForfeitMs</code>、<code>periodsLeft</code>、<code>urgent</code>、<code>warning</code></td><td><code>projected-snapshot</code>：回合开始时的投影</td></tr>
+  </table></div>
+  <p>外层还有 <code>version</code>、<code>revision</code>、<code>playbook</code>、<code>steps</code>（四步都是 <code>pending</code>）。</p>
+  <p>这个契约有三个工程要点：</p>
+  <ol>
+    <li><b>每段都带 <code>source</code>。</b>模型能区分“全盘扫描的事实”和“局部窗口的估计”。</li>
+    <li><b>局限写在数据里。</b><code>limitations</code> 随每次工具返回出现一次，不只写在提示词里。三条局限是：分数不是胜率；双三/双四是窗口棋形提示，不是强制获胜证明；候选最多 12 个且局部剪枝。</li>
+    <li><b>时间是<a class="term" href="glossary.html#projected-snapshot">投影快照</a>。</b><code>warning</code> 写明“最终截止由业务层提交时裁决”。这防止模型把投影值当成规则。</li>
+  </ol>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书 §4.4 的示例是 v1：<code>facts</code> 里没有 <code>terminal</code>、<code>next</code>，<code>time</code> 里没有 <code>asOf</code>、<code>periodsLeft</code>。现在版本是 <code>gomoku-knowledge/v3</code>，这四个字段都有（<code>decision.ts:84-86</code>、<code>:112</code>）。<code>priority</code> 的四个取值以 <code>decision.ts:91</code> 为准。</div>
+  <div class="callout note"><span class="ttl">补充：unavoidableLossInOne</span>它的条件是：没有终局、自己没有立即成五点、对手的立即成五点多于 1 个。这时一子堵不住全部威胁。测试也说明，自己有立即胜时，对手有多个成五点并不算必输（<code>tests/decision.test.ts:21</code>）。</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>动手看：拆开一份信号</h2>
+  <p>下面是一份按 v3 字段写的示例信号。点上方的分类按钮，看哪些字段属于这一类。点任意字段名，看它由谁计算、模型该怎样用。</p>
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">信号契约拆解：事实、启发式、投影、元数据</div>
+    </div>
+    <div class="demo">
+      <div class="map-row">分类：
+        <span class="btn-group" id="d2-cat">
+          <button class="btn on" data-cat="">全部</button>
+          <button class="btn" data-cat="fact">事实</button>
+          <button class="btn" data-cat="heur">启发式</button>
+          <button class="btn" data-cat="proj">投影</button>
+          <button class="btn" data-cat="meta">元数据</button>
+        </span>
+      </div>
+      <pre class="json" id="d2-json"></pre>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">先点“事实”，再点“启发式”。事实块和启发式块各自带一个 <code>source</code>。再点 <code>limitations</code> 和 <code>warning</code>：局限和时间提醒都写在数据里，每次工具返回都会出现。<span class="data-note">示例数值依据白皮书 §4.4 的示意，字段按 <code>decision.ts</code> v3 补齐。候选只列 2 个，真实最多 12 个。坐标、毫秒数是演示用例子。</span></div>
+  </div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>自测与速记</h2>
+  <div class="quiz" data-answer="2">
+    <div class="q">第 6 手时，对手已经有一个立即成五点，时间充足。宿主会选哪个剧本？</div>
+    <div class="opts"><button>opening，因为不足 8 手</button><button>midgame</button><button>endgame，因为 priority 不是 develop</button><button>time-pressure</button></div>
+    <div class="explain">战术事实排在手数之前。只要任一方有立即成五点，就选 endgame（<code>decision.ts:110</code>，测试 <code>decision.test.ts:76</code>）。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">读秒只剩 14 秒，自己有一个立即成五点。下面哪项正确？</div>
+    <div class="opts"><button>剧本是 endgame，priority 是 win-now</button><button>剧本是 time-pressure，priority 仍是 win-now</button><button>剧本是 time-pressure，priority 改成 develop</button><button>不启动 Agent</button></div>
+    <div class="explain">时间紧迫优先选剧本，但 priority 由事实计算，不受时间影响。时间剧本也写“先自身立即胜”（<code>decision.test.ts:84</code>）。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">为什么知识包借用了 SKILL.md 格式，却设置 <code>noSkills: true</code>？</div>
+    <div class="opts"><button>Pi 1.4.0 不支持技能</button><button>SKILL.md 文件太大，放不进上下文</button><button>为了让模型自己选剧本</button><button>Pi 技能要靠文件工具读取，弈境不开放文件工具，也要防止外部同名技能混入</button></div>
+    <div class="explain">白皮书 §4.2 给了两个原因：不开放文件系统工具；不从工作目录发现技能。加载和路由由宿主控制。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">模型调用 <code>read_knowledge({ id: "../RULES.md" })</code>。会发生什么？</div>
+    <div class="opts"><button>参数不在 15 个 ID 的枚举里，被拦下</button><button>读出 RULES.md 的内容</button><button>读出 principle-rules</button><button>run 崩溃</button></div>
+    <div class="explain">ID 在 schema 里是字面量枚举，参数校验先挡住它。即使绕过 schema，<code>readKnowledge</code> 的 <code>Object.hasOwn</code> 也会报“未知知识条目”。错误会作为工具结果回到模型，不会让 run 崩溃。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>四种载体</td><td>硬规则 → 代码；事实 → facts；启发式 → analyze；经验 → Markdown</td></tr>
+    <tr><td>知识包</td><td><code>gomoku-knowledge/v3</code>，15 条：入口 1 + 原则 5 + 剧本 4 + 技能 5</td></tr>
+    <tr><td>不走 Pi 技能</td><td><code>noSkills: true</code>；无文件工具；不发现外部技能</td></tr>
+    <tr><td>宿主路由</td><td>终局 → 时间 ≤ 15 秒 → 立即成五点 → 不足 8 手 → 中盘</td></tr>
+    <tr><td>模型路由</td><td><code>read_knowledge(id)</code>：schema 枚举 + <code>Object.hasOwn</code>，占工具预算</td></tr>
+    <tr><td>信号契约</td><td>facts / priority / heuristics / time；每段带 source；局限写进数据；时间是投影</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L07-context-rebuild.html"><small>下一课 · L07</small>上下文工程：用重建取代压缩</a>
+    <a href="L08-forcing-search.html"><small>L08</small>连续冲四：反证、强杀与提交前反馈</a>
+    <a href="L03-sdk-vs-rpc.html"><small>L03</small>Pi SDK 接入：每手一个 Session</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L06-knowledge-routing.html"></nav>
+<p class="disclaimer">原文：《弈境 · Five LLM 技术白皮书》v1.0 §4.1–4.4（2026-10-30）。课程作者对照提交 4f65e37 整理了《弈境代码现状勘误》。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 路由器 ---- */
+  const PRE = {
+    empty: { moves: 0, sec: 60, own: 0, opp: 0, term: false },
+    early4: { moves: 7, sec: 60, own: 0, opp: 1, term: false },
+    urgentwin: { moves: 23, sec: 14, own: 1, opp: 0, term: false },
+    double: { moves: 30, sec: 60, own: 0, opp: 2, term: false },
+    quiet: { moves: 20, sec: 60, own: 0, opp: 0, term: false },
+  };
+  const ids = ["moves", "sec", "own", "opp"];
+  function read() {
+    const v = {}; ids.forEach((k) => { v[k] = +CL.$("#i-" + k).value; CL.$("#v-" + k).textContent = v[k]; });
+    v.term = CL.$("#i-term").checked; return v;
+  }
+  function route(v) {
+    const priority = v.term ? "terminal" : v.own ? "win-now" : v.opp ? "answer-immediate-threat" : "develop";
+    const urgent = v.sec <= 15;
+    const rules = [
+      ["已终局 → 不选剧本，不启动 Agent", v.term, null],
+      ["距丢失当前时段 ≤ 15 秒 → time-pressure", urgent, "time-pressure"],
+      ["priority ≠ develop（任一方有立即成五点）→ endgame", priority !== "develop", "endgame"],
+      ["已下不足 8 手 → opening", v.moves < 8, "opening"],
+      ["其余 → midgame", true, "midgame"],
+    ];
+    const hit = rules.findIndex((r) => r[1]);
+    return { priority, urgent, rules, hit, playbook: rules[hit][2], loss: !v.term && !v.own && v.opp > 1 };
+  }
+  function draw1() {
+    const v = read(), r = route(v);
+    CL.$("#d1-rules").innerHTML = r.rules.map((x, i) => '<li class="' + (i === r.hit ? "hit" : i > r.hit ? "skip" : "") + '"><span class="n">' + (i + 1) + "</span><span>" + CL.esc(x[0]) + '</span><span class="r">' + (i === r.hit ? "命中" : i < r.hit ? "不满足" : "未检查") + "</span></li>").join("");
+    let msg = "选中剧本：" + (r.playbook || "无（不启动 Agent）") + "\npriority：" + r.priority + "　urgent：" + r.urgent + "　unavoidableLossInOne：" + r.loss;
+    if (r.playbook === "time-pressure" && r.priority === "win-now") msg += "\n时间路由选了 time-pressure，但 priority 仍是 win-now。时间剧本第 1 步：“先自身立即胜，再对手立即胜。”时间不会压过取胜事实。";
+    else if (r.playbook === "time-pressure" && r.priority === "answer-immediate-threat") msg += "\n时间紧迫，但对手有立即成五点。时间剧本仍要求先看对手立即胜，并且不跳过一步成五验证。";
+    else if (r.playbook === "endgame" && v.moves < 8) msg += "\n不足 8 手也选 endgame。endgame 由事实触发，不按手数判断终盘。";
+    else if (r.playbook === "midgame") msg += "\n普通中盘。观察时会自动搜索己方连续冲四，提交前要读对手反证（L08 讲）。";
+    else if (r.playbook === "opening") msg += "\n开局剧本只写中央、联络、空间这类偏好。项目没有开局定式数据库。";
+    if (r.loss) msg += "\n对手有 " + v.opp + " 个立即成五点，自己没有立即胜：一子堵不住全部威胁。";
+    CL.$("#d1-out").textContent = msg;
+  }
+  ids.forEach((k) => CL.$("#i-" + k).addEventListener("input", draw1));
+  CL.$("#i-term").addEventListener("change", draw1);
+  CL.$$("#demo1 [data-pre]").forEach((b) => b.addEventListener("click", () => {
+    const p = PRE[b.dataset.pre]; ids.forEach((k) => { CL.$("#i-" + k).value = p[k]; }); CL.$("#i-term").checked = p.term;
+    CL.$$("#demo1 [data-pre]").forEach((x) => x.classList.toggle("on", x === b)); draw1();
+  }));
+  draw1();
+
+  /* ---- 2. 信号拆解 ---- */
+  const SAMPLE = {
+    version: "gomoku-knowledge/v3", revision: 17, playbook: "endgame",
+    signals: {
+      ruleset: "free-gomoku/v1",
+      facts: { source: "all-empty-points-scan", terminal: null, next: 2, immediateWins: [], opponentImmediateWins: [{ x: 9, y: 6 }], unavoidableLossInOne: false },
+      priority: "answer-immediate-threat",
+      heuristics: { source: "local-five-cell-windows", candidates: [{ coordinate: "J9", score: 812, tags: ["block-four"] }, { coordinate: "H8", score: 240, tags: [] }], limitations: ["分数不是胜率", "双三/双四为窗口棋形提示，不是强制获胜证明", "候选最多12个且局部剪枝；即时成五点不剪枝"] },
+    },
+    time: { source: "projected-snapshot", asOf: 1761800000000, untilPeriodLossMs: 52000, untilForfeitMs: 172000, periodsLeft: 3, urgent: false, warning: "时间只是快照建议；工具/网络也扣时，最终截止由业务层提交时裁决。" },
+    steps: [{ id: "observe", status: "pending" }, "…"],
+  };
+  // path → [分类, 谁计算, 模型怎样用]
+  const INFO = {
+    "version": ["meta", "decision.ts 常量 KNOWLEDGE_VERSION", "标明知识包版本。语义变化必须升级，便于把对局结果归因到某个版本。"],
+    "revision": ["meta", "GameService 的状态版本号", "提交时必须原样带上。版本不符会收到“版本错误”。"],
+    "playbook": ["meta", "turnGuidance 的宿主路由", "告诉模型本手注入的是哪个剧本。回合中途不会更换。"],
+    "signals": ["meta", "positionSignals()", "决策信号的容器：事实、优先级、启发式分开放。"],
+    "signals.ruleset": ["fact", "rules.ts 常量 RULESET", "自由五子棋，无禁手。知识包只能建议，不能改写规则。"],
+    "signals.facts": ["fact", "positionSignals().facts", "确定性事实块。可以直接作为决策依据。"],
+    "signals.facts.source": ["fact", "常量", "all-empty-points-scan：扫描了全部空点，不是局部估计。"],
+    "signals.facts.terminal": ["fact", "position.winner", "v3 新增。null 表示未终局；1 / 2 / draw 表示已结束。"],
+    "signals.facts.next": ["fact", "position.next", "v3 新增。下一手的颜色：1 = 黑，2 = 白。"],
+    "signals.facts.immediateWins": ["fact", "analyze().winningMoves", "自己一手成五的点。非空时应先取胜。"],
+    "signals.facts.opponentImmediateWins": ["fact", "analyze().mustBlock", "对手一手成五的点。自己不能立即胜时，必须应对。"],
+    "signals.facts.unavoidableLossInOne": ["fact", "由上两项推出", "自己无立即胜且对手成五点多于 1 个时为真：一子堵不住。"],
+    "signals.priority": ["fact", "由 facts 推出", "terminal / win-now / answer-immediate-threat / develop。只要不是 develop，宿主就选 endgame（时间紧迫除外）。"],
+    "signals.heuristics": ["heur", "tactics.ts 的 analyze()", "启发式块。只作排序参考，不是证明。"],
+    "signals.heuristics.source": ["heur", "常量", "local-five-cell-windows：局部五格窗口的估计。"],
+    "signals.heuristics.candidates": ["heur", "analyze().candidates", "最多 12 个候选，带分数和棋形标签。实战里模型有 5 手没选第一名，系统也尊重。"],
+    "signals.heuristics.limitations": ["heur", "positionSignals 写死的三条", "局限写在数据里，每次工具返回都会提醒一次。不要把分数说成胜率。"],
+    "time": ["proj", "turnGuidance 按回合开始时刻推算", "投影快照，只作计划参考。"],
+    "time.source": ["proj", "常量", "projected-snapshot：这不是权威棋钟。"],
+    "time.asOf": ["proj", "turnGuidance 的 now 参数", "v3 新增。快照的时刻。之后的网络和工具时间都还在扣。"],
+    "time.untilPeriodLossMs": ["proj", "chargeClock 后推算", "距丢失当前时段的毫秒数。≤ 15000 时 urgent 为真。"],
+    "time.untilForfeitMs": ["proj", "chargeClock 后推算", "距判负的毫秒数。丢一次读秒不等于判负。"],
+    "time.periodsLeft": ["proj", "clock.players[next].periodsLeft", "v3 新增。剩余读秒次数。"],
+    "time.urgent": ["proj", "untilPeriodLossMs ≤ 15000", "为真时宿主选 time-pressure，并跳过额外的连续冲四搜索。"],
+    "time.warning": ["proj", "常量", "提醒模型：最终截止由业务层在提交时裁决。防止把投影当成新规则。"],
+    "steps": ["meta", "WORKFLOW_STEPS", "observe / compare / verify / commit 四步，开始时都是 pending。完成情况由工具实际执行记录。"],
+  };
+  const LBL = { fact: "事实", heur: "启发式", proj: "投影", meta: "元数据" };
+  function render(v, ind, path) {
+    const pad = "  ".repeat(ind + 1), end = "  ".repeat(ind);
+    if (Array.isArray(v)) {
+      if (!v.length) return "[]";
+      if (v.every((x) => typeof x !== "object" || x === null)) return "[" + v.map((x) => CL.esc(JSON.stringify(x))).join(", ") + "]";
+      return "[\n" + v.map((x) => pad + (typeof x === "object" ? CL.esc(JSON.stringify(x)) : CL.esc(JSON.stringify(x)))).join(",\n") + "\n" + end + "]";
+    }
+    if (v && typeof v === "object") {
+      return "{\n" + Object.keys(v).map((k) => {
+        const p = path ? path + "." + k : k, info = INFO[p];
+        const key = info ? '<span class="jk ' + info[0] + '" data-p="' + p + '">"' + CL.esc(k) + '"</span>' : '"' + CL.esc(k) + '"';
+        return pad + key + ": " + render(v[k], ind + 1, p);
+      }).join(",\n") + "\n" + end + "}";
+    }
+    return CL.esc(JSON.stringify(v));
+  }
+  const pre = CL.$("#d2-json"), out2 = CL.$("#d2-out");
+  pre.innerHTML = render(SAMPLE, 0, "");
+  let cat = "";
+  function counts() {
+    const c = { fact: 0, heur: 0, proj: 0, meta: 0 }; Object.values(INFO).forEach((i) => c[i[0]]++); return c;
+  }
+  function showCat() {
+    CL.$$("#d2-json .jk").forEach((s) => { s.classList.toggle("dim", !!cat && INFO[s.dataset.p][0] !== cat); s.classList.remove("sel"); });
+    const c = counts();
+    out2.textContent = cat ? LBL[cat] + "：共 " + c[cat] + " 个字段。点一个字段名看细节。" + (cat === "fact" ? "\n事实块的 source 是 all-empty-points-scan，可以复算。" : cat === "heur" ? "\n启发式块的 source 是 local-five-cell-windows，并自带 limitations。" : cat === "proj" ? "\n时间块的 source 是 projected-snapshot，warning 提醒它不是截止规则。" : "\n元数据说明版本、回合和流程，不是棋局判断。")
+      : "事实 " + c.fact + " 个、启发式 " + c.heur + " 个、投影 " + c.proj + " 个、元数据 " + c.meta + " 个字段。点上方分类，或点字段名。";
+  }
+  CL.$$("#d2-cat [data-cat]").forEach((b) => b.addEventListener("click", () => {
+    cat = b.dataset.cat; CL.$$("#d2-cat [data-cat]").forEach((x) => x.classList.toggle("on", x === b)); showCat();
+  }));
+  pre.addEventListener("click", (e) => {
+    const s = e.target.closest(".jk"); if (!s) return;
+    CL.$$("#d2-json .jk").forEach((x) => x.classList.toggle("sel", x === s));
+    const i = INFO[s.dataset.p];
+    out2.textContent = s.dataset.p + "　〔" + LBL[i[0]] + "〕\n谁计算：" + i[1] + "\n模型怎样用：" + i[2];
+  });
+  showCat();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双循环接入点：提交即停 · L04</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .player-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13.5px; color: var(--ink-3); }
+  .status-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+  .msgs li.future { opacity: .25; }
+  .msgs li.now { outline: 2px solid var(--brand-2); }
+  .msgs li.skip { opacity: .45; border-style: dashed; }
+  .batch { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 40px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; background: var(--surface-2); margin-bottom: 10px; font-size: 13.5px; }
+  .batch .chip { font-family: var(--mono); font-size: 12.5px; padding: 3px 9px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+  .batch .chip.commit { border-color: var(--rule-bd); color: var(--rule-bd); font-weight: 600; }
+  .batch .hint { color: var(--ink-3); }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+
+<div class="layout">
+<aside class="toc">
+  <h4>本课目录</h4>
+  <ol>
+    <li><a href="#s1">Pi 1.4.0 的双循环</a></li>
+    <li><a href="#s2">弈境怎样用双循环</a></li>
+    <li><a href="#s3">接入点总表</a></li>
+    <li><a href="#s4">扩展工厂、tool_call 与八个工具</a></li>
+    <li><a href="#s5">动手看：terminate 为什么不够</a></li>
+    <li><a href="#s6">两个 turn_start，两件事</a></li>
+    <li><a href="#s7">动手看：一次 settle 的时间线</a></li>
+    <li><a href="#s8">自测与速记</a></li>
+  </ol>
+</aside>
+
+<main>
+<div class="hero">
+  <div class="kicker">L04 · 循环工程</div>
+  <h1>双循环接入点：提交即停</h1>
+  <p>一手棋只跑一次 settle。真正的工作发生在 run 内循环里。这一课逐个看弈境在循环上挂了哪些点，以及“落子成功就立刻停”是怎样做到的。</p>
+  <div class="meta"><span>原文：白皮书 §3.1–3.5 + 代码现状勘误 §3.1–3.2</span><span>阅读约 20 分钟</span><span>含 2 个互动演示</span></div>
+</div>
+
+<div class="objectives">
+  <h4>学完本课，你能够：</h4>
+  <ul>
+    <li>说出 <a class="term" href="glossary.html#settle-loop">settle 外循环</a>和 <a class="term" href="glossary.html#run-loop">run 内循环</a>在 Pi 源码里的位置。</li>
+    <li>解释弈境为什么 N ∈ {1, 2}、M ≤ 8、K ≤ 16。</li>
+    <li>按 Who / Where / When 说出七个接入点。</li>
+    <li>解释为什么 <a class="term" href="glossary.html#terminate">terminate</a> 不够，还要 <code>abort()</code>，以及为什么不 await。</li>
+    <li>区分 L1 订阅的 <code>turn_start</code> 和 L2 挂的 <code>turn_start</code>。</li>
+  </ul>
+</div>
+
+<!-- ============ 1 ============ -->
+<section class="lesson-sec" id="s1">
+  <h2><span class="num">01</span>Pi 1.4.0 的双循环</h2>
+  <p>先说结论：Pi 有两层循环。外层叫 settle，管“停没停稳”。内层叫 run，管“模型—工具”往返。弈境几乎只用内层。</p>
+  <div class="grid-2">
+    <div class="kp"><div class="k">外层</div><div class="v">settle 外循环</div><p>一次 <code>prompt()</code> 对应一次 settle。一个 run 结束后，如果有重试、压缩、排队消息或续跑请求，就再起一个 run。停稳时发出 <a class="term" href="glossary.html#agent-settled">agent_settled</a>。</p></div>
+    <div class="kp"><div class="k">内层</div><div class="v">run 内循环</div><p>反复执行 <a class="term" href="glossary.html#turn">turn</a>。一个 turn = <code>turn_start</code> → LLM 流式回复 → 执行这条回复里的工具 → <code>turn_end</code>。</p></div>
+  </div>
+  <p>白皮书给出了源码定位。下表的行号指 Pi 1.4.0 在 <code>node_modules</code> 下的编译产物。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>结构</th><th>源码位置</th><th>作用</th></tr>
+    <tr><td>settle 外循环</td><td><code>agent-session.js:1423</code> <code>_startRun()</code>；<code>:1450</code> 起 <code>while</code></td><td>反复起 run；<code>finally</code> 里发 <code>agent_settled</code>（<code>:1471</code>）</td></tr>
+    <tr><td>run 内循环</td><td><code>agent-loop.js:84</code> <code>runLoop()</code></td><td>两层 <code>while</code>，转的都是 turn</td></tr>
+    <tr><td>第一个 <code>turn_start</code></td><td><code>agent-loop.js:56</code></td><td>由 <code>runAgentLoop</code> 发出；之后的在 <code>:118</code></td></tr>
+    <tr><td>工具前置钩子</td><td><code>agent-loop.js:499</code>；<code>agent-session.js:322/326</code></td><td>参数校验之后、执行之前，接到扩展的 <code>tool_call</code></td></tr>
+    <tr><td>批次终止</td><td><code>agent-loop.js:471</code> <code>shouldTerminateToolBatch</code></td><td>同一批<strong>全部</strong> <code>terminate === true</code> 才终止</td></tr>
+    <tr><td>顺序批次中途停</td><td><code>agent-loop.js:408</code></td><td>每执行完一个工具检查 <code>signal.aborted</code></td></tr>
+    <tr><td>压缩闸</td><td><code>agent-session.js:2391</code> <code>_checkCompaction</code></td><td><code>settings.enabled</code> 为假直接返回；弈境关掉了它</td></tr>
+  </table></div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="lesson-sec" id="s2">
+  <h2><span class="num">02</span>弈境怎样用双循环</h2>
+  <p>先说结论：一手棋 = 一个内存 Session = 一次 settle。外循环几乎只转一圈，内循环才是主战场。</p>
+  <p>白皮书用三个符号计数：N = run 数，M = turn 数（即 LLM 请求数），K = 工具调用数。</p>
+  <div class="grid-3">
+    <div class="kp"><div class="k">run 数</div><div class="v">N ∈ {1, 2}</div><p>压缩关闭，没有续跑处理器，也没有排队消息。只有 <code>retry: { maxRetries: 1 }</code> 能再起一个 run。</p></div>
+    <div class="kp"><div class="k">LLM 请求数</div><div class="v">M ≤ 8</div><p>L1 数 <code>turn_start</code>。第 9 次就 <code>abort()</code>，请求不会发出。</p></div>
+    <div class="kp"><div class="k">工具调用数</div><div class="v">K ≤ 16</div><p>L2 的 <code>tool_call</code> 钩子计数。第 17 次返回 <code>block</code>。</p></div>
+  </div>
+  <ul>
+    <li>Session 由 <code>SessionManager.inMemory()</code> 创建。<code>finally</code> 里 <code>session.dispose()</code>（<code>pi-driver.ts:97</code>）。回合之间没有对话残留。</li>
+    <li>压缩关闭：<code>compaction: { enabled: false }</code>（<code>pi-driver.ts:43</code>）。</li>
+    <li>8 个工具都声明 <code>executionMode: 'sequential'</code>。Pi 因此走<a class="term" href="glossary.html#sequential-mode">顺序执行</a>分支。</li>
+  </ul>
+  <div class="callout rule"><span class="ttl">本节核心句</span>settle 外循环只是外壳。弈境的约束全部落在 run 内循环上：请求数、工具数、提交即停。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="lesson-sec" id="s3">
+  <h2><span class="num">03</span>接入点总表</h2>
+  <p>弈境在循环上挂了七个点，外加 v2 新增的一个。下表合并了白皮书的表 3-1 和表 3-2，并按代码现状补上 ⑤′。</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>#</th><th>接入点</th><th>谁注册 / 谁调用</th><th>挂在哪里</th><th>每次 settle 几次</th><th>为什么需要</th></tr>
+    <tr><td>①</td><td>扩展工厂 <code>gomokuExtension()</code></td><td>L1 经 <code>extensionFactories</code> 传入；Pi 在 <code>reload()</code> 中调用</td><td>循环外，创建 Session 之前</td><td>1</td><td>把本回合的 <code>TurnPort</code> 和剧本闭包进工具</td></tr>
+    <tr><td>②</td><td><code>pi.on('tool_call')</code></td><td>L2 注册；Pi 的 <code>_beforeToolCall</code> 触发</td><td>run 内循环 · 参数校验之后、执行之前</td><td>K</td><td>16 次预算、取消与已提交守卫、链路日志</td></tr>
+    <tr><td>③</td><td>8 个工具的 <code>execute()</code></td><td>L2 注册；Pi 调用</td><td>run 内循环 · 工具执行阶段</td><td>每个 0..K</td><td>观察、比较、验证、提交</td></tr>
+    <tr><td>④</td><td><code>place_stone</code> 返回 <code>terminate: true</code></td><td>L2 返回；Pi 的 <code>shouldTerminateToolBatch</code> 读取</td><td>run 内循环 · 批次收尾</td><td>≤ 1</td><td>告诉 Pi 这批之后不必再请求模型</td></tr>
+    <tr><td>⑤</td><td>订阅 <code>turn_start</code></td><td><strong>L1</strong> 的 <code>session.subscribe</code></td><td>run 内循环 · turn 开头</td><td>M</td><td>数请求，第 9 次 <code>abort()</code></td></tr>
+    <tr><td>⑤′</td><td><code>pi.on('turn_start')</code></td><td><strong>L2</strong> 注册（v2 新增，<code>gomoku.ts:26</code>）</td><td>run 内循环 · turn 开头</td><td>M</td><td>给反馈打<a class="term" href="glossary.html#model-turn">请求序号</a> <code>modelTurn</code></td></tr>
+    <tr><td>⑥</td><td>订阅 <code>tool_execution_end</code></td><td>L1 的 <code>session.subscribe</code></td><td>run 内循环 · 每个工具执行之后</td><td>K</td><td>写日志；<code>place_stone</code> 成功就 <code>abort()</code></td></tr>
+    <tr><td>⑦</td><td><code>TurnPort.commit</code> / <code>log</code></td><td>L3 提供，L2 调用</td><td>在 ③ 内同步执行</td><td>commit ≤ 1；log 0..K</td><td>跨层写入的唯一通道</td></tr>
+  </table></div>
+  <div class="callout tip"><span class="ttl">看表要点</span>⑤ 和 ⑥ 是宿主订阅，不是扩展事件。它们只能观察，不能拦截。弈境把流程控制放在宿主，所以观察就够了。</div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="lesson-sec" id="s4">
+  <h2><span class="num">04</span>扩展工厂、tool_call 与八个工具</h2>
+  <h3>① 扩展工厂：每手装配一次</h3>
+  <p><code>gomokuExtension(port, playbook)</code> 返回一个 <a class="term" href="glossary.html#extension-factory">扩展工厂</a> <code>pi =&gt; { … }</code>。L1 把它放进 <code>extensionFactories</code>（<code>pi-driver.ts:51</code>），再 <code>await resourceLoader.reload()</code>。这是内联工厂，不经文件路径导入。</p>
+  <p>工厂体内声明本回合的闭包状态（<code>gomoku.ts:23-26</code>）：</p>
+  <ul>
+    <li><code>calls</code>：工具调用计数。<code>committed</code>：是否已提交。<code>observed</code>：最后一次观察。<code>modelTurn</code>：请求序号（v2 新增）。</li>
+    <li><code>simulations</code>、<code>forcingChecks</code>、<code>ownWinChecks</code>：绑定候选的证据数组（v2/v3 新增）。</li>
+    <li><code>knowledgeRead</code>：初始化为入口和选中剧本。</li>
+  </ul>
+  <p>为什么每手一个工厂？状态天然按回合隔离。<code>port</code> 是本回合独有的写入凭证，旧回合的工具写不到新棋盘上。加载后 L1 还要检查：扩展没有错误；活跃工具都在 <code>GAME_TOOLS</code> 里，并且包含 <code>place_stone</code>（<code>pi-driver.ts:64-67</code>）。否则报“工具隔离校验失败”。</p>
+
+  <h3>② tool_call：执行之前的闸</h3>
+  <pre><code>pi.on('tool_call', event =&gt; {
+  ensureActive();                       // 已取消或已提交时直接抛错
+  if (++calls &gt; 16) return { block: true, reason: '单回合工具调用预算已耗尽' };
+  … port.log(…)                        // 链路日志
+  return undefined;                     // 放行
+});</code></pre>
+  <ul>
+    <li>Pi 先用 TypeBox 校验参数，再调这个钩子。所以 <code>event.input</code> 已经通过 schema，坐标一定是 0–14 的整数。</li>
+    <li>返回 <code>block</code> 或直接抛错，都变成一条 <code>isError</code> 的工具结果回到上下文。整个 run 不会崩溃。这是<a class="term" href="glossary.html#error-as-prompt">错误即提示词</a>的基础。</li>
+    <li>预算放在这里，不放在 <code>execute</code> 里。理由有两条：不存在的工具、参数非法的调用也该计数；拦截发生在执行之前，没有副作用。</li>
+  </ul>
+
+  <h3>③ 八个工具</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>工具</th><th>步骤</th><th>读 / 写</th><th>关键约束</th></tr>
+    <tr><td><code>analyze_position</code></td><td>observe</td><td>只读；记 <code>observed</code></td><td>从完整棋谱重放，返回棋盘、分析、信号</td></tr>
+    <tr><td><code>evaluate_threats</code></td><td>observe</td><td>只读；记 <code>observed</code></td><td>返回最新信号；普通中盘首次观察自动搜己方强杀，附 <code>ownForcingWin</code></td></tr>
+    <tr><td><code>read_knowledge</code></td><td>compare（按需）</td><td>只读；登记 <code>knowledgeRead</code></td><td>参数是 15 个 ID 的枚举，schema 层就排除了文件路径</td></tr>
+    <tr><td><code>simulate_moves</code></td><td>compare</td><td>只读（副本）；追加试算证据</td><td>1–6 手交替，<code>hypothetical: true</code></td></tr>
+    <tr><td><code>validate_move</code></td><td>verify</td><td>只读</td><td>校验 revision；一手反击扫描，<code>scope: one-ply-only</code></td></tr>
+    <tr><td><code>check_forcing_sequences</code></td><td>verify（v2）</td><td>只读；追加反证证据</td><td>对手连续冲四反证；未发现 ≠ 安全</td></tr>
+    <tr><td><code>find_forcing_win</code></td><td>compare（v3）</td><td>只读；追加强杀证据</td><td>己方连续冲四胜法；未找到 ≠ 没有胜法</td></tr>
+    <tr><td><code>place_stone</code></td><td>verify + commit</td><td><strong>写</strong>（经 <code>port.commit</code>）</td><td><a class="term" href="glossary.html#evidence-gate">证据门禁</a>；中盘反馈门禁；只在 <code>accepted: true</code> 时返回 <code>terminate: true</code></td></tr>
+  </table></div>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书 §3.4③ 写“六个工具”，<code>read_knowledge</code> 的 ID 是 13 个。代码现状是 8 个工具（<code>gomoku.ts:11</code> 的 <code>GAME_TOOLS</code>），ID 是 15 个。新增的两个连续冲四工具和门禁在 <a href="L08-forcing-search.html">L08</a> 展开。</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="lesson-sec" id="s5">
+  <h2><span class="num">05</span>动手看：terminate 为什么不够</h2>
+  <p>先说结论：Pi 只在同一批工具<strong>全部</strong>返回 <code>terminate: true</code> 时才停（白皮书引 <code>agent-loop.js:471-472</code>）。模型在一条回复里同时调 <code>place_stone</code> 和别的工具时，别的工具会“否决”这个 terminate。Pi 还会再请求一次模型。</p>
+  <p>弈境分两步解决（<code>pi-driver.ts:73-80</code>，提交判断在 <code>:79</code>）：</p>
+  <ol>
+    <li>L1 订阅 <a class="term" href="glossary.html#tool-execution-end">tool_execution_end</a>。看到 <code>place_stone</code> 成功且 <code>accepted === true</code>，就设 <code>committed = true</code> 并 <code>abort()</code>。</li>
+    <li><code>abort()</code> 让 signal 进入中止状态。顺序批次在下一个工具前检查到它，跳过剩余工具。settle 外循环也不再续跑。</li>
+  </ol>
+  <p>下面的模拟器让你拼一条回复里的工具批次，再切换停机方式。</p>
+
+  <div class="chart-card" id="demo1">
+    <div class="chart-head">
+      <div class="chart-title">批次终止模拟器：同批剩余工具会不会执行，还有没有下一次请求</div>
+    </div>
+    <div class="demo">
+      <div class="player-bar">批次：
+        <span class="btn-group" id="d1-batch">
+          <button class="btn on" data-b="solo">[place_stone]</button>
+          <button class="btn" data-b="first">[place_stone, analyze_position]</button>
+          <button class="btn" data-b="last">[analyze_position, place_stone]</button>
+          <button class="btn" data-b="custom">自己拼</button>
+        </span>
+      </div>
+      <div class="player-bar" id="d1-builder" hidden>添加工具：
+        <button class="btn" data-add="place_stone">+ place_stone</button>
+        <button class="btn" data-add="analyze_position">+ analyze_position</button>
+        <button class="btn" data-add="simulate_moves">+ simulate_moves</button>
+        <button class="btn" data-add="validate_move">+ validate_move</button>
+        <button class="btn" id="d1-clear">清空</button>
+      </div>
+      <div class="batch" id="d1-chips"></div>
+      <div class="player-bar">place_stone 的结果：
+        <span class="btn-group" id="d1-res">
+          <button class="btn on" data-r="ok">accepted: true</button>
+          <button class="btn" data-r="review">accepted: false（needsReview）</button>
+          <button class="btn" data-r="err">抛错（没观察）</button>
+        </span>
+      </div>
+      <div class="player-bar">停机方式：
+        <span class="btn-group" id="d1-mode">
+          <button class="btn" data-m="term">只靠 terminate</button>
+          <button class="btn on" data-m="abort">terminate + abort（弈境）</button>
+        </span>
+      </div>
+      <div class="status-row" id="d1-status"></div>
+      <ul class="msgs" id="d1-list"></ul>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
+    <div class="chart-foot">先选 <code>[analyze_position, place_stone]</code> 和“只靠 terminate”：place_stone 排在最后也停不下来，因为同批的 analyze_position 没有 terminate。再切到“terminate + abort”，多出的请求消失。最后把结果改成 needsReview：没有落子，也不该停，模型要在下一次请求里读反馈。<span class="data-note">简化模型：按白皮书 §3.4④⑥ 与 <code>pi-driver.ts</code>、<code>gomoku.ts</code> 的逻辑推演。“只靠 terminate”是假设的对照，不是弈境的做法。假设本回合已经观察过（“抛错”选项除外），请求计数从这条回复算起。</span></div>
+  </div>
+  <div class="callout note"><span class="ttl">为什么 abort 不 await</span><code>abort()</code> 用 <code>void session.abort()</code> 调用（<code>pi-driver.ts:33</code>）。事件回调在 run 内部执行，而 <code>abort()</code> 会等待空闲。在这里 await，run 就永远等不到空闲，形成死锁。<code>prompt()</code> 返回后，<code>if (committed) return</code> 把“自己发起的中止”当作成功（<code>pi-driver.ts:91</code>）。白皮书记录：这个缺陷是在回归测试“<a class="term" href="glossary.html#mixed-batch">混合批次</a>”时发现的。</div>
+  <div class="callout tip"><span class="ttl">双重防护</span>就算 abort 没赶上，L2 还有一道：<code>committed</code> 为真后，<code>ensureActive()</code> 对任何工具都抛“本回合已经落子”。L3 的 <code>valid()</code> 也拒绝第二次提交。</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="lesson-sec" id="s6">
+  <h2><span class="num">06</span>两个 turn_start，两件事</h2>
+  <p>先说结论：弈境在两个地方监听 <code>turn_start</code>。它们目的不同，不能互相替代。</p>
+  <div class="vs">
+    <div><h4>⑤ L1：session.subscribe</h4>
+      <ul>
+        <li>位置 <code>pi-driver.ts:68-72</code>。</li>
+        <li>每个 turn 恰好一次 LLM 请求，所以 <code>turn_start</code> 是天然的请求计数器。</li>
+        <li><code>requests &gt; 8</code> 时 <code>abort()</code>。中止发生在第 9 次请求真正发出之前。</li>
+      </ul>
+      <p><span class="good">管预算</span>。宿主订阅，只观察，靠 abort 生效。</p>
+    </div>
+    <div><h4>⑤′ L2：pi.on('turn_start')</h4>
+      <ul>
+        <li>位置 <code>gomoku.ts:26</code>：<code>modelTurn++</code>。</li>
+        <li>每条反证、强杀证据都记下 <code>returnedOnTurn: modelTurn</code>。</li>
+        <li><code>place_stone</code> 比较序号：反馈必须在<strong>更早的</strong>请求里返回，才算模型读过。</li>
+      </ul>
+      <p><span class="good">管证据</span>。扩展事件，用来打时间戳。</p>
+    </div>
+  </div>
+  <p>为什么要序号？模型可以在一条回复里预先排好 <code>[check_forcing_sequences, place_stone]</code>。两个工具执行时，模型还没看到检查结果。序号相同，<code>place_stone</code> 就返回 <a class="term" href="glossary.html#needs-review">needsReview</a>，不落子。</p>
+  <div class="callout warn"><span class="ttl">白皮书过时</span>白皮书 §3.4② 说 <code>tool_call</code> 是“唯一挂上的扩展事件”，§3.6 说“只用了 <code>tool_call</code> 一个”。v2（提交 <code>642481a</code>）起，L2 另挂了 <code>turn_start</code>（<code>gomoku.ts:26</code>）。能改变流程的扩展回调仍然只有 <code>tool_call</code>。</div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="lesson-sec" id="s7">
+  <h2><span class="num">07</span>动手看：一次 settle 的时间线</h2>
+  <p>下面的播放器把一次 settle 拆成事件。选一个场景，点“下一步”。注意 N、M、K 和 L2 的 <code>modelTurn</code> 怎样变化。</p>
+
+  <div class="chart-card" id="demo2">
+    <div class="chart-head">
+      <div class="chart-title">逐步播放：一次 settle 里的 run、turn、工具和计数</div>
+    </div>
+    <div class="demo">
+      <div class="player-bar">场景：
+        <span class="btn-group" id="d2-sc">
+          <button class="btn on" data-sc="normal">两次请求后落子</button>
+          <button class="btn" data-sc="review">同批预排遭退回</button>
+          <button class="btn" data-sc="retry">请求出错，重试成 run #2</button>
+          <button class="btn" data-sc="budget">第 9 次请求遭拦截</button>
+        </span>
+      </div>
+      <div class="player-bar">
+        <button class="btn" id="d2-next">下一步</button><button class="btn" id="d2-all">播完</button><button class="btn" id="d2-reset">重来</button>
+      </div>
+      <div class="status-row" id="d2-status"></div>
+      <ul class="msgs" id="d2-list"></ul>
+    </div>
+    <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
+    <div class="chart-foot">先播“同批预排遭退回”：检查和提交在同一个 turn，<code>modelTurn</code> 相同，L2 退回提交；下一个 turn 再提交才通过。再播“第 9 次请求遭拦截”：L1 的计数在请求发出前就中止。<span class="data-note">简化模型：事件顺序依据白皮书 §3.5 时间线，按代码现状加入 L2 的 <code>modelTurn</code> 与 needsReview。重试场景里“重试也计入 8 次请求”是课程作者按 <code>turn_start</code> 计数逻辑的推断。坐标是演示用例子。</span></div>
+  </div>
+</section>
+
+<!-- ============ 8 ============ -->
+<section class="lesson-sec" id="s8">
+  <h2><span class="num">08</span>自测与速记</h2>
+  <div class="quiz" data-answer="2">
+    <div class="q">模型在一条回复里调用 <code>[analyze_position, place_stone]</code>，提交成功。如果弈境只靠 <code>terminate: true</code>，会发生什么？</div>
+    <div class="opts"><button>立刻停下，因为 place_stone 是最后一个</button><button>analyze_position 被跳过</button><button>Pi 还会再请求一次模型，因为同批不是全部 terminate</button><button>提交被撤销</button></div>
+    <div class="explain">Pi 的规则是同批<strong>全部</strong>返回 terminate 才终止。analyze_position 不返回 terminate，所以会多一次请求，多扣一段棋钟。弈境用 L1 的 abort() 补上。</div>
+  </div>
+  <div class="quiz" data-answer="1">
+    <div class="q">L1 的事件回调里为什么写 <code>void session.abort()</code>，而不是 <code>await</code>？</div>
+    <div class="opts"><button>abort 是同步函数</button><button>回调在 run 内部执行，await 会等空闲，形成死锁</button><button>为了少写代码</button><button>await 会让 terminate 失效</button></div>
+    <div class="explain"><code>abort()</code> 会等待空闲。回调本身在 run 里执行，等空闲就等不到。白皮书 §3.4④⑥。</div>
+  </div>
+  <div class="quiz" data-answer="3">
+    <div class="q">L2 的 <code>pi.on('turn_start')</code> 用来做什么？</div>
+    <div class="opts"><button>数 LLM 请求，第 9 次中止</button><button>重新装配系统提示词</button><button>拦截工具调用</button><button>给反馈打请求序号，判断模型是否在更早的请求里读过</button></div>
+    <div class="explain">数请求、第 9 次中止是 L1 的 <code>session.subscribe</code>。L2 的 <code>modelTurn</code> 是 v2 新增的证据序号（<code>gomoku.ts:26</code>）。</div>
+  </div>
+  <div class="quiz" data-answer="0">
+    <div class="q">弈境一次 settle 里最多有几个 run？为什么？</div>
+    <div class="opts"><button>2 个：只有一次重试能再起 run</button><button>1 个：外循环被关掉了</button><button>8 个：每次请求一个 run</button><button>不限：督促会续跑</button></div>
+    <div class="explain">压缩关闭、没有续跑处理器、没有排队消息，只有 <code>maxRetries: 1</code>。所以 N ∈ {1, 2}。弈境不督促。</div>
+  </div>
+
+  <h3>速记表</h3>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>要点</th><th>一句话</th></tr>
+    <tr><td>计数</td><td>N ∈ {1, 2}；M ≤ 8（L1 数 turn_start）；K ≤ 16（L2 的 tool_call）</td></tr>
+    <tr><td>① 工厂</td><td>每手执行一次，闭包状态按回合隔离</td></tr>
+    <tr><td>② tool_call</td><td>参数校验后、执行前；block 或抛错都变成工具错误结果</td></tr>
+    <tr><td>工具</td><td>8 个；只有 <code>place_stone</code> 写，且只在 accepted 时 terminate</td></tr>
+    <tr><td>提交即停</td><td>terminate 要同批全部同意；L1 看到成功就 <code>void abort()</code></td></tr>
+    <tr><td>两个 turn_start</td><td>L1 管请求预算；L2 管证据序号</td></tr>
+  </table></div>
+
+  <h3>相关课程</h3>
+  <div class="related">
+    <a href="L05-gates-unused.html"><small>下一课 · L05</small>三道闸与刻意不用的回调</a>
+    <a href="L03-sdk-vs-rpc.html"><small>L03</small>Pi SDK 接入：每手一个 Session</a>
+    <a href="L08-forcing-search.html"><small>L08</small>连续冲四：反证、强杀与提交前反馈</a>
+  </div>
+</section>
+
+<nav id="cl-pager" data-current="L04-loop-hooks.html"></nav>
+<p class="disclaimer">原文：《弈境 · Five LLM 技术白皮书》v1.0 §3.1–3.5，以及《弈境代码现状勘误》（对照提交 4f65e37）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+</main>
+</div>
+
+<script>
+CL.onReady(function () {
+  /* ---- 1. 批次终止模拟器 ---- */
+  const PRESET = { solo: ["place_stone"], first: ["place_stone", "analyze_position"], last: ["analyze_position", "place_stone"] };
+  let batch = PRESET.solo.slice(), res = "ok", mode = "abort", preset = "solo";
+  function run1() {
+    // 返回逐步事件和统计
+    const evs = [];
+    let aborted = false, committed = false, ran = 0, skipped = 0, terms = [], k = 0;
+    evs.push(["turn 1", "LLM 回复：一条消息里调用 [" + batch.join(", ") + "]", "slow"]);
+    for (const t of batch) {
+      if (aborted) { skipped++; evs.push(["跳过", t + "：signal 已中止，顺序批次不再执行", "skip"]); continue; }
+      k++;
+      if (committed) { ran++; terms.push(false); evs.push(["L2", t + "：ensureActive() 抛“本回合已经落子” → isError 工具结果", "act"]); continue; }
+      if (t !== "place_stone") { ran++; terms.push(false); evs.push(["L2", t + "：执行完成（不返回 terminate）", "fast"]); continue; }
+      ran++;
+      if (res === "err") { terms.push(false); evs.push(["L2", "place_stone：抛错“请先调用 analyze_position 或 evaluate_threats…” → isError", "act"]); continue; }
+      if (res === "review") { terms.push(false); evs.push(["L2", "place_stone：返回 accepted: false + needsReview，没有落子，不返回 terminate", "act"]); continue; }
+      committed = true; terms.push(true);
+      evs.push(["L3", "place_stone → port.commit：落子成功，返回 accepted: true + terminate: true", "act"]);
+      if (mode === "abort") { aborted = true; evs.push(["L1", "tool_execution_end 看到 accepted → committed = true，void abort()", "act"]); }
+    }
+    let next;
+    if (aborted) { next = false; evs.push(["Pi", "run 已中止：不再请求模型；agent_settled → dispose()", "fast"]); }
+    else if (terms.length && terms.every(Boolean)) { next = false; evs.push(["Pi", "shouldTerminateToolBatch：同批全部 terminate → 不再请求模型", "fast"]); }
+    else {
+      next = true;
+      evs.push(["Pi", "同批不是全部 terminate → 工具结果回到上下文，进入下一个 turn", "fast"]);
+      evs.push(["turn 2", committed ? "又一次 LLM 请求（多扣棋钟）；模型再调工具也只会收到“本回合已经落子”" : "模型读到上一批的结果，决定改选、修正或再次提交", "slow"]);
+    }
+    return { evs, committed, ran, skipped, next, k };
+  }
+  function chips() {
+    CL.$("#d1-chips").innerHTML = batch.length ? batch.map((t) => '<span class="chip' + (t === "place_stone" ? " commit" : "") + '">' + t + "</span>").join("") : '<span class="hint">批次为空。点上面的按钮添加工具。</span>';
+  }
+  function draw1() {
+    chips();
+    if (!batch.length) { CL.$("#d1-list").innerHTML = ""; CL.$("#d1-status").innerHTML = ""; CL.$("#d1-out").textContent = "先往批次里加至少一个工具。"; return; }
+    const r = run1();
+    CL.$("#d1-list").innerHTML = r.evs.map((e) => '<li class="' + e[2] + '"><span class="src">' + CL.esc(e[0]) + "</span><span>" + CL.esc(e[1]) + '</span><span class="verdict"></span></li>').join("");
+    CL.$("#d1-status").innerHTML =
+      '<span class="pill ' + (r.committed ? "hot" : "") + '">落子：' + (r.committed ? "是" : "否") + "</span>" +
+      '<span class="pill">执行的工具：' + r.ran + "</span>" +
+      '<span class="pill">跳过的工具：' + r.skipped + "</span>" +
+      '<span class="pill ' + (r.next ? "slow" : "") + '">LLM 请求：' + (r.next ? 2 : 1) + "</span>";
+    let msg;
+    if (r.committed && r.next) msg = "已经落子，Pi 仍然再请求一次模型。这次请求白白消耗一次预算和一段棋钟。原因：同批有工具没返回 terminate。";
+    else if (r.committed && r.skipped) msg = "落子后 L1 立即 abort()，同批剩余 " + r.skipped + " 个工具被跳过，也没有下一次请求。";
+    else if (r.committed) msg = "落子后回合结束，没有多余的请求。";
+    else if (res === "review") msg = "没有落子，回合继续。这是有意的：needsReview 的反馈必须进入下一次请求，模型读到后再决定。";
+    else msg = "没有落子，回合继续。错误变成工具结果，模型在下一次请求里读到并修正。";
+    if (mode === "term" && preset === "solo" && r.committed) msg += "\n单独一个 place_stone 时，只靠 terminate 也能停。问题只出在混合批次。";
+    CL.$("#d1-out").textContent = msg;
+  }
+  CL.$$("#d1-batch [data-b]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d1-batch [data-b]").forEach((x) => x.classList.toggle("on", x === b));
+    preset = b.dataset.b;
+    CL.$("#d1-builder").hidden = preset !== "custom";
+    if (preset !== "custom") batch = PRESET[preset].slice(); else batch = [];
+    draw1();
+  }));
+  CL.$$("#d1-builder [data-add]").forEach((b) => b.addEventListener("click", () => { if (batch.length < 5) batch.push(b.dataset.add); draw1(); }));
+  CL.$("#d1-clear").addEventListener("click", () => { batch = []; draw1(); });
+  CL.$$("#d1-res [data-r]").forEach((b) => b.addEventListener("click", () => { CL.$$("#d1-res [data-r]").forEach((x) => x.classList.toggle("on", x === b)); res = b.dataset.r; draw1(); }));
+  CL.$$("#d1-mode [data-m]").forEach((b) => b.addEventListener("click", () => { CL.$$("#d1-mode [data-m]").forEach((x) => x.classList.toggle("on", x === b)); mode = b.dataset.m; draw1(); }));
+  draw1();
+
+  /* ---- 2. settle 时间线播放器 ---- */
+  // 效果：run=+1 run；ts=turn_start（L1 请求 +1、L2 modelTurn +1）；tool=+1 工具；stone；end
+  const START = [
+    ["循环外", "reload() 执行扩展工厂 ①；createAgentSession；工具隔离校验", "fast", {}],
+    ["L1", "session.prompt()：settle 外循环开始", "act", { run: 1 }],
+  ];
+  const DONE = [
+    ["L1", "tool_execution_end ⑥：accepted → committed = true，void abort()", "act", {}],
+    ["Pi", "agent_settled → prompt() 返回；if (committed) return；dispose()", "fast", { end: "ok" }],
+  ];
+  const SC = {
+    normal: START.concat([
+      ["turn_start", "⑤ L1 请求 1/8；⑤′ L2 modelTurn = 1", "fast", { ts: 1 }],
+      ["turn 1", "LLM 回复：evaluate_threats", "slow", {}],
+      ["L2", "② tool_call 计数 1/16 → ③ 执行：observed，返回信号", "fast", { tool: 1 }],
+      ["turn_start", "⑤ L1 请求 2/8；⑤′ L2 modelTurn = 2", "fast", { ts: 1 }],
+      ["turn 2", "LLM 回复：place_stone {I9}", "slow", {}],
+      ["L2", "② tool_call 计数 2/16 → ③ 门禁通过 → ⑦ port.commit 成功", "act", { tool: 1, stone: true }],
+    ], DONE),
+    review: START.concat([
+      ["turn_start", "⑤ L1 请求 1/8；⑤′ L2 modelTurn = 1", "fast", { ts: 1 }],
+      ["turn 1", "LLM 回复：evaluate_threats", "slow", {}],
+      ["L2", "② 计数 1/16 → ③ observed", "fast", { tool: 1 }],
+      ["turn_start", "⑤ L1 请求 2/8；⑤′ L2 modelTurn = 2", "fast", { ts: 1 }],
+      ["turn 2", "LLM 回复：[check_forcing_sequences {I9}, place_stone {I9}]", "slow", {}],
+      ["L2", "② 计数 2/16 → ③ 反证检查：not-found-within-budget，returnedOnTurn = 2", "fast", { tool: 1 }],
+      ["L2", "② 计数 3/16 → ③ place_stone：反馈与提交同在 modelTurn 2 → accepted: false + needsReview", "act", { tool: 1 }],
+      ["Pi", "同批没有 terminate → 进入下一个 turn", "fast", {}],
+      ["turn_start", "⑤ L1 请求 3/8；⑤′ L2 modelTurn = 3", "fast", { ts: 1 }],
+      ["turn 3", "LLM 回复：place_stone {I9}（已在更早的请求读到反证）", "slow", {}],
+      ["L2", "② 计数 4/16 → ③ 反馈门禁通过 → ⑦ port.commit 成功", "act", { tool: 1, stone: true }],
+    ], DONE),
+    retry: START.concat([
+      ["turn_start", "⑤ L1 请求 1/8；⑤′ L2 modelTurn = 1", "fast", { ts: 1 }],
+      ["turn 1", "LLM 请求出错（provider 报错）", "slow", {}],
+      ["Pi", "run #1 结束；retry.maxRetries = 1 → settle 外循环再起 run #2", "act", { run: 1 }],
+      ["turn_start", "⑤ L1 请求 2/8；⑤′ L2 modelTurn = 2", "fast", { ts: 1 }],
+      ["turn 2", "LLM 回复：evaluate_threats", "slow", {}],
+      ["L2", "② 计数 1/16 → ③ observed", "fast", { tool: 1 }],
+      ["turn_start", "⑤ L1 请求 3/8；⑤′ L2 modelTurn = 3", "fast", { ts: 1 }],
+      ["turn 3", "LLM 回复：place_stone {I9}", "slow", {}],
+      ["L2", "② 计数 2/16 → ③ ⑦ port.commit 成功", "act", { tool: 1, stone: true }],
+    ], DONE),
+    budget: START.concat(
+      (function () {
+        const a = [];
+        for (let i = 1; i <= 8; i++) {
+          a.push(["turn_start", "⑤ L1 请求 " + i + "/8；⑤′ L2 modelTurn = " + i, "fast", { ts: 1 }]);
+          a.push(["turn " + i, i % 2 ? "LLM 回复：simulate_moves（一直在试算，没有提交）" : "LLM 回复：read_knowledge", "slow", { tool: 1 }]);
+        }
+        a.push(["turn_start", "⑤ L1 第 9 次 turn_start → requests > 8 → abort()，请求不会发出", "act", { ts: 1, cut: true }]);
+        a.push(["L1", "prompt() 返回；抛“已达到单回合 8 次 LLM 请求上限”；dispose()", "act", { end: "budget" }]);
+        a.push(["L3", "显示错误，可重试或换模型；棋钟继续走", "fast", {}]);
+        return a;
+      })()
+    ),
+  };
+  let sc = "normal", step = 0;
+  function evalState(evs) {
+    let N = 0, M = 0, K = 0, mt = 0, stone = false, end = null, cut = false;
+    for (const e of evs) {
+      const f = e[3];
+      if (f.run) N += f.run;
+      if (f.ts) { if (f.cut) cut = true; else M++; mt++; }
+      if (f.tool) K += f.tool;
+      if (f.stone) stone = true;
+      if (f.end) end = f.end;
+    }
+    return { N, M, K, mt, stone, end, cut };
+  }
+  function draw2() {
+    const evs = SC[sc];
+    CL.$("#d2-list").innerHTML = evs.map((e, i) => '<li class="' + e[2] + (i >= step ? " future" : "") + (i === step - 1 ? " now" : "") + '"><span class="src">' + CL.esc(e[0]) + "</span><span>" + CL.esc(e[1]) + '</span><span class="verdict">' + (i < step ? "✓" : "") + "</span></li>").join("");
+    const st = evalState(evs.slice(0, step));
+    CL.$("#d2-status").innerHTML =
+      '<span class="pill">N（run）：' + st.N + "</span>" +
+      '<span class="pill ' + (st.cut ? "slow" : "") + '">M（已发出的请求）：' + st.M + " / 8</span>" +
+      '<span class="pill">K（工具调用）：' + st.K + " / 16</span>" +
+      '<span class="pill">L2 modelTurn：' + st.mt + "</span>" +
+      '<span class="pill ' + (st.stone ? "hot" : "") + '">落子：' + (st.stone ? "是" : "否") + "</span>";
+    let msg = "已播放 " + step + " / " + evs.length + " 步。";
+    if (step === evs.length) {
+      msg += "\n这次 settle：N = " + st.N + "，M = " + st.M + "，K = " + st.K + "。";
+      if (sc === "review") msg += "\n同一个 turn 里预排的“检查 + 提交”不算读过反馈。多一次请求，换来模型真正看见检查结果。";
+      if (sc === "retry") msg += "\n重试让外循环转了第二圈，N = 2。这是弈境 N 的上限。";
+      if (sc === "budget") msg += "\nL1 拦下了第 9 次 turn_start，M 停在 8。L2 的 modelTurn 记到 9，因为两个监听者都看到了这次 turn_start。";
+      if (sc === "normal") msg += "\n最常见的路径：一次观察，一次提交，提交即停。";
+    }
+    CL.$("#d2-out").textContent = msg;
+  }
+  CL.$$("#d2-sc [data-sc]").forEach((b) => b.addEventListener("click", () => {
+    CL.$$("#d2-sc [data-sc]").forEach((x) => x.classList.toggle("on", x === b)); sc = b.dataset.sc; step = 0; draw2();
+  }));
+  CL.$("#d2-next").addEventListener("click", () => { step = Math.min(step + 1, SC[sc].length); draw2(); });
+  CL.$("#d2-all").addEventListener("click", () => { step = SC[sc].length; draw2(); });
+  CL.$("#d2-reset").addEventListener("click", () => { step = 0; draw2(); });
+  draw2();
+});
+</script>
+</body>
+</html>

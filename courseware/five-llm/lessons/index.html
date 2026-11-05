@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>弈境结构精读</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/glossary-data.js"></script>
+<script src="assets/course-lib.js"></script>
+<style>
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 24px 16px 80px; }
+  .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; margin-top: 20px; }
+  .cta { display: inline-flex; align-items: center; gap: 8px; background: var(--hero-accent); color: #1a1a1a; font-weight: 700; padding: 10px 20px; border-radius: 30px; box-shadow: 0 4px 14px rgba(0,0,0,.18); transition: transform .15s; }
+  :root[data-theme="ink"] .cta { color: #f8efdc; }
+  .cta:hover { text-decoration: none; transform: translateY(-2px); }
+  .hero-prog { font-size: 13px; color: var(--hero-sub); display: flex; align-items: center; gap: 10px; }
+  .hero-prog .bar { width: 160px; height: 6px; border-radius: 6px; background: var(--hero-line); overflow: hidden; }
+  .hero-prog .bar i { display: block; height: 100%; background: var(--hero-accent); }
+  .sec-h { font-family: var(--head-font); color: var(--brand); font-size: 24px; margin: 44px 0 6px; }
+  .sec-sub { color: var(--ink-3); font-size: 14.5px; margin: 0 0 14px; }
+  .path { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; margin: 16px 0 8px; }
+  .stage { position: relative; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px 14px; box-shadow: var(--shadow); color: var(--ink); cursor: pointer; transition: transform .15s, box-shadow .15s, border-color .15s; }
+  .stage:hover { text-decoration: none; transform: translateY(-3px); box-shadow: var(--shadow-lift); border-color: var(--brand-2); }
+  .stage:not(:last-child)::after { content: "→"; position: absolute; right: -19px; top: 50%; transform: translateY(-50%); color: var(--ink-3); font-size: 18px; }
+  .stage .n { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--brand); color: var(--surface); font-family: var(--mono); font-weight: 700; }
+  .stage b { display: block; color: var(--brand); font-size: 18px; margin: 10px 0 4px; font-family: var(--head-font); }
+  .stage p { margin: 0; font-size: 14px; color: var(--ink-2); line-height: 1.65; flex: 1; }
+  .stage .go { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 13px; color: var(--brand-2); display: flex; justify-content: space-between; }
+  .stage .go em { font-style: normal; color: var(--ink-3); }
+  @media (max-width: 900px) { .path { grid-template-columns: 1fr 1fr; } .stage::after { display: none; } }
+  @media (max-width: 520px) { .path { grid-template-columns: 1fr; } }
+  .step-sec { margin-top: 40px; scroll-margin-top: 70px; }
+  .step-head { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--line); }
+  .step-head .n { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; background: var(--brand); color: var(--surface); font-family: var(--mono); font-size: 20px; font-weight: 700; }
+  .step-head h2 { margin: 0; font-family: var(--head-font); color: var(--brand); font-size: 21px; }
+  .step-head p { margin: 0; font-size: 14px; color: var(--ink-2); }
+  .lrows { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 10px; }
+  .lrow { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 16px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 18px; box-shadow: var(--shadow); color: var(--ink); cursor: pointer; transition: transform .15s, box-shadow .15s, border-color .15s; }
+  .lrow:hover { text-decoration: none; transform: translateX(3px); box-shadow: var(--shadow-lift); border-color: var(--brand-2); }
+  .lrow .no { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--accent); text-align: center; }
+  .lrow h3 { margin: 0; font-size: 17.5px; color: var(--brand); font-family: var(--head-font); }
+  .lrow h3 .id { font-family: var(--mono); font-size: 12px; color: var(--ink-3); font-weight: 400; margin-left: 8px; }
+  .lrow p { margin: 3px 0 0; font-size: 14.5px; color: var(--ink-2); line-height: 1.6; }
+  .lrow .src { font-size: 12px; color: var(--ink-3); }
+  .lrow .pill2 { white-space: nowrap; font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 20px; background: var(--brand); color: var(--surface); }
+  .lrow .pill2.done { background: transparent; color: var(--up); border: 1px solid var(--up); }
+  @media (max-width: 600px) { .lrow { grid-template-columns: 36px minmax(0, 1fr); } .lrow .pill2 { grid-column: 2; justify-self: start; } .lrow .no { font-size: 18px; } }
+</style>
+</head>
+<body>
+<header id="cl-topbar"></header>
+<div class="wrap">
+  <div class="hero">
+    <div class="kicker">互动课程 · 4 步 10 课</div>
+    <h1>弈境结构精读</h1>
+    <p>弈境（apps/five-llm）是一个人机五子棋桌面应用。它的机器棋手是一个 LLM，必须通过工具调用才能落子。本课程精读它的技术白皮书和后续设计记录，按代码现状讲透四层架构、Pi SDK 接入、双循环接入点、知识包与上下文工程、连续冲四门禁。每课有结构图、互动演示和自测。右侧的 AI 助教读过白皮书、勘误和相关源码。</p>
+    <div class="hero-actions"><a class="cta" id="cta" href="L01-overview.html">从第 1 课开始 →</a><span class="hero-prog" id="hero-prog"></span></div>
+  </div>
+
+  <h2 class="sec-h">学习路线</h2>
+  <p class="sec-sub">按 1 → 4 的顺序学。点一个步骤，跳到这一步的课程。</p>
+  <div class="path" id="path"></div>
+  <div id="groups"></div>
+
+  <h2 class="sec-h">原文与一手资料</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>资料</th><th>说明</th></tr>
+    <tr><td><a href="../docs/articles/five-llm-whitepaper.md">白皮书 v1.0</a></td><td>《弈境 · Five LLM 技术白皮书》，2026-10-30。描述 L3 重构（<code>380cb07</code>）时的代码。主体结构仍然有效，部分数字和机制已过时。</td></tr>
+    <tr><td><a href="../docs/articles/code-status.md">代码现状勘误</a></td><td>课程作者对照提交 <code>4f65e37</code> 的源码整理，逐条带 文件:行号。与白皮书冲突时以它为准。</td></tr>
+    <tr><td><a href="../docs/articles/forcing-review.md">L3 v2 设计记录</a></td><td>对手连续冲四反证与提交前反馈（第 7 个工具）。</td></tr>
+    <tr><td><a href="../docs/articles/own-forcing-win.md">L3 v3 设计记录</a></td><td>己方强杀发现与漏胜反馈门禁（第 8 个工具）。</td></tr>
+    <tr><td><a href="../docs/articles/l3-knowledge-refactor.md">L3 重构说明</a></td><td>知识层重构的目标、验收标准与暂缓项。</td></tr>
+    <tr><td><code>apps/five-llm/</code></td><td>源码。<code>README.md</code> 讲运行与配置，<code>RULES.md</code> 讲棋规。</td></tr>
+  </table></div>
+  <div class="callout warn"><span class="ttl">先读这一条</span>白皮书 v1.0 写成后，代码又改了 5 次行为：工具从 6 个增至 8 个，知识包从 v1 升到 v3，新增连续冲四反证、己方强杀和提交前反馈门禁，桌面加了最新一手标记和胜负庆祝。本课程按代码现状讲，并在每处标出白皮书哪里过时。</div>
+  <div class="callout note"><span class="ttl">名字相近，不要混</span>“拾伍”（<code>apps/five</code>）是离线五子棋，没有 LLM。“楚河”（<code>apps/chinese-chess</code>）是同一套做法的象棋版。“边牧”（<code>apps/tilldone</code>）是另一门课：它用 RPC 子进程接 Pi，弈境用进程内 SDK。L03 会对照两者。</div>
+
+  <h2 class="sec-h">怎样用这些课程</h2>
+  <ol class="steps">
+    <li><b>先读“学完本课，你能够”</b>：知道这一课要带走什么。</li>
+    <li><b>看结构图</b>：每课先给结论，再用图把结构和流程画出来。</li>
+    <li><b>动手玩演示</b>：调参数、换场景，看设计在什么条件下有效、什么时候有代价。</li>
+    <li><b>做自测题</b>：每课最后有 3–5 道题。答错会显示解释。</li>
+    <li><b>问 AI 助教</b>：右侧的 AI 助教读过原文和本课全部内容。可以选中一段话问它，或点图片、演示右上角的“问 AI”。</li>
+  </ol>
+  <div class="callout note"><span class="ttl">启用 AI 助教</span>在终端运行 <code>cd lessons &amp;&amp; uv run --no-project python tools/serve.py</code>，然后打开 <a href="http://127.0.0.1:8772/lessons/">http://127.0.0.1:8772/lessons/</a>。模型是 DeepSeek（默认 <code>deepseek-flash</code>），走 DeepSeek 官方 API，<b>按量计费</b>。API key 放在 <code>lessons/.env</code>，只在本机服务里用，不进页面。直接双击打开 HTML 也能学，只是没有 AI 助教。</div>
+  <p class="disclaimer">课程内容以原文为准；“补充”标注的部分是课程作者的解释，不是原文观点。课程编写规范见 <code>lessons/AUTHORING.md</code>。</p>
+</div>
+
+<script>
+const DESC = {
+  "L01-overview.html": "为什么不用搜索 AI；四层各管什么；一手棋从点击到落子怎样走完。",
+  "L02-ports-invariants.html": "依赖倒置：L3 只认 TurnPort 和 AgentDriver；单写者、revision 与 valid() 五条件。",
+  "L03-sdk-vs-rpc.html": "进程内 Pi SDK 对照边牧的 RPC 子进程；每手一个内存 Session；系统提示词整段替换与屏蔽项。",
+  "L04-loop-hooks.html": "每手一次 settle；扩展工厂、tool_call、turn_start 两种订阅；terminate 为什么还要 abort。",
+  "L05-gates-unused.html": "请求 8、工具 16、超时 90 秒与取消；八个刻意不用的回调说明了什么。",
+  "L06-knowledge-routing.html": "15 个知识条目、宿主路由与模型路由；信号契约怎样把事实和启发式分开。",
+  "L07-context-rebuild.html": "模型每次请求看到什么；关闭压缩、每手重建；把知识和计算委派出去。",
+  "L08-forcing-search.html": "对手连续冲四反证、己方强杀发现，以及 needsReview 怎样让反馈赶在提交之前。",
+  "L09-evidence-desktop.html": "DecisionTrace 与 candidateReview 记了什么；Electron 进程模型、心跳与去抖。",
+  "L10-lineage-review.html": "从 pstack 提案到实现的取舍；一局 40 手的复盘；自我改进的环还差什么。",
+};
+CL.onReady(function () {
+  const v = CL.visited(), N = CL.LESSONS.length, done = CL.LESSONS.filter((l) => v.includes(l.file)).length;
+  const nextL = CL.LESSONS.find((l) => !v.includes(l.file));
+  const cta = document.getElementById("cta");
+  if (done && nextL) { cta.href = nextL.file; cta.textContent = "继续学习：第 " + String(nextL.no).padStart(2, "0") + " 课 →"; }
+  else if (done === N) { cta.href = CL.LESSONS[0].file; cta.textContent = "全部学完 · 从头复习 →"; }
+  document.getElementById("hero-prog").innerHTML = '<span class="bar"><i style="width:' + Math.round((100 * done) / N) + '%"></i></span>已学 ' + done + " / " + N + " 课";
+  if (done) { const rb = CL.resetButton(() => location.reload()); rb.style.color = "inherit"; document.getElementById("hero-prog").appendChild(rb); }
+  let p = "", h = "";
+  for (const st of CL.STEPS) {
+    const ls = CL.LESSONS.filter((l) => l.step === st.n), d = ls.filter((l) => v.includes(l.file)).length;
+    p += '<a class="stage" href="#step-' + st.n + '"><span class="n">' + st.n + "</span><b>" + st.name + "</b><p>" + st.desc +
+      '</p><span class="go"><span>查看 ' + ls.length + " 课 ↓</span><em>" + (d ? "已学 " + d : "") + "</em></span></a>";
+    h += '<section class="step-sec" id="step-' + st.n + '"><div class="step-head"><span class="n">' + st.n + "</span><div><h2>第 " + st.n + " 步 · " + st.name + "</h2><p>" + st.desc + '</p></div></div><ol class="lrows">';
+    for (const l of ls) {
+      const seen = v.includes(l.file);
+      h += '<li><a class="lrow" href="' + l.file + '"><span class="no">' + String(l.no).padStart(2, "0") + "</span><span><h3>" + l.title + '<span class="id">' + l.id + "</span></h3><p>" + (DESC[l.file] || "") +
+        '</p><span class="src">原文出处：' + l.src + '</span></span><span class="pill2' + (seen ? " done" : "") + '">' + (seen ? "✓ 已学 · 复习" : "开始学习 →") + "</span></a></li>";
+    }
+    h += "</ol></section>";
+  }
+  document.getElementById("path").innerHTML = p;
+  document.getElementById("groups").innerHTML = h;
+});
+</script>
+</body>
+</html>
