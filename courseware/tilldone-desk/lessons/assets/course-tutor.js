@@ -344,7 +344,8 @@
   /* ---------- 来源漂移：本课引用的来源在课程快照之后变了，就在正文顶部提示 ---------- */
   async function showDrift() {
     let items = [];
-    try { items = ((await (await fetch("/api/drift")).json()).drift || []).filter((d) => (d.lessons || []).includes(LESSON)); } catch (e) { return; }
+    try { items = ((await (await fetch("/api/drift")).json()).drift || []).filter((d) => (d.lessons || []).includes(LESSON)); } catch (e) { /* 服务没有漂移接口：不提示 */ }
+    document.body.dataset.drift = items.length ? "changed" : "none";   // learner driver 等这个标记再读提示
     const main = document.querySelector("main");
     if (!items.length || !main) return;
     const box = el("div", "drift-banner",
