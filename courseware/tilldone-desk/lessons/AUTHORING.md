@@ -20,7 +20,9 @@
 | `assets/glossary-data.js` | 共用术语表 + 分类表 `CL_GLOSSARY_CATS` |
 | `assets/glossary-add-<课号>.js` | 写课时新增术语的临时文件，最后由 `node tools/finalize.mjs --merge` 合并 |
 | `img/figNN.*` | 原文配图（编号与原文顺序一致；在这里补一张“图号 → 原文位置 → 内容”对照表） |
-| `tools/serve.py` | 本地服务 + DeepSeek 转发（`SOURCES` / `EXTRA` 配置原文） |
+| `tools/sources.json` | 来源清单：课程名、端口、助教人设与课程规则，以及每个来源的 `path` / `scope` / `aliases` / `snapshot`（见第 9 节） |
+| `tools/serve.py` | 本地服务 + DeepSeek 转发。各门课逐字相同，不要改；课程配置都在 `sources.json` |
+| `errata.md` | AI 助教发现的“课文与来源矛盾”（服务端写入，作者核对后改课文、删条目） |
 | `tools/check_page.py` | 真 Chrome 检查：JS 错误、坏链接、缺术语、演示没渲染、图片没加载、横向滚动 |
 | `tools/finalize.mjs` | 合并术语、生成“出现在哪些课程”反向链接、报告缺失术语 |
 
@@ -90,6 +92,8 @@ CL.cssVar("--ink")
 - 每课至少 2 个演示，必须**揭示原文的一个机制或权衡**，不是装饰。
 - 演示是简化模型：`.chart-foot` 写清假设、与原文数据的关系；不要把模拟结果说成原文结论。
 - 数字由页面 JS 现算；正文引用演示结果时写“在这个模拟里”。用 `CL.rng(seed)` 保证可复现。
+- **演示的简化假设要在终点状态下成立。** 播完、全部勾选、切到最后一个场景时，读数仍要和课文、来源一致。常见错误：工作已全部完成（`allDone`）之后的调用，演示仍按“成功”或“可补救”计。写完用 learner driver 的 `settle` 把每个演示推到终点，逐条看读数。
+- 演示控件的标签沿用速记表和术语表里的词，同一个东西始终同一个词。
 
 ## 8. 自检（交付前必须做）
 
@@ -100,3 +104,10 @@ uv run --no-project --with playwright python tools/check_page.py 你的文件.ht
 ```
 - 只允许“链接到还没写好的其他课程”这类 broken link。
 - 打开截图看：演示有内容、文字没溢出/重叠、三个主题都可读。元素截图里压在上面的顶栏是 sticky 造成的假象，不是 bug。
+
+## 9. 来源清单、勘误与漂移
+
+- **登记来源。** 课文引用的每个来源（原文、某个源码文件、另一篇文章、论文、笔记）都登记在 `tools/sources.json`。`scope` 取 `all`（每课都带）、`cited`（课文提到 `path` 或任一 `aliases` 时才带）或课程文件名列表（列出的课一定带，其余课提到时也带）。`aliases` 写课文里实际用的写法，例如 `state.ts`、书名、小节前缀；有歧义的写法（如两个 `index.ts`）不要做 alias。
+- **检查。** `uv run --no-project python tools/serve.py --check` 列出每课带了哪些资料、超出预算省略了哪些、哪些文件缺失（报错），以及课文里像文件名或《书名》、但没有登记的引用（警告）。
+- **快照。** 课文和来源核对一致后运行 `uv run --no-project python tools/serve.py --snapshot`。在 git 里且没有未提交改动的来源记提交号，其他来源记 sha256，并把内容副本存进 `tools/.snapshots/`。之后来源一变，引用它的课程顶部会出现提示，`/api/drift` 列出变化，助教也会拿到提交列表和 diff 节选。改完课文，再拍一次快照。
+- **勘误。** 助教发现课文与来源矛盾时，在回答末尾输出 ```` ```errata ```` 块；服务端记进 `errata.md`（`GET /api/errata` 可列出），页面显示“疑似勘误”卡片。助教也会误报：先对照来源核实，再改课文，最后删掉条目。

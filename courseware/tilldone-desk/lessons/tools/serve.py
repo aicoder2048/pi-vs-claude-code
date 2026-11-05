@@ -390,7 +390,7 @@ class Handler(SimpleHTTPRequestHandler):
     def guess_type(self, path):  # 让浏览器直接显示 Markdown 原文
         return "text/plain; charset=utf-8" if str(path).endswith(".md") else super().guess_type(path)
 
-    def _open_upstream(self, key: str, msgs: list, stream: bool = True, max_tokens: int = 4000):
+    def _open_upstream(self, key: str, msgs: list, stream: bool = True, max_tokens: int = 8000):
         body = {
             "model": self.env.get("DEEPSEEK_MODEL", "deepseek-flash"),
             "messages": msgs,
@@ -502,6 +502,8 @@ class Handler(SimpleHTTPRequestHandler):
                         if d.get("content"):
                             answer.append(d["content"])
                             send({"t": d["content"]})
+                        if ch.get("finish_reason") == "length":
+                            send({"t": "\n\n> ⚠ 回答超出长度上限，结尾被截断（末尾的勘误也可能丢失）。可以让助教“分两次讲”。"})
             found = S.parse_errata("".join(answer), req["lesson"])
             new = []
             if found:

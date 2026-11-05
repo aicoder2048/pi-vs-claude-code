@@ -12,8 +12,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import serve  # noqa: E402
-import sources as S  # noqa: E402
+import serve
+import sources as S
 
 
 def src(id, scope="cited", aliases=(), path=None):

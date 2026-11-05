@@ -247,7 +247,7 @@ def add_errata(path: Path, entries: list, date: str) -> list:
 
 
 def _git(cwd: Path, *args) -> str:
-    r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=False)
     if r.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} 失败：{r.stderr.strip()[:200]}")
     return r.stdout
