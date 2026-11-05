@@ -1,6 +1,6 @@
 # 边牧（TillDone Desk）结构梳理：四层架构、上下文管理、TillDone 拆分与 PStack 的分工
 
-> 快照：仓库 `pi-vs-claude-code`，提交 `19dc761`（2026-11-04）。初版快照是 `f112eb9`（2026-11-03）；2026-11-04 对照源码更新了行号、E-L4、督促结果和面板计数（见 §4.5、§2.1）。
+> 快照：仓库 `pi-vs-claude-code`，提交 `8c2f42e`（2026-11-04）。初版快照是 `f112eb9`（2026-11-03）；2026-11-04 对照源码更新了行号、E-L4、督促结果和面板计数（见 §4.5、§2.1）。
 > 范围：`apps/tilldone`（桌面端）、它自带的扩展副本 `apps/tilldone/extensions/tilldone/`，以及项目本地安装的 `pi-pstack`（`.pi/npm/node_modules/pi-pstack/`）。
 > 来源可信度：源码 > README > 白皮书 > 讨论稿。白皮书 `apps/tilldone/docs/tilldone-desk-whitepaper.md` 是 v1.0（2026-10-31），**没有覆盖 pstack 部分**。用户决定等设计固定后再更新白皮书。
 > 本文由 Claude Code 在 2026-11-03 读源码后整理。标“推断”的地方没有实际运行验证。
@@ -22,7 +22,7 @@
 - **run 内循环**：`agent-loop.js` 的 `runLoop()`。一个 turn = 一次 LLM 请求 + 这条回复里所有工具调用。
 - 用户一句话 = 一次 settle。通常 1 个 run；被督促时 2 个 run（督促每条用户消息最多一次）。
 - 运行中插话（steer）也会触发 `input` 事件，复位督促闩锁（Pi 1.4.0 `agent-session.js` 的 `steer()` → `_queueUserInput()` → `_runInputHandlers()`）。所以插过话的 settle 可能被督促不止一次，run 数也可能超过 2（读源码推断，没有实际运行验证）。
-- 桌面端只把 `agent_settled` 当“空闲”。`agent_end` 不算空闲，因为督促会让外循环再转一圈（`src/domain.ts:258-260`）。
+- 桌面端只把 `agent_settled` 当“空闲”。`agent_end` 不算空闲，因为督促会让外循环再转一圈（`src/domain.ts:257-259`）。
 
 ## 2. 四层架构：两套四层叠在一起
 
@@ -66,7 +66,7 @@ pstack 自己不分四层：命令、钩子、工具都写在 `pi-pstack/extensi
 | 任务清单 | 扩展的 `model.list` | 只从 tilldone 工具的 `tool_execution_end` 里的 `result.details` 取完整快照 |
 | 当前任务 | 清单里第一个 `inprogress` | `current(list)` 现算 |
 | 是否在运行 | Pi 的 run 状态 | `agent_start` 置真，`agent_settled` 置假 |
-| 每个任务的工具次数、模型请求次数 | 桌面端 D-L3 自己数 | 从 `tool_execution_start`、`turn_start` 计数；不进模型上下文。按任务 id 累计，到 15 次标“偏重”（`toolCallsView`，`src/domain.ts:470`）。它和扩展的 `spent` 不是同一个数：`spent` 在当前任务一换就清零 |
+| 每个任务的工具次数、模型请求次数 | 桌面端 D-L3 自己数 | 从 `tool_execution_start`、`turn_start` 计数；不进模型上下文。按任务 id 累计，到 15 次标“偏重”（`toolCallsView`，`src/domain.ts:469`）。它和扩展的 `spent` 不是同一个数：`spent` 在当前任务一换就清零 |
 
 ## 3. 上下文管理
 
@@ -95,7 +95,7 @@ PStack 追加的 system prompt 原文（`pi-pstack/extensions/pstack/index.ts:27
 - `spent`（当前任务已用工具次数）和 `nudged`（本条输入是否已督促）：只在扩展内部做决策。
 - 桌面端全部状态：运行中、待送达队列、弹窗、外观。
 - 每个任务的工具次数、模型请求次数：D-L3 从 RPC 事件里数，只给界面。
-- 子 agent 实时树：`src/domain.ts:556` 的 `parseChild` 解析 `subagent` 的 partial result，只给 L4。
+- 子 agent 实时树：`src/domain.ts:555` 的 `parseChild` 解析 `subagent` 的 partial result，只给 L4。
 - API 凭据：Pi 自己解析 `auth.json`，桌面端不转发。
 
 这就是“界面通道和上下文通道分离”。
@@ -151,7 +151,7 @@ interface Model { list: ListState; nudged: boolean; spent: number }
 1. **工具说明里的原则**（每次请求都在）：“Keep each task small enough to finish and verify in one focused change. If a task turns out bigger, split it instead of letting it grow; if you find work outside the current task, add it as a new task.”
 2. **刚认领时** `SPLIT_CUE`（`state.ts:113`），附在 `start` 结果末尾：“Before you start: if this task holds two or more steps you can verify separately, split it now with `tilldone split`.” 理由：这是模型对任务大小了解最多、还没花任何成本的时刻。
 3. **做了很久时**（`SPLIT_HINT_EVERY = 15`，`state.ts:116`）。`toolCalled`（`state.ts:430`）给当前任务的每个非 tilldone 工具调用 `spent + 1`；到 15 的倍数时生成提示：“💡 TillDone: task #N has taken 15 tool calls so far. If it is bigger than one step, split it with `tilldone split` (id=N) and keep going.” 提示在 `tool_call` 时决定，暂存在 `toolCallId` → hint 的 Map 里，等这次调用的 `tool_result` 回来再追加到结果末尾。模型不需要额外的 turn。
-4. **人的入口：细分按钮**（`src/domain.ts:416-422`）。任务面板上每个未完成任务有“细分”按钮。点下后桌面端发一句“请把 #N 拆小”（空闲发 `prompt`，运行中发 `steer`），按钮变成“细分中…”。注释：“The shepherd points at a task; the model, which has the context, decides the subtasks.” 桌面端自己不拆，也不调 `split`。按钮在下次 tilldone 结果里该任务不再未完成时恢复，或者在 settle 结束时恢复（覆盖“模型决定不拆”）。
+4. **人的入口：细分按钮**（`src/domain.ts:415-421`）。任务面板上每个未完成任务有“细分”按钮。点下后桌面端发一句“请把 #N 拆小”（空闲发 `prompt`，运行中发 `steer`），按钮变成“细分中…”。注释：“The shepherd points at a task; the model, which has the context, decides the subtasks.” 桌面端自己不拆，也不调 `split`。按钮在下次 tilldone 结果里该任务不再未完成时恢复，或者在 settle 结束时恢复（覆盖“模型决定不拆”）。
 
 ### 4.4 门禁与督促
 
@@ -163,11 +163,11 @@ interface Model { list: ListState; nudged: boolean; spent: number }
 
 提交 `b89da3a`、`4965e82` 之后，桌面端会判定每条督促的结果，并在停下时把下一步交给人。全部在 D-L3，只给界面，不进模型上下文。
 
-- 收到 `tilldone-nudge` 时，`addNudge`（`src/domain.ts:189`）记下当时未完成的任务 id，结果先记为 `waiting`。
-- 下一次 `agent_end`，也就是这次督促起的 run 结束时，`judgeNudges`（`src/domain.ts:196`）判定结果：全部完成 → `done`；完成一部分 → `partial`；一个也没完成 → `stopped`；清单被换掉（id 重新编号）→ `replaced`。拆分出的子任务还开着，原任务也算没完成。
+- 收到 `tilldone-nudge` 时，`addNudge`（`src/domain.ts:188`）记下当时未完成的任务 id，结果先记为 `waiting`。
+- 下一次 `agent_end`，也就是这次督促起的 run 结束时，`judgeNudges`（`src/domain.ts:195`）判定结果：全部完成 → `done`；完成一部分 → `partial`；一个也没完成 → `stopped`；清单被换掉（id 重新编号）→ `replaced`。拆分出的子任务还开着，原任务也算没完成。
 - 督促消息卡片用界面语言写出结果，例如“✓ 提醒之后干完了”“⚠ 提醒之后没接着干，#2 还没干完”。模型看到的原文折在“TillDone 发给边牧的原话”里。
-- 任务面板有一行督促统计（`nudgesView`，`src/domain.ts:717`），例如“催过 1 次，催完没接着干，等你发话”。
-- “交还给人”的提示（`handoffView`，`src/domain.ts:729`）：Pi 已停下、还有未完成任务、最新一条用户消息之后已经督促过时，输入框上方显示“边牧停下了：#2 还没干完，也已经提醒过它。你可以回复它接着干，或点任务旁的‘细分’把任务拆小。”
+- 任务面板有一行督促统计（`nudgesView`，`src/domain.ts:716`），例如“催过 1 次，催完没接着干，等你发话”。
+- “交还给人”的提示（`handoffView`，`src/domain.ts:728`）：Pi 已停下、还有未完成任务、最新一条用户消息之后已经督促过时，输入框上方显示“边牧停下了：#2 还没干完，也已经提醒过它。你可以回复它接着干，或点任务旁的‘细分’把任务拆小。”
 
 面板计数和 `spent` 的区别：面板按任务 id 累计工具调用，换任务再换回来也不清零；`spent` 只数当前任务，换任务就清零。例如 start #1 做 10 次、start #2 做 3 次、再 start #1 做 6 次：面板上 #1 是 16 次并标“偏重”，`spent` 却是 6，模型一次 15 次提示都没收到。
 
@@ -199,7 +199,7 @@ pi --mode json --print --no-session --append-system-prompt <agent 提示文件> 
 
 注意：子进程**不加载 tilldone**，命令行里也没有 `--no-extensions`。
 
-桌面端怎样开启 Poteto Mode（`src/domain.ts:432-441`）：`TILLDONE_PSTACK=1` 时，会话的第一条空闲 prompt 被改写成 `/skill:poteto-mode <你的话>`。pstack 的 `input` 钩子开启 mode，之后的消息照原样发送。用 `/skill:` 而不用 `/poteto-mode`，是因为后者在 RPC 下失败（`ctx.sendUserMessage is not a function`，pstack 的 bug）。
+桌面端怎样开启 Poteto Mode（`src/domain.ts:431-440`）：`TILLDONE_PSTACK=1` 时，会话的第一条空闲 prompt 被改写成 `/skill:poteto-mode <你的话>`。pstack 的 `input` 钩子开启 mode，之后的消息照原样发送。用 `/skill:` 而不用 `/poteto-mode`，是因为后者在 RPC 下失败（`ctx.sendUserMessage is not a function`，pstack 的 bug）。
 
 ## 6. 两者怎么分工、怎么咬合
 
@@ -229,7 +229,7 @@ README 的说法：“In Poteto Mode the model keeps two lists: `pstack_todo` fo
 
 1. **反转的门禁**（`state.ts:376`）：让 pstack 的工具能通过，只把 `subagent` 算作“会改东西”的工具。
 2. **计费门**（`state.ts:422` `billingGate`，`index.ts` 的 `tool_call` 里先于门禁执行）：检查 `subagent` 的显式 `model`、tasks/chain 里的 `model`、`role` 查到的模型，以及 `pstack_config set`。原因：用户的 Anthropic API 按量计费、没有充值。
-3. **子 agent 进度显示**（`src/domain.ts:556` `parseChild`）：桌面 D-L3 解析 `subagent` 的 partial result，显示实时子 agent 树。只给界面。
+3. **子 agent 进度显示**（`src/domain.ts:555` `parseChild`）：桌面 D-L3 解析 `subagent` 的 partial result，显示实时子 agent 树。只给界面。
 
 除此之外两边互不认识：`state.ts` 只在计费部分提到 pstack；pi-pstack 的 `SKILL.md` 完全没有提到 tilldone（grep 结果）。
 

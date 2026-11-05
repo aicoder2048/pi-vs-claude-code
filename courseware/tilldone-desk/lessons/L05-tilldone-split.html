@@ -172,14 +172,14 @@ interface Model { list: ListState; nudged: boolean; spent: number }</code></pre>
     <div class="chart-foot">把工作量拖到 40，切换三种做法。“全部自己做”在第 15、30 次各提示一次。“第 20 步后 split”：第一个子任务是新 id，spent 从 0 重新数。“分派一个 subagent”：子 agent 内部做的几十步，spent 只记 1 次，提示永远不出现。<br><span class="data-note">简化模型：每步工作 = 1 次非 tilldone 工具调用；分派时父 agent 先自己做 2 次 read，再调 1 次 subagent；tilldone 自己的调用不计数。</span></div>
   </div>
   <div class="callout warn"><span class="ttl">盲区</span>原文 §7 第 1 条：子进程不加载 TillDone。一次 <code>subagent</code> 调用在 <code>spent</code> 里只算 1 次。分派出去的大任务看起来很“便宜”，不会触发拆分提示。</div>
-  <div class="callout note"><span class="ttl">补充：面板上的“工具次数”不是 spent</span>任务面板上每个任务旁的工具调用次数由桌面 D-L3 自己数（<code>src/domain.ts:282</code> 的 <code>tool_execution_start</code>），按任务 id 累计，到 15 次标为“偏重”（<code>toolCallsView</code>，<code>src/domain.ts:470</code>）。<code>spent</code> 只数当前任务，当前任务一换就清零。两者会分叉。例如：start #1 做 10 次 bash，start #2 做 3 次，再 start #1 做 6 次。面板上 #1 是 16 次，已标“偏重”；<code>spent</code> 却是 6，模型一次 15 次提示都没收到。所以面板标红不等于模型收到过拆分提示。这是课程作者对照源码的观察，原文没有讨论。</div>
+  <div class="callout note"><span class="ttl">补充：面板上的“工具次数”不是 spent</span>任务面板上每个任务旁的工具调用次数由桌面 D-L3 自己数（<code>src/domain.ts:281</code> 的 <code>tool_execution_start</code>），按任务 id 累计，到 15 次标为“偏重”（<code>toolCallsView</code>，<code>src/domain.ts:469</code>）。<code>spent</code> 只数当前任务，当前任务一换就清零。两者会分叉。例如：start #1 做 10 次 bash，start #2 做 3 次，再 start #1 做 6 次。面板上 #1 是 16 次，已标“偏重”；<code>spent</code> 却是 6，模型一次 15 次提示都没收到。所以面板标红不等于模型收到过拆分提示。这是课程作者对照源码的观察，原文没有讨论。</div>
 </section>
 
 <!-- ============ 6 ============ -->
 <section class="lesson-sec" id="s6">
   <h2><span class="num">06</span>人的入口：细分按钮</h2>
   <p>先说结论：牧羊人指出任务，模型决定怎么拆。桌面端自己不拆，也不调 <code>split</code>。</p>
-  <blockquote class="src">The shepherd points at a task; the model, which has the context, decides the subtasks.<cite>src/domain.ts:416</cite></blockquote>
+  <blockquote class="src">The shepherd points at a task; the model, which has the context, decides the subtasks.<cite>src/domain.ts:415</cite></blockquote>
   <p>任务面板上每个未完成任务都有“细分”按钮。点下后：</p>
   <ol class="steps">
     <li>桌面端按界面语言取文案 <code>splitRequest</code>，填入 id 和任务文本。</li>
@@ -293,7 +293,7 @@ interface Model { list: ListState; nudged: boolean; spent: number }</code></pre>
 </section>
 
 <nav id="cl-pager" data-current="L05-tilldone-split.html"></nav>
-<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§4（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 19dc761 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§4（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 8c2f42e 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
 </main>
 </div>
 

@@ -82,7 +82,7 @@
   <pre><code>pi --mode json --print --no-session --append-system-prompt &lt;agent 提示文件&gt;
    [--model &lt;m&gt;] [--tools &lt;列表&gt;] "Delegated task:\n&lt;task&gt;"</code></pre>
   <div class="callout warn"><span class="ttl">注意</span>子进程不加载 TillDone。命令行里也没有 <code>--no-extensions</code>。L07 会讲这两点带来的坑。</div>
-  <p>边牧怎样开启 Poteto Mode：<code>TILLDONE_PSTACK=1</code> 时，桌面端把会话的第一条空闲 prompt 改写成 <code>/skill:poteto-mode &lt;你的话&gt;</code>（<code>src/domain.ts:432-441</code>）。pstack 的 <code>input</code> 钩子看到它，就开启 mode。之后的消息照原样发送。</p>
+  <p>边牧怎样开启 Poteto Mode：<code>TILLDONE_PSTACK=1</code> 时，桌面端把会话的第一条空闲 prompt 改写成 <code>/skill:poteto-mode &lt;你的话&gt;</code>（<code>src/domain.ts:431-440</code>）。pstack 的 <code>input</code> 钩子看到它，就开启 mode。之后的消息照原样发送。</p>
   <div class="callout note"><span class="ttl">为什么不用 /poteto-mode 命令</span>原文说明：<code>/poteto-mode</code> 在 RPC 下会失败，报错 <code>ctx.sendUserMessage is not a function</code>。这是 pstack 的 bug。所以桌面端改用 <code>/skill:poteto-mode</code>。</div>
 </section>
 
@@ -170,7 +170,7 @@
   <ol class="steps">
     <li><b>反转的门禁</b>（<code>state.ts:376</code>）：让 pstack 的工具能通过，只把 <code>subagent</code> 算作“会改东西”的工具。</li>
     <li><b>计费门</b>（<code>state.ts:422</code>，在 <code>index.ts</code> 的 <code>tool_call</code> 里先于门禁执行）：检查 <code>subagent</code> 和 <code>pstack_config set</code> 的模型。</li>
-    <li><b>子 agent 进度显示</b>（<code>src/domain.ts:556</code> 的 <code>parseChild</code>）：桌面 D-L3 解析 <code>subagent</code> 的 partial result，显示<a class="term" href="glossary.html#subagent-tree">子 agent 实时树</a>。只给界面。</li>
+    <li><b>子 agent 进度显示</b>（<code>src/domain.ts:555</code> 的 <code>parseChild</code>）：桌面 D-L3 解析 <code>subagent</code> 的 partial result，显示<a class="term" href="glossary.html#subagent-tree">子 agent 实时树</a>。只给界面。</li>
   </ol>
   <p>原文的证据是 grep：<code>state.ts</code> 只在计费部分提到 pstack；pi-pstack 的 <code>SKILL.md</code> 完全没有提到 tilldone。</p>
 
@@ -256,7 +256,7 @@
 </section>
 
 <nav id="cl-pager" data-current="L06-pstack-meshing.html"></nav>
-<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§5–6（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 19dc761 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§5–6（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 8c2f42e 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
 </main>
 </div>
 
@@ -398,7 +398,7 @@ CL.onReady(function () {
   const SEAM = {
     "1": [["td", "ps", "e1"], "① 反转的门禁（state.ts:376）：GATED_TOOLS = bash、edit、write、subagent。pstack_todo、pstack_config、read 都直接放行；subagent 要有进行中的任务。"],
     "2": [["td", "ps", "e2"], "② 计费门（state.ts:422 billingGate）：在 tool_call 里先于门禁执行。检查 subagent 的显式 model、tasks/chain 的 model、role 查到的模型，以及 pstack_config set。"],
-    "3": [["desk", "child", "e3"], "③ 子 agent 进度显示（src/domain.ts:556 parseChild）：桌面 D-L3 读 subagent 的 partial result，画实时树。只给界面，不进模型上下文。"],
+    "3": [["desk", "child", "e3"], "③ 子 agent 进度显示（src/domain.ts:555 parseChild）：桌面 D-L3 读 subagent 的 partial result，画实时树。只给界面，不进模型上下文。"],
     "none": [["td", "ps", "gap"], "没有接缝：tilldone 清单和 pstack_todo 清单之间没有任何代码连接。state.ts 只在计费部分提到 pstack；pi-pstack 的 SKILL.md 没有提到 tilldone。分工只写在 README 一行里。"],
   };
   const parts = CL.$$("#demo3 [data-part]");
