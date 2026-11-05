@@ -63,10 +63,11 @@
 <!-- ============ 1 ============ -->
 <section class="lesson-sec" id="s1">
   <h2><span class="num">01</span>PStack 在 Pi 里注册了什么</h2>
-  <p>先说结论：PStack 的 Pi 版本是 npm 包 <code>pi-pstack</code>。它在 Pi 里注册两个命令、三个事件钩子和四个工具。全部写在 <code>pi-pstack/extensions/pstack/index.ts</code> 一个文件里。</p>
+  <p>先说结论：PStack 的 Pi 版本是 npm 包 <code>pi-pstack</code>。它在 Pi 里注册两个命令、四个事件钩子和四个工具。全部写在 <code>pi-pstack/extensions/pstack/index.ts</code> 一个文件里。</p>
   <div class="tbl-wrap"><table class="tbl">
     <tr><th>名称</th><th>类型</th><th>作用</th></tr>
     <tr><td><code>/poteto-mode</code>、<code>/setup-pstack</code></td><td>命令</td><td>开关 <a class="term" href="glossary.html#poteto-mode">Poteto Mode</a>；交互配置角色 → 模型</td></tr>
+    <tr><td><code>session_start</code> 钩子</td><td>事件</td><td>会话开始或恢复时，从 custom entry 读回 Poteto 开关和 <code>pstack_todo</code> 清单。它不监听 <code>session_tree</code>，切换分支时不重新读取（见 <a href="L04-context-strategies.html#s7">L04 §7</a>）</td></tr>
     <tr><td><code>input</code> 钩子</td><td>事件</td><td>看到 <code>/skill:poteto-mode</code> 开头的输入，就开启 mode，并写 <a class="term" href="glossary.html#custom-entry">custom entry</a></td></tr>
     <tr><td><code>before_agent_start</code> 钩子</td><td>事件</td><td>mode 开启时，给每次请求追加 system prompt</td></tr>
     <tr><td><code>tool_call</code> 钩子</td><td>事件</td><td>对部署、递归删除等外部写操作的 bash 命令，要求确认</td></tr>
@@ -127,7 +128,7 @@
       </div>
     </div>
     <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
-    <div class="chart-foot">先用“桌面反转门禁”播完，再切到“TUI 原版门禁”播完。对比门禁拦下的次数。原版不认识 <code>pstack_todo</code>，清单为空时拦它，工作项全部完成后又拦它。<span class="data-note">简化模型：步骤依据原文 §6.2；任务文本、playbook 步骤、调用次数是演示用例子。原文记录的 2026-11-01 Blackjack 运行里，原版门禁拦了 <code>pstack_todo</code> 5 次。这里只模拟一次会话。</span></div>
+    <div class="chart-foot">先用“桌面反转门禁”播完，再切到“TUI 原版门禁”播完。对比门禁拦下的次数。原版不认识 <code>pstack_todo</code>，清单为空时拦它，工作项全部完成后又拦它。最后那次被拦时工作项已经全部完成，改顺序也补救不了，验证步骤会一直没勾，督促也不管，这正是 <a href="L07-pitfalls-review.html#s2">L07 坑 3</a> 的现场。<span class="data-note">简化模型：步骤依据原文 §6.2；任务文本、playbook 步骤、调用次数是演示用例子。被拦的调用默认按“改顺序重试成功”计；只有 allDone 之后的调用按落空计。原文记录的 2026-11-01 Blackjack 运行里，原版门禁拦了 <code>pstack_todo</code> 5 次。这里只模拟一次会话。</span></div>
   </div>
   <div class="callout tip"><span class="ttl">看播放器要点</span>第 5 步的 <code>subagent</code> 同时经过两道门。计费门先查，它是硬规则，有没有任务都生效。门禁后查，它要求有进行中的任务。第 6 步结束时，督促只看右栏。</div>
 </section>
@@ -239,7 +240,7 @@
   <h3>速记表</h3>
   <div class="tbl-wrap"><table class="tbl">
     <tr><th>要点</th><th>一句话</th></tr>
-    <tr><td>PStack 注册</td><td>2 个命令、3 个钩子、4 个工具，全在一个 index.ts</td></tr>
+    <tr><td>PStack 注册</td><td>2 个命令、4 个钩子、4 个工具，全在一个 index.ts</td></tr>
     <tr><td>两份清单</td><td>tilldone = 工作项（硬约束）；pstack_todo = 流程步骤（软约束）</td></tr>
     <tr><td>咬合 6 步</td><td>改写首条消息 → pstack_todo set → read → tilldone start → subagent 过两道门 → done / complete，督促只看 tilldone</td></tr>
     <tr><td>计费门</td><td>显式 model 优先；否则查 role 的整个模型池；只覆盖第一层</td></tr>
@@ -311,8 +312,11 @@ CL.onReady(function () {
         const billing = c[0] === "subagent" || c[0] === "pstack_config" ? "计费门：role swarm workers → inherit-parent，放行" : "计费门：不检查这个工具";
         const v = gateVerdict(version, c[0], td.items.map((t) => ({ s: t.s })));
         const entry = { tool: c[0], args: c[1], billing, gate: v, step: i };
-        if (v.block) { blocks++; entry.retry = true; }
-        c[2](ps, td); // 被拦后模型会改顺序重试；演示里仍按最终结果更新清单
+        if (v.block) blocks++;
+        // 被拦后模型通常改顺序重试，演示按重试成功更新清单。
+        // 例外：工作项全部完成后被 allDone 拦下，已经没法改顺序，这次调用就落空了。
+        const lost = v.block && v.why.startsWith("allDone");
+        if (lost) entry.lost = true; else { if (v.block) entry.retry = true; c[2](ps, td); }
         log.push(entry);
       }
     }
@@ -329,6 +333,8 @@ CL.onReady(function () {
     CL.$("#d1-td").innerHTML = r.td.items.length ? "<ol>" + r.td.items.map((t) => '<li class="' + (t.s === "done" ? "done" : t.s === "inprogress" ? "cur" : "") + '">' + icon[t.s] + " #" + t.id + " " + CL.esc(t.x) + "</li>").join("") + "</ol>" : '<div class="empty">空（门禁会拦下 bash/edit/write/subagent）</div>';
     let msg = "到第 " + pos + " 步：共 " + r.calls + " 次工具调用，门禁拦下 " + r.blocks + " 次（" + (version === "desk" ? "桌面反转门禁" : "TUI 原版门禁") + "）。";
     if (r.blocks) msg += "\n每次被拦，模型都要多一个来回：读拒绝理由，改顺序再试。";
+    const lostCalls = r.log.filter((e) => e.lost);
+    if (lostCalls.length) msg += "\n其中 " + lostCalls.length + " 次没法补救：工作项已全部完成，门禁报 allDone，" + lostCalls.map((e) => e.tool + "(" + e.args + ")").join("、") + " 落空。";
     if (pos === STEPS.length) {
       const tdLeft = r.td.items.filter((t) => t.s !== "done").length, psLeft = r.ps.items.filter((i) => !i.d).length;
       msg += "\nagent_end：tilldone 未完成 " + tdLeft + " 项，pstack_todo 未勾 " + psLeft + " 项 → " + (tdLeft ? "督促" : "不督促") + "。督促只看 tilldone。";

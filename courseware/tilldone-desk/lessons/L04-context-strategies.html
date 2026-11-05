@@ -142,10 +142,11 @@
   <h2><span class="num">05</span>subagent：上下文隔离</h2>
   <p>先说结论：<code>subagent</code> 让子 agent 在自己的进程里干活，父上下文只收到结论。原文把它归为 <a class="term" href="glossary.html#delegation">Delegation</a>。</p>
   <blockquote class="src"><code>subagent</code> 本身是上下文隔离：子进程带 <code>--no-session</code>，完整过程留在子进程里，父上下文只拿结论。这是 Delegation。<cite>§3.3</cite></blockquote>
-  <p>源码里有三个细节决定了父上下文收到多少。</p>
+  <p>源码里有四个细节决定了父上下文收到多少。</p>
   <ul>
     <li>工具结果的 <code>content</code> 只放结论文本。子 agent 的完整消息放在 <code>details.results</code> 里，见 <a class="term" href="glossary.html#content-vs-details">content 与 details</a>。<code>details</code> 不进模型上下文。</li>
-    <li>并行模式下，每个子 agent 的结果截断到 50 KB（<code>MAX_MODEL_OUTPUT_BYTES = 50 * 1024</code>）。</li>
+    <li>并行模式下，每个子 agent 的结果截断到 50 KB（<code>MAX_MODEL_OUTPUT_BYTES = 50 * 1024</code>）。单个模式和链式模式不截断。</li>
+    <li>链式模式只把最后一步的结论送回父上下文。前一步的结论经 <code>{previous}</code> 写进下一步的任务，只有子进程看得到（<code>pstack/index.ts:410-419</code>）。</li>
     <li>并行模式最多 8 个任务（<code>MAX_PARALLEL_TASKS = 8</code>），同时最多跑 4 个（<code>MAX_CONCURRENCY = 4</code>）。</li>
   </ul>
   <p>桌面端的<a class="term" href="glossary.html#subagent-tree">子 agent 实时树</a>读的就是 <code>details.results</code>。所以你在界面上看到的过程，模型看不到。</p>
@@ -177,13 +178,14 @@
   <p>先说结论：两个扩展都不依赖对话记忆。<a class="term" href="glossary.html#compaction">压缩</a>只改模型看到的历史，碰不到扩展内存和会话文件。</p>
   <blockquote class="src">两者都把状态放在会话文件里，不依赖对话记忆。<cite>§3.5</cite></blockquote>
   <div class="tbl-wrap"><table class="tbl">
-    <tr><th>状态</th><th>运行中的权威</th><th>重启后从哪恢复</th></tr>
-    <tr><td>TillDone 清单</td><td>扩展内存 <code>model.list</code></td><td>会话分支里最后一个有效的 tilldone <code>details</code>（<code>state.ts:180</code> <code>restore</code>，经 <code>parseDetails</code> 校验）</td></tr>
-    <tr><td><code>pstack_todo</code> 清单</td><td>扩展内存 <code>todos</code></td><td>custom entry <code>pstack-todo</code>（<code>pstack/index.ts:250-262</code>）</td></tr>
-    <tr><td>Poteto 开关</td><td>扩展内存 <code>potetoMode</code></td><td>custom entry <code>pstack-mode</code></td></tr>
-    <tr><td><code>spent</code>、<code>nudged</code></td><td>扩展内存</td><td>不持久化，重启后归零</td></tr>
+    <tr><th>状态</th><th>运行中的权威</th><th>重启后从哪恢复</th><th>切换会话分支后</th></tr>
+    <tr><td>TillDone 清单</td><td>扩展内存 <code>model.list</code></td><td>会话分支里最后一个有效的 tilldone <code>details</code>（<code>state.ts:180</code> <code>restore</code>，经 <code>parseDetails</code> 校验）</td><td>从新分支重建</td></tr>
+    <tr><td><code>pstack_todo</code> 清单</td><td>扩展内存 <code>todos</code></td><td>custom entry <code>pstack-todo</code>（<code>pstack/index.ts:250-262</code>）</td><td>不变，仍是切换前的清单</td></tr>
+    <tr><td>Poteto 开关</td><td>扩展内存 <code>potetoMode</code></td><td>custom entry <code>pstack-mode</code></td><td>不变</td></tr>
+    <tr><td><code>spent</code>、<code>nudged</code></td><td>扩展内存</td><td>不持久化，重启后归零</td><td><code>spent</code> 清零；<code>nudged</code> 保留</td></tr>
   </table></div>
   <p>TillDone 在 <code>session_start</code> 和 <code>session_tree</code> 时恢复。<code>parseDetails</code>（<code>state.ts:167</code>）把读到的快照当不可信数据，逐字段校验。</p>
+  <div class="callout warn"><span class="ttl">切换分支时两边不同步</span>在会话树里切到另一个分支时，Pi 发出 <code>session_tree</code>。TillDone 监听它，从新分支重建清单（<code>restore</code> 让 <code>spent</code> 归零、保留 <code>nudged</code>）。PStack 只在 <code>session_start</code> 时读取 custom entry，不监听 <code>session_tree</code>，所以 todos 和 Poteto 开关仍是切换前的值，可能和新分支对不上。依据：原文 §3.5（2026-11-04 读源码补）、<code>index.ts</code> 和 <code>pstack/index.ts:250</code>。</div>
 
   <div class="chart-card" id="demo3">
     <div class="chart-head">

@@ -95,6 +95,7 @@
     <div class="chart-body" style="padding:0 16px"><div class="readout" id="d1-out"></div></div>
     <div class="chart-foot">先看 ①：把“子 agent 内部工具调用”拉到 40。然后对比“自己做”和“分派给子 agent”两栏。再看 ③：只取消“验证”那一项的勾，看督促是否发生。<span class="data-note">简化模型：spent 规则照 <code>state.ts</code> 的 <code>toolCalled</code>（每个非 tilldone 调用 +1，每满 15 提示一次）；督促规则照 <code>agentEnd</code>。任务和步骤文本是演示用例子。② 的“大概会加载”是原文推断，没有实际运行验证。</span></div>
   </div>
+  <div class="callout note"><span class="ttl">补充：坑 3 在界面上也看不出来</span>任务面板、督促统计和“等你发话”的交还提示都只看 tilldone 清单。<code>pstack_todo</code> 只出现在它的工具卡片里，而工具卡片默认折叠。所以“验证”没勾时，用户看到的是全部完成的面板。依据原文 §7 第 3 条（2026-11-04 补）和 README。</div>
 </section>
 
 <!-- ============ 3 ============ -->

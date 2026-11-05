@@ -104,7 +104,7 @@ PStack 追加的 system prompt 原文（`pi-pstack/extensions/pstack/index.ts:27
 
 - TillDone **从不改 system prompt**。规矩全部通过“工具说明 + 工具结果 + 自定义消息”送进去。所以它对 Pi 升级和别的扩展改 system prompt 都不敏感。
 - PStack 在每次请求时**改 system prompt**，并在首条消息里展开整份技能。
-- `subagent` 本身是上下文隔离：子进程带 `--no-session`，完整过程留在子进程里，父上下文只拿结论。这是 Delegation。
+- `subagent` 本身是上下文隔离：子进程带 `--no-session`，完整过程留在子进程里，父上下文只拿结论。这是 Delegation。三种模式送回父上下文的内容不同（`pstack/index.ts:410-439`）：单个模式回传结论全文；并行模式每个子 agent 的结论截断到 50 KB；链式模式只回传最后一步的结论，前一步的结论经 `{previous}` 写进下一步的任务，父上下文看不到。只有并行模式截断。
 
 ### 3.4 提示词的三个时机（TillDone）
 
@@ -123,7 +123,8 @@ PStack 追加的 system prompt 原文（`pi-pstack/extensions/pstack/index.ts:27
 两者都把状态放在会话文件里，不依赖对话记忆。
 
 - TillDone：`session_start` / `session_tree` 时，从会话分支里最后一个有效的 tilldone `details` 恢复清单（`state.ts:180` `restore`）。`parseDetails`（`state.ts:167`）把读到的快照当不可信数据逐字段校验。
-- PStack：从 `pstack-todo` 和 mode 两类 custom entry 恢复（`pstack/index.ts:250-262`）。
+- PStack：在 `session_start` 时从 `pstack-todo` 和 mode 两类 custom entry 恢复（`pstack/index.ts:250-262`）。
+- 切换会话分支（`session_tree`）时两者不同（2026-11-04 读源码补）：TillDone 从新分支重建清单，`spent` 清零，`nudged` 保留；PStack 不监听 `session_tree`，todos 和 Poteto 开关仍是切换前的值，可能和新分支对不上。
 
 ## 4. 第 3 层：TillDone 的拆分能力
 
@@ -178,6 +179,7 @@ PStack（npm `pi-pstack`）在 Pi 里注册：
 | 名称 | 类型 | 作用 |
 |---|---|---|
 | `/poteto-mode`、`/setup-pstack` | 命令 | 开关 Poteto Mode；交互配置角色 → 模型 |
+| `session_start` 钩子 | 事件 | 从 custom entry 恢复 Poteto 开关和 `pstack_todo` 清单 |
 | `input` 钩子 | 事件 | 看到 `/skill:poteto-mode` 开头的输入就开启 mode，并写 custom entry |
 | `before_agent_start` 钩子 | 事件 | mode 开启时追加 system prompt |
 | `tool_call` 钩子 | 事件 | 对部署、递归删除等外部写操作的 bash 命令要求确认 |
@@ -248,7 +250,7 @@ README 的说法：“In Poteto Mode the model keeps two lists: `pstack_todo` fo
 
 1. **子 agent 不受 TillDone 管。** 子进程不加载 tilldone。一次 `subagent` 调用在 `spent` 里只算 1 次；子 agent 内部做了多少工作，15 次提示和面板计数都看不到。分派出去的大任务看起来很“便宜”，不会触发拆分提示。
 2. **子进程很可能加载全局扩展。** 子命令行里没有 `--no-extensions`，`~/.pi/agent/extensions` 里的扩展大概会进子 agent（推断，没实际运行验证）。计费门只覆盖第一层：子 agent 再派的子 agent 不经过它（README 已说明）。
-3. **督促不管 PStack 的流程步骤。** playbook 的“验证”步骤没打勾，但 tilldone 任务全做完了，模型照样可以停。
+3. **督促不管 PStack 的流程步骤。** playbook 的“验证”步骤没打勾，但 tilldone 任务全做完了，模型照样可以停。界面上也看不出来：任务面板、督促统计和交还提示都只看 tilldone 清单，`pstack_todo` 只出现在默认折叠的工具卡片里。
 4. **两份清单可能重复或错位。** 模型可能把 playbook 步骤也抄进 tilldone，面板上出现“读原则”这类伪任务；也可能反过来。最小修正：在 `TOOL.description` 里加一句，说明 tilldone 只放工作项、流程步骤放 `pstack_todo`。这一步需要改代码，尚未做。
 5. **白皮书过时。** 白皮书 0.1 节和第 3 章仍写桌面端只加载 tilldone；pstack、反转门禁、计费门、子 agent 树都没写。用户决定等设计固定后再更新。
 6. **细分请求的语言随界面变化。** `splitRequest` 按界面语言取中文或英文，是一段模型可见文本（白皮书 8.5 / R6）。
@@ -258,7 +260,7 @@ README 的说法：“In Poteto Mode the model keeps two lists: `pstack_todo` fo
 | 文件 | 内容 |
 |---|---|
 | `apps/tilldone/extensions/tilldone/state.ts` | E-L3：门禁、计费门、拆分提示、督促、所有模型可见文案 |
-| `apps/tilldone/extensions/tilldone/index.ts` | E-L2（副本没有 L4）：挂 `tool_call`、`tool_result`、`agent_end`、`input`、`session_start`；注册 `tilldone` 工具（串行执行） |
+| `apps/tilldone/extensions/tilldone/index.ts` | E-L2（副本没有 L4）：挂 `tool_call`、`tool_result`、`agent_end`、`input`、`session_start`、`session_tree`；注册 `tilldone` 工具（串行执行） |
 | `apps/tilldone/src/domain.ts` | D-L3：RPC 投影 `reduce`、意图 `planIntent`、Poteto 前缀、细分按钮、子 agent 树、`toViewModel` |
 | `apps/tilldone/src/config.ts` | 拼子进程命令行；处理 `TILLDONE_PSTACK`、拒绝 `anthropic/*` |
 | `apps/tilldone/src/desk.ts` | D-L2：唯一可变状态，`this.state = reduce(this.state, record)` |

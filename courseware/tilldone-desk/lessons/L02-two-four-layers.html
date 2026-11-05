@@ -82,7 +82,7 @@
   </table></div>
   <p>桌面 D-L2 的核心只有一行：<code>this.state = reduce(this.state, record)</code>（<code>src/desk.ts:33</code>）。所有 RPC 事件都走这一行。</p>
   <p>D-L2 还会自己生成 <a class="term" href="glossary.html#desk-records">desk_* 记录</a>，例如时钟和进程退出。所以 D-L3 里没有 <code>Date.now()</code>，也没有 I/O。</p>
-  <div class="callout note"><span class="ttl">补充：桌面副本为什么没有 E-L4</span>仓库里 TUI 版扩展的 <code>ui.ts</code> 负责终端界面：widget、页脚、状态栏、工具卡片和 <code>/tilldone</code> 浮层。RPC 模式下没有终端界面，这些画法都没有用处。所以提交 <code>01a9921</code> 把它从桌面副本里删掉了，副本只剩 <code>index.ts</code>（L2）和 <code>state.ts</code>（L3）。<code>themeMap.ts</code> 也一起删了：RPC 拒绝 <code>setTheme</code>，窗口标题由桌面端自己设置。桌面端用 D-L4 画任务面板，数据全部来自工具结果里的 <code>details</code>。依据 <code>apps/tilldone/README.md</code> 和 <code>index.ts</code> 开头的注释。</div>
+  <div class="callout note"><span class="ttl">补充：桌面副本为什么没有 E-L4</span>仓库里 TUI 版扩展的 <code>ui.ts</code> 负责终端界面：widget、页脚、状态栏、工具卡片和 <code>/tilldone</code> 浮层。RPC 模式下没有终端界面，这些画法都没有用处。所以提交 <code>01a9921</code> 把它从桌面副本里删掉了，副本只剩 <code>index.ts</code>（L2）和 <code>state.ts</code>（L3）。<code>themeMap.ts</code> 也一起删了：RPC 拒绝 <code>setTheme</code>，窗口标题由桌面端自己设置。桌面端用 D-L4 画任务面板，数据全部来自工具结果里的 <code>details</code>。依据 <code>apps/tilldone/README.md</code> 和 <code>index.ts</code> 开头的注释。TUI 版的 <code>/tilldone</code> 会打开浮层；桌面端在 D-L3 的 <code>planIntent</code> 里拦下这句话（<code>src/domain.ts:377</code>），只把焦点移到常驻的任务面板，不发给 Pi。</div>
 </section>
 
 <!-- ============ 3 ============ -->
