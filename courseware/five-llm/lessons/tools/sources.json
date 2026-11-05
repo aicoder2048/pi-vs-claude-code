@@ -18,7 +18,11 @@
       "aliases": [
         "弈境 · Five LLM 技术白皮书",
         "白皮书"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8f3bc21"
+      }
     },
     {
       "id": "code-status",
@@ -28,7 +32,11 @@
       "aliases": [
         "弈境代码现状勘误",
         "code-status.md"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8f3bc21"
+      }
     },
     {
       "id": "readme",
@@ -39,7 +47,11 @@
       ],
       "aliases": [
         "apps/five-llm/README.md"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "4f65e37"
+      }
     },
     {
       "id": "game-service-ts",
@@ -48,7 +60,11 @@
       "scope": "cited",
       "aliases": [
         "game-service.ts"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "4f65e37"
+      }
     },
     {
       "id": "pi-driver-ts",
@@ -57,7 +73,11 @@
       "scope": "cited",
       "aliases": [
         "pi-driver.ts"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "4f65e37"
+      }
     },
     {
       "id": "gomoku-ts",
@@ -66,7 +86,11 @@
       "scope": "cited",
       "aliases": [
         "gomoku.ts"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "4f65e37"
+      }
     },
     {
       "id": "decision-ts",
@@ -75,7 +99,11 @@
       "scope": "cited",
       "aliases": [
         "decision.ts"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "4f65e37"
+      }
     },
     {
       "id": "knowledge-skill",
@@ -86,7 +114,11 @@
       ],
       "aliases": [
         "knowledge/SKILL.md"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "4f65e37"
+      }
     },
     {
       "id": "knowledge-loader-ts",
@@ -97,7 +129,11 @@
       ],
       "aliases": [
         "knowledge-loader.ts"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "4f65e37"
+      }
     },
     {
       "id": "forcing-ts",
@@ -106,7 +142,11 @@
       "scope": "cited",
       "aliases": [
         "forcing.ts"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "4f65e37"
+      }
     },
     {
       "id": "electron-main-ts",
@@ -115,7 +155,11 @@
       "scope": "cited",
       "aliases": [
         "main.ts"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "4f65e37"
+      }
     },
     {
       "id": "forcing-review",
@@ -128,7 +172,11 @@
       "aliases": [
         "forcing-review.md",
         "L3 v2：候选的连续先手反证与提交前反馈"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8f3bc21"
+      }
     },
     {
       "id": "own-forcing-win",
@@ -141,7 +189,11 @@
       "aliases": [
         "own-forcing-win.md",
         "L3 v3：己方强杀发现与提交前漏胜反馈"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8f3bc21"
+      }
     },
     {
       "id": "l3-refactor",
@@ -152,7 +204,11 @@
       ],
       "aliases": [
         "l3-knowledge-refactor.md"
-      ]
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8f3bc21"
+      }
     }
   ]
 }

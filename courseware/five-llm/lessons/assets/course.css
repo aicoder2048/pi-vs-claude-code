@@ -528,3 +528,8 @@ main pre { max-width: 100%; overflow-x: auto; background: var(--surface-2); bord
 .tp-errata b { display: block; margin-bottom: 4px; }
 .tp-errata p { margin: 2px 0; }
 .tp-errata small { color: var(--ink-3); }
+
+/* 来源漂移提示（课程页正文顶部） */
+.drift-banner { margin: 0 0 18px; padding: 10px 14px; border-left: 3px solid var(--warn-bd); background: var(--warn-bg); border-radius: 4px; font-size: 14px; }
+.drift-banner ul { margin: 6px 0; padding-left: 20px; }
+.drift-banner p { margin: 4px 0 0; color: var(--ink-2); }

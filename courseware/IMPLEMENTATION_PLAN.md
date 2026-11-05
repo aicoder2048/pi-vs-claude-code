@@ -118,7 +118,12 @@
 - unittest：临时 git 仓库（提交、改动、再提交）和临时文件（改内容）各一例；无变化时不报。
 - 边牧：把 `sources.json` 里某个来源的快照改成旧提交，启动后对应课程出现提示，`/api/drift` 列出它；改回后提示消失。
 
-**Status**: Not Started
+**Status**: Complete
+- `--snapshot`：文件在 git 里且没有未提交改动时记提交号，否则记 sha256 并把内容副本存进 `tools/.snapshots/`（点目录，静态服务不提供），以后才给得出文本 diff。git 来源的 diff 比的是工作区，未提交改动也算漂移。
+- 两门课外部来源的快照记为已核对的提交（边牧 `8c2f42e`、弈境 `4f65e37`），课程自带文档记当前提交；pstack 的 `index.ts` 被 gitignore，记为 file。`--check` 当前无漂移。
+- 漂移结果按 `sources.json` 的修改时间缓存，改快照不用重启服务。
+- 测试：模板 41 个 unittest 通过（含临时 git 仓库、临时文件、缺失文件）；两门课 check_page 三主题全部通过（边牧 10 页、弈境 13 页）。
+- 边牧验收：`domain-ts` 快照改成 `f112eb9` 后，`/api/drift` 列出 5 个提交（与学员验收报告一致），影响 L02/L03/L05/L06/L07；L05 顶部出现提示，L01 没有。助教 1 问“快照之后 domain.ts 改了什么”，答出各提交和 `addNudge` / `judgeNudges` / `handoffView`。改回后 `/api/drift` 为空，L05 提示消失。
 
 ## Stage 4: learner driver “推到终点”与文档、同步
 

@@ -6,7 +6,8 @@ API key 只留在本机，不进浏览器；.env 和所有点文件都不对外�
 
 用法（在课程目录下）:
     uv run --no-project python tools/serve.py            # 启动服务，地址见输出
-    uv run --no-project python tools/serve.py --check    # 列出每课的助教资料和没登记的引用，不启动服务
+    uv run --no-project python tools/serve.py --check    # 列出每课的助教资料、没登记的引用和来源漂移，不启动服务
+    uv run --no-project python tools/serve.py --snapshot # 课文与来源核对一致后，把来源的当前指纹记进 sources.json
 
 <课程目录>/.env（必须加进 .gitignore）:
     DEEPSEEK_API_KEY=...           必填
@@ -33,6 +34,7 @@ import sources as S
 LESSONS = Path(__file__).resolve().parent.parent        # 课程目录
 ROOT = LESSONS.parent                                    # 项目根目录（静态服务的根）
 MANIFEST = LESSONS / "tools" / "sources.json"
+SNAPDIR = LESSONS / "tools" / ".snapshots"              # file 类来源的快照副本（点目录不对外提供）
 API = "https://api.deepseek.com/chat/completions"
 NOTES = LESSONS / "study-notes"                         # “记笔记”整理出的 Markdown 笔记
 ERRATA = LESSONS / "errata.md"                           # 助教发现的疑似勘误
@@ -154,6 +156,43 @@ def sources_block(sel) -> str:
     return out
 
 
+_drift = {"key": None, "items": []}
+_drift_lock = threading.Lock()
+
+
+def course_drift() -> list:
+    """所有来源自快照后的变化，每项带上受影响的课程。sources.json 改动后重算，否则用缓存。"""
+    key = (str(MANIFEST), MANIFEST.stat().st_mtime_ns)
+    with _drift_lock:
+        if _drift["key"] != key:
+            course, sources = manifest()
+            items = [d for d in (S.drift(s, ROOT, SNAPDIR) for s in sources) if d]
+            for d in items:
+                d["lessons"] = []
+            by_id = {d["id"]: d for d in items}
+            for lesson in sorted(lesson_files()):
+                sel = lesson_sources(lesson, course, sources)
+                for s in [s for s, _ in sel.kept] + sel.omitted + sel.missing:
+                    if s.id in by_id:
+                        by_id[s.id]["lessons"].append(lesson)
+            _drift.update(key=key, items=items)
+        return _drift["items"]
+
+
+def drift_block(lesson: str) -> str:
+    items = [d for d in course_drift() if lesson in d["lessons"]]
+    if not items:
+        return ""
+    out = "\n【来源自快照后的变化】课文按快照写成。学员问到下面这些来源时，分开说“课文（快照）说……”和“来源现在……”，不要把现状说成课文的说法。\n"
+    for d in items:
+        out += f"\n--- {d['label']}：{d['summary']} ---\n"
+        if d.get("commits"):
+            out += "提交：\n" + "\n".join(d["commits"][:10]) + "\n"
+        if d.get("diff"):
+            out += "差异（节选）：\n" + d["diff"] + "\n"
+    return out
+
+
 def lesson_files() -> set:
     return {p.name for p in LESSONS.glob("*.html") if p.name not in SKIP_PAGES}
 
@@ -188,7 +227,7 @@ def build_messages(req: dict, with_image: bool = True) -> list:
     # 稳定前缀（system + 资料 + 课程全文），让 DeepSeek 的前缀缓存跨轮命中
     system = system_prompt(course) + (
         f"\n\n=== 本课：{clip(ctx.get('title'), 200)}（{lesson}）===\n"
-        + sources_block(lesson_sources(lesson, course, sources)) +
+        + sources_block(lesson_sources(lesson, course, sources)) + drift_block(lesson) +
         f"\n--- 课程页面全文（演示由页面 JS 实时计算，这里只有文字部分）---\n{clip(ctx.get('lessonText'), 50000)}\n"
     )
     msgs = [{"role": "system", "content": system}]
@@ -342,6 +381,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(200, {"ok": err is None, "model": self.env.get("DEEPSEEK_MODEL", "deepseek-flash"), "error": err})
         if self.path.startswith("/api/notes"):
             return self._json(200, {"notes": list_notes()})
+        if self.path.startswith("/api/drift"):
+            return self._json(200, {"drift": course_drift()})
         if self.path.startswith("/api/errata"):
             return self._json(200, {"errata": S.read_errata(ERRATA)})
         return super().do_GET()
@@ -491,21 +532,34 @@ def check() -> int:
         for s in sel.missing:
             print(f"    错误：资料文件缺失 {s.id}（{s.path}）")
             bad = 1
+        if any(s.snapshot is None for s, _ in sel.kept):
+            print("    警告：没有快照，查不出漂移：" + "、".join(s.id for s, _ in sel.kept if s.snapshot is None) + "（运行 --snapshot）")
         refs = S.unregistered_refs(S.lesson_text((LESSONS / lesson).read_text(encoding="utf-8")), sources)
         if refs:
             print("    警告：引用了但没登记在 sources.json：" + "、".join(refs[:12]) + (f" 等 {len(refs)} 项" if len(refs) > 12 else ""))
+    for d in course_drift():
+        print(f"漂移：{d['id']}（{d['path']}）{d['summary']}；影响 " + ("、".join(d["lessons"]) or "无课程"))
+        bad |= d["status"] in ("missing", "error")
     return bad
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=None, help="默认用 sources.json 里的 course.port")
-    ap.add_argument("--check", action="store_true", help="检查来源清单，不启动服务")
+    ap.add_argument("--check", action="store_true", help="检查来源清单和漂移，不启动服务")
+    ap.add_argument("--snapshot", action="store_true", help="把来源的当前指纹写进 sources.json")
     a = ap.parse_args()
     try:
         course, _ = manifest()
     except S.ManifestError as e:
         sys.exit(f"来源清单有误：{e}")
+    if a.snapshot:
+        try:
+            for sid, fp in S.take_snapshot(MANIFEST, ROOT, SNAPDIR):
+                print(f"{sid}: " + (f"git {fp['commit']}" if fp["kind"] == "git" else f"file {fp['sha256'][:12]}"))
+        except S.ManifestError as e:
+            sys.exit(str(e))
+        sys.exit(0)
     if a.check:
         sys.exit(check())
     a.port = a.port or course.port
@@ -513,6 +567,8 @@ def main():
     if not Handler.env.get("DEEPSEEK_API_KEY"):
         print(f"警告：{LESSONS.name}/.env 里没有 DEEPSEEK_API_KEY，AI 助教不可用（课程本身可以正常看）。")
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), partial(Handler, directory=str(ROOT)))
+    for d in course_drift():
+        print(f"来源漂移：{d['label']}：{d['summary']}（影响 {len(d['lessons'])} 课）")
     print(f"课程地址：http://127.0.0.1:{a.port}/{LESSONS.name}/   （AI 助教模型：{Handler.env.get('DEEPSEEK_MODEL', 'deepseek-flash')}，Ctrl+C 停止）")
     try:
         srv.serve_forever()

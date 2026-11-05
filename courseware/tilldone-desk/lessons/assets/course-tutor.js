@@ -341,6 +341,21 @@
   const esc = CL.esc;
   function el(tag, cls, html) { const e = document.createElement(tag); e.className = cls; if (html) e.innerHTML = html; return e; }
 
+  /* ---------- 来源漂移：本课引用的来源在课程快照之后变了，就在正文顶部提示 ---------- */
+  async function showDrift() {
+    let items = [];
+    try { items = ((await (await fetch("/api/drift")).json()).drift || []).filter((d) => (d.lessons || []).includes(LESSON)); } catch (e) { return; }
+    const main = document.querySelector("main");
+    if (!items.length || !main) return;
+    const box = el("div", "drift-banner",
+      "<b>本课引用的来源在课程快照之后变了</b><ul>" +
+      items.map((d) => "<li>" + esc(d.label) + "：" + esc(d.summary) + "</li>").join("") +
+      "</ul><p>课文可能已经过时。问 AI 助教时，它会分开说“课文（快照）说的”和“来源现在的样子”。</p>");
+    box.setAttribute("role", "note");
+    main.prepend(box);
+  }
+  if (isHttp) showDrift();
+
   // 默认常开。直接双击打开文件（file://）时助教用不了，默认收起，按钮上注明“未连接”
   const pref = panelPref();
   if (/[?&]tutor=1/.test(location.search) || pref === "open" || (pref !== "closed" && isHttp)) open(false);

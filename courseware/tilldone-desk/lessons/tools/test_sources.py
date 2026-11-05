@@ -5,6 +5,7 @@
 """
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -154,6 +155,80 @@ class Errata(unittest.TestCase):
         self.assertEqual(len(S.add_errata(path, S.parse_errata(errata_answer(GOOD), "L02.html"), "d")), 1)
 
 
+def git(cwd, *args):
+    subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *args], check=True, capture_output=True)
+
+
+class Drift(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.snaps = self.root / ".snapshots"
+
+    def git_source(self):
+        repo = self.root / "repo"
+        repo.mkdir()
+        git(repo, "init", "-q")
+        (repo / "a.ts").write_text("v1\n", encoding="utf-8")
+        git(repo, "add", "a.ts")
+        git(repo, "commit", "-qm", "v1")
+        fp = S.fingerprint(repo / "a.ts")
+        return repo, S.Source("a", "A", "repo/a.ts", "all", (), fp)
+
+    def test_clean_git_file_snapshots_as_git(self):
+        _, s = self.git_source()
+        self.assertEqual(s.snapshot["kind"], "git")
+
+    def test_git_source_unchanged_reports_nothing(self):
+        _, s = self.git_source()
+        self.assertIsNone(S.drift(s, self.root, self.snaps))
+
+    def test_git_source_with_new_commit_lists_it(self):
+        repo, s = self.git_source()
+        (repo / "a.ts").write_text("v2\n", encoding="utf-8")
+        git(repo, "commit", "-qam", "change a")
+        d = S.drift(s, self.root, self.snaps)
+        self.assertTrue(d["status"] == "changed" and "change a" in d["commits"][0] and "+v2" in d["diff"])
+
+    def test_git_source_with_uncommitted_change_is_drift(self):
+        repo, s = self.git_source()
+        (repo / "a.ts").write_text("v3\n", encoding="utf-8")
+        self.assertIn("未提交改动", S.drift(s, self.root, self.snaps)["summary"])
+
+    def test_untracked_file_snapshots_as_file(self):
+        f = self.root / "note.md"
+        f.write_text("old\n", encoding="utf-8")
+        self.assertEqual(S.fingerprint(f)["kind"], "file")
+
+    def test_file_source_unchanged_reports_nothing(self):
+        f = self.root / "note.md"
+        f.write_text("old\n", encoding="utf-8")
+        s = S.Source("n", "N", "note.md", "all", (), S.fingerprint(f))
+        self.assertIsNone(S.drift(s, self.root, self.snaps))
+
+    def test_file_source_changed_gives_text_diff_from_copy(self):
+        f = self.root / "note.md"
+        f.write_text("old\n", encoding="utf-8")
+        s = S.Source("n", "N", "note.md", "all", (), S.fingerprint(f))
+        S.snapshot_copy(self.snaps, s).parent.mkdir()
+        S.snapshot_copy(self.snaps, s).write_text("old\n", encoding="utf-8")
+        f.write_text("new\n", encoding="utf-8")
+        d = S.drift(s, self.root, self.snaps)
+        self.assertTrue("-old" in d["diff"] and "+new" in d["diff"])
+
+    def test_missing_source_is_reported(self):
+        s = S.Source("n", "N", "gone.md", "all", (), {"kind": "file", "sha256": "x"})
+        self.assertEqual(S.drift(s, self.root, self.snaps)["status"], "missing")
+
+    def test_take_snapshot_writes_fingerprints_and_copies(self):
+        (self.root / "note.md").write_text("hi\n", encoding="utf-8")
+        m = self.root / "sources.json"
+        m.write_text(json.dumps({"course": {"title": "T", "prefix": "t", "port": 1, "persona": "P"},
+                                 "sources": [{"id": "n", "label": "N", "path": "note.md", "scope": "all"}]}), encoding="utf-8")
+        S.take_snapshot(m, self.root, self.snaps)
+        _, (s,) = S.load_manifest(m)
+        self.assertTrue(s.snapshot["kind"] == "file" and S.snapshot_copy(self.snaps, s).read_text() == "hi\n")
+
+
 class BuildMessages(unittest.TestCase):
     """serve.build_messages 只构建消息、不发请求：断言助教拿到了课文引用的来源。"""
 
@@ -191,6 +266,27 @@ class BuildMessages(unittest.TestCase):
 
     def test_lesson_not_citing_a_source_does_not_get_it(self):
         self.assertNotIn("export const spent = 0", self.system("L02-b.html"))
+
+    def set_state_snapshot(self, sha):
+        m = json.loads(serve.MANIFEST.read_text(encoding="utf-8"))
+        m["sources"][1]["snapshot"] = {"kind": "file", "sha256": sha}
+        serve.MANIFEST.write_text(json.dumps(m), encoding="utf-8")
+
+    def test_drifted_source_summary_reaches_lessons_that_cite_it(self):
+        self.set_state_snapshot("0" * 64)
+        self.assertIn("【来源自快照后的变化】", self.system("L01-a.html"))
+
+    def test_drifted_source_summary_skips_other_lessons(self):
+        self.set_state_snapshot("0" * 64)
+        self.assertNotIn("【来源自快照后的变化】", self.system("L02-b.html"))
+
+    def test_drift_lists_affected_lessons(self):
+        self.set_state_snapshot("0" * 64)
+        self.assertEqual([(d["id"], d["lessons"]) for d in serve.course_drift()], [("state", ["L01-a.html"])])
+
+    def test_matching_snapshot_reports_no_drift(self):
+        self.set_state_snapshot(S.fingerprint(self.root / "code" / "state.ts")["sha256"])
+        self.assertEqual(serve.course_drift(), [])
 
     def test_course_rules_and_title_reach_the_system_prompt(self):
         s = self.system("L02-b.html")

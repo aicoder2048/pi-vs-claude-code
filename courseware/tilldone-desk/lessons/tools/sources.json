@@ -14,56 +14,117 @@
       "label": "原文《边牧（TillDone Desk）结构梳理》",
       "path": "docs/articles/tilldone-desk-anatomy.md",
       "scope": "all",
-      "aliases": ["边牧（TillDone Desk）结构梳理"]
+      "aliases": [
+        "边牧（TillDone Desk）结构梳理"
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8f3bc21"
+      }
     },
     {
       "id": "readme",
       "label": "边牧 README",
       "path": "../../apps/tilldone/README.md",
-      "scope": ["L01-overview.html", "L02-two-four-layers.html", "L07-pitfalls-review.html"],
-      "aliases": ["apps/tilldone/README.md"]
+      "scope": [
+        "L01-overview.html",
+        "L02-two-four-layers.html",
+        "L07-pitfalls-review.html"
+      ],
+      "aliases": [
+        "apps/tilldone/README.md"
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8c2f42e"
+      }
     },
     {
       "id": "four-layer-discussion",
       "label": "四层讨论稿",
       "path": "../../discussions/2026-10-28-four-layer-harness.md",
-      "scope": ["L02-two-four-layers.html"],
-      "aliases": ["discussions/2026-10-28-four-layer-harness.md"]
+      "scope": [
+        "L02-two-four-layers.html"
+      ],
+      "aliases": [
+        "discussions/2026-10-28-four-layer-harness.md"
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8c2f42e"
+      }
     },
     {
       "id": "state-ts",
       "label": "扩展 L3 源码 state.ts",
       "path": "../../apps/tilldone/extensions/tilldone/state.ts",
       "scope": "cited",
-      "aliases": ["state.ts"]
+      "aliases": [
+        "state.ts"
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8c2f42e"
+      }
     },
     {
       "id": "l2-index-ts",
       "label": "扩展 L2 源码 index.ts",
       "path": "../../apps/tilldone/extensions/tilldone/index.ts",
-      "scope": ["L04-context-strategies.html", "L05-tilldone-split.html"],
-      "aliases": ["extensions/tilldone/index.ts", "E-L2index.ts"]
+      "scope": [
+        "L04-context-strategies.html",
+        "L05-tilldone-split.html"
+      ],
+      "aliases": [
+        "extensions/tilldone/index.ts",
+        "E-L2index.ts"
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8c2f42e"
+      }
     },
     {
       "id": "pstack-index-ts",
       "label": "pstack 扩展源码 index.ts",
       "path": "../../.pi/npm/node_modules/pi-pstack/extensions/pstack/index.ts",
-      "scope": ["L04-context-strategies.html", "L06-pstack-meshing.html"],
-      "aliases": ["pstack/index.ts"]
+      "scope": [
+        "L04-context-strategies.html",
+        "L06-pstack-meshing.html"
+      ],
+      "aliases": [
+        "pstack/index.ts"
+      ],
+      "snapshot": {
+        "kind": "file",
+        "sha256": "36eba9201ccd097ce7f4d32d9a17d87f37670bb29b393e61910105c6eefbc1ef"
+      }
     },
     {
       "id": "domain-ts",
       "label": "桌面 L3 源码 domain.ts",
       "path": "../../apps/tilldone/src/domain.ts",
       "scope": "cited",
-      "aliases": ["domain.ts"]
+      "aliases": [
+        "domain.ts"
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8c2f42e"
+      }
     },
     {
       "id": "desk-ts",
       "label": "桌面 L2 源码 desk.ts",
       "path": "../../apps/tilldone/src/desk.ts",
       "scope": "cited",
-      "aliases": ["desk.ts"]
+      "aliases": [
+        "desk.ts"
+      ],
+      "snapshot": {
+        "kind": "git",
+        "commit": "8c2f42e"
+      }
     }
   ]
 }

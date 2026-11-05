@@ -3,13 +3,17 @@
 serve.py 和单元测试都用它。这里只有纯逻辑，不发网络请求。
 """
 
+import difflib
+import hashlib
 import html
 import json
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 PER_SOURCE_CHARS = 60_000
+DRIFT_DIFF_CHARS = 3_000
 DEFAULT_BUDGET_CHARS = 200_000
 SNAPSHOT_KINDS = ("git", "file")
 
@@ -237,3 +241,93 @@ def add_errata(path: Path, entries: list, date: str) -> list:
                  f"<!-- errata {json.dumps(e, ensure_ascii=False)} -->\n")
     p.write_text(text, encoding="utf-8")
     return new
+
+
+# ---------- 漂移哨兵：来源在快照之后有没有变 ----------
+
+
+def _git(cwd: Path, *args) -> str:
+    r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} 失败：{r.stderr.strip()[:200]}")
+    return r.stdout
+
+
+def _sha256(f: Path) -> str:
+    return hashlib.sha256(f.read_bytes()).hexdigest()
+
+
+def fingerprint(f: Path) -> dict:
+    """当前内容的指纹：在 git 里且没有未提交改动 → git 提交号；否则 → 文件哈希。"""
+    try:
+        _git(f.parent, "ls-files", "--error-unmatch", f.name)
+        if not _git(f.parent, "status", "--porcelain", "--", f.name).strip():
+            return {"kind": "git", "commit": _git(f.parent, "rev-parse", "--short", "HEAD").strip()}
+    except RuntimeError:
+        pass
+    return {"kind": "file", "sha256": _sha256(f)}
+
+
+def snapshot_copy(snapdir: Path, src: Source) -> Path:
+    return Path(snapdir) / f"{src.id}.txt"
+
+
+def drift(src: Source, root: Path, snapdir: Path) -> dict | None:
+    """来源自快照后的变化。没变返回 None；没登记快照也返回 None（由 --check 提醒）。"""
+    snap = src.snapshot
+    if not snap:
+        return None
+    f = Path(root) / src.path
+    base = {"id": src.id, "label": src.label, "path": src.path, "kind": snap["kind"]}
+    if not f.is_file():
+        return {**base, "status": "missing", "summary": "来源文件不存在"}
+    try:
+        if snap["kind"] == "git":
+            commit = snap.get("commit", "")
+            log = _git(f.parent, "log", "--oneline", f"{commit}..HEAD", "--", f.name).strip()
+            stat = _git(f.parent, "diff", "--stat", commit, "--", f.name).strip()
+            if not log and not stat:
+                return None
+            diff = _git(f.parent, "diff", commit, "--", f.name)
+            commits = log.splitlines()
+            dirty = bool(_git(f.parent, "status", "--porcelain", "--", f.name).strip())
+            summary = (f"快照 {commit} 之后有 {len(commits)} 个提交" if commits else f"快照 {commit} 之后没有新提交") + \
+                ("，还有未提交改动" if dirty else "")
+            return {**base, "status": "changed", "summary": summary, "commits": commits, "stat": stat,
+                    "diff": diff[:DRIFT_DIFF_CHARS] + ("\n…（已截断）" if len(diff) > DRIFT_DIFF_CHARS else "")}
+        if _sha256(f) == snap.get("sha256"):
+            return None
+        old = snapshot_copy(snapdir, src)
+        if old.is_file():
+            lines = difflib.unified_diff(old.read_text(encoding="utf-8").splitlines(), f.read_text(encoding="utf-8").splitlines(),
+                                         "快照", "现在", lineterm="", n=1)
+            diff = "\n".join(lines)
+        else:
+            diff = "（没有快照副本，给不出差异）"
+        return {**base, "status": "changed", "summary": "文件内容与快照不同", "commits": [], "stat": "",
+                "diff": diff[:DRIFT_DIFF_CHARS] + ("\n…（已截断）" if len(diff) > DRIFT_DIFF_CHARS else "")}
+    except RuntimeError as e:
+        return {**base, "status": "error", "summary": str(e)}
+
+
+def take_snapshot(manifest_path: Path, root: Path, snapdir: Path) -> list:
+    """把每个来源的当前指纹写回 sources.json；file 类来源同时存一份内容副本，供以后出 diff。返回 [(id, 指纹)]。"""
+    raw = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    _, sources = load_manifest(manifest_path)
+    missing = [s.path for s in sources if not (Path(root) / s.path).is_file()]
+    if missing:
+        raise ManifestError("这些来源文件不存在，不能拍快照：" + "、".join(missing))
+    out = []
+    for item, s in zip(raw["sources"], sources):
+        f = Path(root) / s.path
+        fp = fingerprint(f)
+        item["snapshot"] = fp
+        copy = snapshot_copy(snapdir, s)
+        if fp["kind"] == "file":
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            copy.write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+        elif copy.exists():
+            copy.unlink()
+        out.append((s.id, fp))
+    Path(manifest_path).write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return out
