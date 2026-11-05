@@ -3,6 +3,8 @@ import { initialState, reduce, toViewModel, parseIntent, planIntent, immediateUI
 import type { Config } from "./config.ts";
 import type { Preferences } from "./appearance.ts";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { PiProcess } from "./rpc.ts";
 import { CredentialError, type PiCredentials } from "./credentials.ts";
 // Streamed records arrive per token; publishing a full view for each one floods IPC and the renderer.
@@ -96,8 +98,9 @@ export class Desk {
 			catch { this.error("Cannot open the link in the browser."); }
 		}
 		if (plan.localFile) {
-			try { await this.options.openLocal?.(plan.localFile); }
-			catch (error) { this.error(`Cannot open ${plan.localFile.path}: ${error instanceof Error ? error.message : String(error)}`); }
+			const path = resolveLocalPath(plan.localFile.path, this.config.cwd, homedir());
+			try { await this.options.openLocal?.({ ...plan.localFile, path }); }
+			catch (error) { this.error(`Cannot open ${path}: ${error instanceof Error ? error.message : String(error)}`); }
 		}
 		if (plan.clipboard !== undefined) {
 			// Rejecting lets the renderer show an error instead of a "copied" mark.
@@ -140,4 +143,8 @@ export class Desk {
 		this.generation++;
 		this.flush();
 	}
+}
+/** A reply's local link as L3 passed it on: "~/" expands to home, a relative path resolves against Pi's working directory. */
+export function resolveLocalPath(path: string, cwd: string, home: string): string {
+	return path.startsWith("~/") ? join(home, path.slice(2)) : resolve(cwd, path);
 }

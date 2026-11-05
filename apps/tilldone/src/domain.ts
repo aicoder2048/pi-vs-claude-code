@@ -6,7 +6,6 @@
 import { EMPTY_LIST, countByStatus, current, parseDetails, SPLIT_HINT_EVERY, STATUS_ICON, TOOL, type ListState } from "../extensions/tilldone/state.ts";
 
 import { marked } from "marked";
-import { resolve as resolvePath } from "node:path";
 
 import { DEFAULT_PREFERENCES, parsePreferences, copyFor, appearanceView, type Preferences } from "./appearance.ts";
 
@@ -397,7 +396,7 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 		const message = state.messages.find((m) => m.id === intent.id && m.kind === "assistant");
 		if (!message || !linksIn(messageText(message)).includes(intent.url)) return empty;
 		if (openableUrl(intent.url)) return { ...empty, externalUrl: intent.url };
-		const path = localPath(intent.url, state.cwd);
+		const path = localPath(intent.url);
 		return path ? { ...empty, localFile: { path, reveal: intent.reveal === true || !OPENABLE_FILE.test(path) } } : empty;
 	}
 	// A new session is a fresh Pi process with a new session file; mid-run, Stop first.
@@ -485,15 +484,15 @@ function openableUrl(url: string): boolean {
 export interface LocalFile { readonly path: string; readonly reveal: boolean }
 /**
  * An absolute path, a home-relative one, a file URL on this machine, or a path relative to Pi's working directory
- * (where the agent wrote its files). The main process expands "~/".
+ * (where the agent wrote its files). The path stays as written; L2 expands "~/" and resolves relative paths.
  */
-function localPath(href: string, cwd: string): string | null {
+function localPath(href: string): string | null {
 	if ((href.startsWith("/") && !href.startsWith("//")) || href.startsWith("~/")) return href;
 	try {
 		const url = new URL(href);
 		return url.protocol === "file:" && (url.host === "" || url.host === "localhost") ? decodeURIComponent(url.pathname) : null;
 	} catch {
-		return /^(?:\/\/|#|\?)/.test(href) ? null : resolvePath(cwd, href);
+		return /^(?:\/\/|#|\?)/.test(href) ? null : href;
 	}
 }
 // Only documents and media open in their default app. Apps, scripts and unknown types could run code, so they are shown in Finder.

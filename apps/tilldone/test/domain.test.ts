@@ -455,10 +455,10 @@ describe("opening a link in a reply", () => {
 		expect(open(s, id, "~/notes.md").localFile).toEqual({ path: "~/notes.md", reveal: false });
 		expect(open(s, id, "file:///tmp/a%20b.png").localFile).toEqual({ path: "/tmp/a b.png", reveal: false });
 	});
-	test("a relative path resolves against Pi's working directory, where the agent wrote it", () => {
+	test("a relative path is passed on as written; L2 resolves it against Pi's working directory", () => {
 		const s = reply(), id = idOf(s, "assistant");
-		expect(open(s, id, "outputs/Trip.pdf").localFile).toEqual({ path: "/work/outputs/Trip.pdf", reveal: false });
-		expect(open(s, id, "../x.sh").localFile).toEqual({ path: "/x.sh", reveal: true });
+		expect(open(s, id, "outputs/Trip.pdf").localFile).toEqual({ path: "outputs/Trip.pdf", reveal: false });
+		expect(open(s, id, "../x.sh").localFile).toEqual({ path: "../x.sh", reveal: true });
 	});
 	test("a local path that could run something is only revealed, never opened", () => {
 		const s = reply(), id = idOf(s, "assistant");

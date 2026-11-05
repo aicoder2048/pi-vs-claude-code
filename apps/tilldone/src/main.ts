@@ -1,8 +1,7 @@
 /** TillDone Desk L2: Electron lifecycle, trusted-frame IPC, and view delivery. No domain rules. */
 import { app, BrowserWindow, clipboard, ipcMain, nativeTheme, shell } from "electron";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.ts";
 import { Desk } from "./desk.ts";
@@ -34,10 +33,9 @@ function createDesk(credentials: PiCredentials): Desk {
 	}, {
 		credentials, openExternal: (url) => shell.openExternal(url), writeClipboard: (text) => clipboard.writeText(text),
 		openLocal: async ({ path, reveal }) => {
-			const full = path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
-			if (!existsSync(full)) throw new Error("file not found");
-			if (reveal) return shell.showItemInFolder(full);
-			const failure = await shell.openPath(full);
+			if (!existsSync(path)) throw new Error("file not found");
+			if (reveal) return shell.showItemInFolder(path);
+			const failure = await shell.openPath(path);
 			if (failure) throw new Error(failure);
 		},
 		preferences: readPreferences(), systemDark: nativeTheme.shouldUseDarkColors,

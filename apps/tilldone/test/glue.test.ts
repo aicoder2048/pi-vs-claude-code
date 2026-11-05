@@ -6,7 +6,7 @@ import { resolve, join } from "node:path";
 import { JsonlDecoder } from "../src/jsonl.ts";
 import { loadConfig, piArgs } from "../src/config.ts";
 import { PiProcess } from "../src/rpc.ts";
-import { Desk } from "../src/desk.ts";
+import { Desk, resolveLocalPath } from "../src/desk.ts";
 import type { Entry, ToolGroup } from "../src/domain.ts";
 /** The conversation's messages, without tool groups. */
 const said = (view: { conversation: readonly (Entry | ToolGroup)[] }) => view.conversation.filter((e): e is Entry => e.kind !== "tools");
@@ -17,6 +17,13 @@ async function until(predicate: () => boolean, timeout = 4000) {
 	const end = Date.now() + timeout;
 	while (!predicate()) { if (Date.now() > end) throw new Error("Wait timed out"); await Bun.sleep(10); }
 }
+
+test("local link paths resolve in L2: ~ to home, relative to Pi's working directory, absolute unchanged", () => {
+	expect(resolveLocalPath("/Users/me/a.pdf", "/work", "/Users/me")).toBe("/Users/me/a.pdf");
+	expect(resolveLocalPath("~/notes.md", "/work", "/Users/me")).toBe("/Users/me/notes.md");
+	expect(resolveLocalPath("outputs/Trip.pdf", "/work", "/Users/me")).toBe("/work/outputs/Trip.pdf");
+	expect(resolveLocalPath("../x.sh", "/work", "/Users/me")).toBe("/x.sh");
+});
 
 test("JSONL: fragmented bytes, coalesced records, CRLF, U+2028/U+2029", () => {
 	const records: any[] = [];
