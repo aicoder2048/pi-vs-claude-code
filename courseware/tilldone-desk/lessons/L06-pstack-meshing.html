@@ -82,7 +82,7 @@
   <pre><code>pi --mode json --print --no-session --append-system-prompt &lt;agent 提示文件&gt;
    [--model &lt;m&gt;] [--tools &lt;列表&gt;] "Delegated task:\n&lt;task&gt;"</code></pre>
   <div class="callout warn"><span class="ttl">注意</span>子进程不加载 TillDone。命令行里也没有 <code>--no-extensions</code>。L07 会讲这两点带来的坑。</div>
-  <p>边牧怎样开启 Poteto Mode：<code>TILLDONE_PSTACK=1</code> 时，桌面端把会话的第一条空闲 prompt 改写成 <code>/skill:poteto-mode &lt;你的话&gt;</code>（<code>src/domain.ts:397-404</code>）。pstack 的 <code>input</code> 钩子看到它，就开启 mode。之后的消息照原样发送。</p>
+  <p>边牧怎样开启 Poteto Mode：<code>TILLDONE_PSTACK=1</code> 时，桌面端把会话的第一条空闲 prompt 改写成 <code>/skill:poteto-mode &lt;你的话&gt;</code>（<code>src/domain.ts:432-441</code>）。pstack 的 <code>input</code> 钩子看到它，就开启 mode。之后的消息照原样发送。</p>
   <div class="callout note"><span class="ttl">为什么不用 /poteto-mode 命令</span>原文说明：<code>/poteto-mode</code> 在 RPC 下会失败，报错 <code>ctx.sendUserMessage is not a function</code>。这是 pstack 的 bug。所以桌面端改用 <code>/skill:poteto-mode</code>。</div>
 </section>
 
@@ -135,7 +135,7 @@
 <!-- ============ 4 ============ -->
 <section class="lesson-sec" id="s4">
   <h2><span class="num">04</span>动手看：计费门</h2>
-  <p>先说结论：计费门拒绝任何会落到 <code>anthropic/*</code> 的子 agent 调用。原因是用户的 Anthropic API 按量计费，没有充值。它在 <code>state.ts:423</code> 的 <code>billingGate</code>，先于门禁执行。</p>
+  <p>先说结论：计费门拒绝任何会落到 <code>anthropic/*</code> 的子 agent 调用。原因是用户的 Anthropic API 按量计费，没有充值。它在 <code>state.ts:422</code> 的 <code>billingGate</code>，先于门禁执行。</p>
   <p><code>requestedModels</code> 的规则：</p>
   <ul>
     <li><code>subagent</code>：检查顶层参数、<code>tasks[]</code> 和 <code>chain[]</code> 的每一项。</li>
@@ -160,7 +160,7 @@
     <div class="chart-foot">试三件事：给一项选 <code>anthropic/…</code> 的显式 model；只选 role “judgment and prose”；选 role “arena runners”，它的模型池里混着一个 anthropic 模型。<span class="data-note">判定逻辑照抄 <code>state.ts</code> 的 <code>requestedModels</code> 和 <code>billingGate</code>；拒绝文本照抄 <code>BILLING_REASON</code>。上方的 models.json 是演示用例子，不是用户的真实配置。</span></div>
   </div>
   <div class="callout warn"><span class="ttl">覆盖范围</span>计费门只覆盖第一层。子 agent 不加载 TillDone，所以子 agent 再派的子 agent 不经过它。README 已经说明这一点。</div>
-  <div class="callout note"><span class="ttl">补充：计费门比实际选模型更严</span>pstack 真正启动子 agent 时，只从模型池里按序号取一个（<code>childModel</code>）。计费门却检查池里的全部模型。所以模型池里只要混着一个 <code>anthropic/*</code>，计费门就拒绝整次调用。这是课程作者读代码的观察，原文没有讨论。</div>
+  <div class="callout note"><span class="ttl">补充：计费门查整个模型池，pstack 只取其中一个</span>pstack 真正启动子 agent 时，每个 task 只取池里的一个模型：<code>childModel</code> 按 task 在本次调用里的序号取 <code>池[index % 池长]</code>（<code>pstack/index.ts:404</code>）。计费门却检查池里的全部模型，只要混着一个 <code>anthropic/*</code> 就拒绝整次调用。所以计费门是否“比实际更严”要看序号：轮到的正好是 anthropic 模型时，它拦得对；轮到的是别的模型时，它比实际选模型更严。例如在上面的演示里选“并行 tasks”，把 <code>tasks[0]</code> 的 role 设成“arena runners”：<code>0 % 2 = 0</code>，实际会取 openai-codex，这次拦截属于“更严”；如果设在 <code>tasks[1]</code>，<code>1 % 2 = 1</code>，就会真的取到 anthropic 模型。这是课程作者读代码的观察，原文没有讨论。</div>
 </section>
 
 <!-- ============ 5 ============ -->
@@ -168,9 +168,9 @@
   <h2><span class="num">05</span>代码里只有三个接缝</h2>
   <p>先说结论：TillDone 和 PStack 在代码里只有三处结合。除此之外，两边互不认识。</p>
   <ol class="steps">
-    <li><b>反转的门禁</b>（<code>state.ts:377</code>）：让 pstack 的工具能通过，只把 <code>subagent</code> 算作“会改东西”的工具。</li>
-    <li><b>计费门</b>（<code>state.ts:423</code>，在 <code>index.ts</code> 的 <code>tool_call</code> 里先于门禁执行）：检查 <code>subagent</code> 和 <code>pstack_config set</code> 的模型。</li>
-    <li><b>子 agent 进度显示</b>（<code>src/domain.ts:503</code> 的 <code>parseChild</code>）：桌面 D-L3 解析 <code>subagent</code> 的 partial result，显示<a class="term" href="glossary.html#subagent-tree">子 agent 实时树</a>。只给界面。</li>
+    <li><b>反转的门禁</b>（<code>state.ts:376</code>）：让 pstack 的工具能通过，只把 <code>subagent</code> 算作“会改东西”的工具。</li>
+    <li><b>计费门</b>（<code>state.ts:422</code>，在 <code>index.ts</code> 的 <code>tool_call</code> 里先于门禁执行）：检查 <code>subagent</code> 和 <code>pstack_config set</code> 的模型。</li>
+    <li><b>子 agent 进度显示</b>（<code>src/domain.ts:556</code> 的 <code>parseChild</code>）：桌面 D-L3 解析 <code>subagent</code> 的 partial result，显示<a class="term" href="glossary.html#subagent-tree">子 agent 实时树</a>。只给界面。</li>
   </ol>
   <p>原文的证据是 grep：<code>state.ts</code> 只在计费部分提到 pstack；pi-pstack 的 <code>SKILL.md</code> 完全没有提到 tilldone。</p>
 
@@ -256,7 +256,7 @@
 </section>
 
 <nav id="cl-pager" data-current="L06-pstack-meshing.html"></nav>
-<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§5–6（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§5–6（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 01a9921 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
 </main>
 </div>
 
@@ -396,9 +396,9 @@ CL.onReady(function () {
 
   /* ---- 3. 三个接缝 ---- */
   const SEAM = {
-    "1": [["td", "ps", "e1"], "① 反转的门禁（state.ts:377）：GATED_TOOLS = bash、edit、write、subagent。pstack_todo、pstack_config、read 都直接放行；subagent 要有进行中的任务。"],
-    "2": [["td", "ps", "e2"], "② 计费门（state.ts:423 billingGate）：在 tool_call 里先于门禁执行。检查 subagent 的显式 model、tasks/chain 的 model、role 查到的模型，以及 pstack_config set。"],
-    "3": [["desk", "child", "e3"], "③ 子 agent 进度显示（src/domain.ts:503 parseChild）：桌面 D-L3 读 subagent 的 partial result，画实时树。只给界面，不进模型上下文。"],
+    "1": [["td", "ps", "e1"], "① 反转的门禁（state.ts:376）：GATED_TOOLS = bash、edit、write、subagent。pstack_todo、pstack_config、read 都直接放行；subagent 要有进行中的任务。"],
+    "2": [["td", "ps", "e2"], "② 计费门（state.ts:422 billingGate）：在 tool_call 里先于门禁执行。检查 subagent 的显式 model、tasks/chain 的 model、role 查到的模型，以及 pstack_config set。"],
+    "3": [["desk", "child", "e3"], "③ 子 agent 进度显示（src/domain.ts:556 parseChild）：桌面 D-L3 读 subagent 的 partial result，画实时树。只给界面，不进模型上下文。"],
     "none": [["td", "ps", "gap"], "没有接缝：tilldone 清单和 pstack_todo 清单之间没有任何代码连接。state.ts 只在计费部分提到 pstack；pi-pstack 的 SKILL.md 没有提到 tilldone。分工只写在 README 一行里。"],
   };
   const parts = CL.$$("#demo3 [data-part]");

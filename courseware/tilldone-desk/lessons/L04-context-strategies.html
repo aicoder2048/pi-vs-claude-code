@@ -110,7 +110,7 @@
     <li><b>system prompt 追加</b>。Poteto Mode 开启后，<code>before_agent_start</code> 钩子在每次请求的 system prompt 末尾加一段说明（<code>pstack/index.ts:272-276</code>）。</li>
     <li><b>首条消息展开技能</b>。首条消息是 <code>/skill:poteto-mode …</code>。Pi 把整份 <code>poteto-mode/SKILL.md</code> 展开进这条消息。之后它留在历史里，不再重复发送。</li>
   </ol>
-  <blockquote class="src">Pstack Poteto Mode is enabled for this session. Follow its persisted workflow: use pstack_todo for non-trivial work, select and read the matching playbook, delegate through the subagent tool when delegation helps, verify real behavior, and name only principles that changed a decision.<cite>§3.1，pstack/index.ts:272-276</cite></blockquote>
+  <blockquote class="src">Pstack Poteto Mode is enabled for this session. Follow its persisted workflow: use pstack_todo for non-trivial work, select and read the matching playbook, delegate through the subagent tool when delegation helps, verify real behavior, and name only principles that changed a decision. The full skill is at <code>&lt;pi-pstack&gt;/skills/poteto-mode/SKILL.md</code>.<cite>§3.1，pstack/index.ts:272-276</cite></blockquote>
   <p>源码里，这段说明后面还跟着 SKILL.md 的完整路径。模型忘了细节时，可以用 <code>read</code> 重读技能文件。</p>
   <div class="callout note"><span class="ttl">补充：追加，而不是替换</span>源码写的是 <code>`${event.systemPrompt}\n\n…`</code>。它在已有提示词后面追加，不会丢掉 Pi 的默认提示词。这一点读源码可以确认。</div>
 </section>
@@ -178,12 +178,12 @@
   <blockquote class="src">两者都把状态放在会话文件里，不依赖对话记忆。<cite>§3.5</cite></blockquote>
   <div class="tbl-wrap"><table class="tbl">
     <tr><th>状态</th><th>运行中的权威</th><th>重启后从哪恢复</th></tr>
-    <tr><td>TillDone 清单</td><td>扩展内存 <code>model.list</code></td><td>会话分支里最后一个有效的 tilldone <code>details</code>（<code>state.ts:181</code> <code>restore</code>，经 <code>parseDetails</code> 校验）</td></tr>
+    <tr><td>TillDone 清单</td><td>扩展内存 <code>model.list</code></td><td>会话分支里最后一个有效的 tilldone <code>details</code>（<code>state.ts:180</code> <code>restore</code>，经 <code>parseDetails</code> 校验）</td></tr>
     <tr><td><code>pstack_todo</code> 清单</td><td>扩展内存 <code>todos</code></td><td>custom entry <code>pstack-todo</code>（<code>pstack/index.ts:250-262</code>）</td></tr>
     <tr><td>Poteto 开关</td><td>扩展内存 <code>potetoMode</code></td><td>custom entry <code>pstack-mode</code></td></tr>
     <tr><td><code>spent</code>、<code>nudged</code></td><td>扩展内存</td><td>不持久化，重启后归零</td></tr>
   </table></div>
-  <p>TillDone 在 <code>session_start</code> 和 <code>session_tree</code> 时恢复。<code>parseDetails</code>（<code>state.ts:168</code>）把读到的快照当不可信数据，逐字段校验。</p>
+  <p>TillDone 在 <code>session_start</code> 和 <code>session_tree</code> 时恢复。<code>parseDetails</code>（<code>state.ts:167</code>）把读到的快照当不可信数据，逐字段校验。</p>
 
   <div class="chart-card" id="demo3">
     <div class="chart-head">
@@ -246,7 +246,7 @@
 </section>
 
 <nav id="cl-pager" data-current="L04-context-strategies.html"></nav>
-<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§3.3、§3.5（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§3.3、§3.5（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 01a9921 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
 </main>
 </div>
 

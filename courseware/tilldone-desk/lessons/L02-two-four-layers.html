@@ -78,11 +78,11 @@
     <tr><td>L1</td><td>Pi 本身，不改</td><td>外部 <code>pi</code> 子进程 + Electron 运行时</td></tr>
     <tr><td>L2 胶水</td><td><code>extensions/tilldone/index.ts</code>：持有唯一的 <code>model</code> 单元，把 Pi 事件翻译成 L3 调用</td><td><code>src/desk.ts</code>、<code>rpc.ts</code>、<code>jsonl.ts</code>、<code>main.ts</code>、<code>config.ts</code>、<code>credentials.ts</code>：唯一持有可变状态</td></tr>
     <tr><td>L3 领域</td><td><code>extensions/tilldone/state.ts</code>：零 import；模型能看到的所有字符串都定义在这里</td><td><code>src/domain.ts</code>、<code>appearance.ts</code>、<code>api-domain.ts</code>：纯函数 <a class="term" href="glossary.html#reduce">reduce(state, record)</a>、<code>planIntent</code>、<code>toViewModel</code></td></tr>
-    <tr><td>L4 渲染</td><td><code>ui.ts</code>：TUI；RPC 下大多不起作用</td><td><code>renderer/</code>：只画 JSON 视图，只发意图</td></tr>
+    <tr><td>L4 渲染</td><td>无。桌面副本删掉了 TUI 的 <code>ui.ts</code> 和 <code>themeMap.ts</code></td><td><code>renderer/</code>：只画 JSON 视图，只发意图</td></tr>
   </table></div>
-  <p>桌面 D-L2 的核心只有一行：<code>this.state = reduce(this.state, record)</code>（<code>src/desk.ts:30</code>）。所有 RPC 事件都走这一行。</p>
+  <p>桌面 D-L2 的核心只有一行：<code>this.state = reduce(this.state, record)</code>（<code>src/desk.ts:31</code>）。所有 RPC 事件都走这一行。</p>
   <p>D-L2 还会自己生成 <a class="term" href="glossary.html#desk-records">desk_* 记录</a>，例如时钟和进程退出。所以 D-L3 里没有 <code>Date.now()</code>，也没有 I/O。</p>
-  <div class="callout note"><span class="ttl">补充：E-L4 为什么“大多不起作用”</span>扩展的 <code>ui.ts</code> 负责终端界面：状态栏、widget 和浮层。RPC 模式下没有终端界面，所以这些画法大多落空。桌面端用 D-L4 重新画任务面板，数据来自工具结果，不来自 <code>ui.ts</code>。</div>
+  <div class="callout note"><span class="ttl">补充：桌面副本为什么没有 E-L4</span>仓库里 TUI 版扩展的 <code>ui.ts</code> 负责终端界面：widget、页脚、状态栏、工具卡片和 <code>/tilldone</code> 浮层。RPC 模式下没有终端界面，这些画法都没有用处。所以提交 <code>01a9921</code> 把它从桌面副本里删掉了，副本只剩 <code>index.ts</code>（L2）和 <code>state.ts</code>（L3）。<code>themeMap.ts</code> 也一起删了：RPC 拒绝 <code>setTheme</code>，窗口标题由桌面端自己设置。桌面端用 D-L4 画任务面板，数据全部来自工具结果里的 <code>details</code>。依据 <code>apps/tilldone/README.md</code> 和 <code>index.ts</code> 开头的注释。</div>
 </section>
 
 <!-- ============ 3 ============ -->
@@ -104,7 +104,7 @@
       <svg class="layers" viewBox="0 0 900 380" role="img" aria-label="两套四层结构图">
         <text x="210" y="24" text-anchor="middle" style="font-weight:700">扩展四层（Pi 子进程里）</text>
         <text x="690" y="24" text-anchor="middle" style="font-weight:700">桌面四层（Electron 里）</text>
-        <g data-layer="E4"><rect class="box" x="40" y="40" width="340" height="66" rx="8"/><text class="tag" x="50" y="56">E-L4</text><text x="210" y="70" text-anchor="middle">ui.ts</text><text class="sm" x="210" y="92" text-anchor="middle">TUI 渲染；RPC 下大多不起作用</text></g>
+        <g data-layer="E4"><rect class="box dim" x="40" y="40" width="340" height="66" rx="8" style="stroke-dasharray:6 4"/><text class="tag" x="50" y="56">E-L4</text><text x="210" y="70" text-anchor="middle">（副本里没有）</text><text class="sm" x="210" y="92" text-anchor="middle">ui.ts 已删；界面全由 D-L4 画</text></g>
         <g data-layer="E3"><rect class="box" x="40" y="120" width="340" height="66" rx="8"/><text class="tag" x="50" y="136">E-L3</text><text x="210" y="150" text-anchor="middle">state.ts（零 import）</text><text class="sm" x="210" y="172" text-anchor="middle">门禁 · 督促 · 拆分提示 · 模型可见文案</text></g>
         <g data-layer="E2"><rect class="box" x="40" y="200" width="340" height="66" rx="8"/><text class="tag" x="50" y="216">E-L2</text><text x="210" y="230" text-anchor="middle">index.ts</text><text class="sm" x="210" y="252" text-anchor="middle">唯一的 model 单元；挂 Pi 事件</text></g>
         <g data-layer="E1"><rect class="box" x="40" y="280" width="340" height="66" rx="8"/><text class="tag" x="50" y="296">E-L1</text><text x="210" y="310" text-anchor="middle">Pi 运行时</text><text class="sm" x="210" y="332" text-anchor="middle">不改动</text></g>
@@ -146,7 +146,7 @@
     <tr><td>任务清单</td><td>扩展的 <code>model.list</code></td><td>只从 tilldone 工具的 <code>tool_execution_end</code> 里的 <code>result.details</code> 取完整快照</td></tr>
     <tr><td>当前任务</td><td>清单里第一个 <code>inprogress</code></td><td><code>current(list)</code> 现算</td></tr>
     <tr><td>是否在运行</td><td>Pi 的 run 状态</td><td><code>agent_start</code> 置真，<code>agent_settled</code> 置假</td></tr>
-    <tr><td>每个任务的工具次数、模型请求次数</td><td>桌面端 D-L3 自己数</td><td>从 <code>tool_execution_start</code>、<code>turn_start</code> 计数；不进模型上下文</td></tr>
+    <tr><td>每个任务的工具次数、模型请求次数</td><td>桌面端 D-L3 自己数</td><td>从 <code>tool_execution_start</code>、<code>turn_start</code> 计数；不进模型上下文。按任务 id 累计，到 15 次标“偏重”。它和扩展的 <code>spent</code> 不是同一个数（见 <a href="L05-tilldone-split.html#s5">L05 §5</a>）</td></tr>
   </table></div>
   <p>下面的追踪器把这张表变成路径。选一个事实，看它从权威走到界面经过哪几站。</p>
 
@@ -168,7 +168,7 @@
       <ol class="path-steps" id="d2-path"></ol>
     </div>
     <div class="chart-body" style="padding:0 16px"><div class="readout" id="d2-out"></div></div>
-    <div class="chart-foot">选“任务清单”，勾上“坏快照”。<code>parseDetails</code> 返回 <code>undefined</code>，<code>reduce</code> 保留旧清单（<code>src/domain.ts:253</code> 的 <code>?? state.list</code>）。面板不会清空。<span class="data-note">简化模型：路径依据原文 §2.1 和源码；示例清单是演示用例子。“API 凭据”一行依据原文 §3.2。</span></div>
+    <div class="chart-foot">选“任务清单”，勾上“坏快照”。<code>parseDetails</code> 返回 <code>undefined</code>，<code>reduce</code> 保留旧清单（<code>src/domain.ts:290</code> 的 <code>?? state.list</code>）。面板不会清空。<span class="data-note">简化模型：路径依据原文 §2.1 和源码；示例清单是演示用例子。“API 凭据”一行依据原文 §3.2。</span></div>
   </div>
 </section>
 
@@ -216,7 +216,7 @@
   <div class="tbl-wrap"><table class="tbl">
     <tr><th>要点</th><th>一句话</th></tr>
     <tr><td>四层</td><td>L1 搬运，L2 接线不放规则，L3 拿主意，L4 给人看不占上下文</td></tr>
-    <tr><td>两套</td><td>扩展 E-（index.ts / state.ts / ui.ts）；桌面 D-（desk.ts 等 / domain.ts 等 / renderer/）</td></tr>
+    <tr><td>两套</td><td>扩展 E-（index.ts / state.ts；副本没有 L4）；桌面 D-（desk.ts 等 / domain.ts 等 / renderer/）</td></tr>
     <tr><td>接缝</td><td>D-L3 import E-L3 的四个选择器；格式只定义一次</td></tr>
     <tr><td>执行</td><td>规矩只在 Pi 进程里执行；桌面端只投影</td></tr>
     <tr><td>可变状态</td><td>E-L2 的 model 单元；D-L2 的 state（<code>reduce</code> 一行更新）</td></tr>
@@ -232,7 +232,7 @@
 </section>
 
 <nav id="cl-pager" data-current="L02-two-four-layers.html"></nav>
-<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§2、§2.1（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§2、§2.1（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 01a9921 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
 </main>
 </div>
 
@@ -243,10 +243,10 @@ CL.onReady(function () {
     E1: ["E-L1 · Pi 运行时", "双循环、工具调度、会话文件。", "不改动。"],
     E2: ["E-L2 · extensions/tilldone/index.ts", "持有唯一的 model 单元。把 tool_call、tool_result、agent_end、input 等 Pi 事件翻译成 L3 调用。", "不放业务规则，不写模型可见的字符串。"],
     E3: ["E-L3 · extensions/tilldone/state.ts", "门禁 gate、计费门 billingGate、拆分提示 toolCalled、督促 agentEnd、快照解析 parseDetails。模型能看到的所有字符串都在这里。", "零 import：不碰 Pi、TUI、L4。"],
-    E4: ["E-L4 · extensions/tilldone/ui.ts", "终端里的状态栏、widget、浮层。", "不写状态。RPC 下大多不起作用。"],
+    E4: ["E-L4 · 桌面副本里没有", "TUI 版的 ui.ts（widget、页脚、状态栏、工具卡片、/tilldone 浮层）在 RPC 下没有用处，提交 01a9921 把它和 themeMap.ts 从副本里删掉了。", "任务面板由 D-L4 用工具结果的 details 画。"],
     D1: ["D-L1 · pi 子进程 + Electron 运行时", "提供进程和窗口。整套 E- 跑在这个 pi 子进程里。", "不改动。"],
     D2: ["D-L2 · desk.ts、rpc.ts、jsonl.ts、main.ts、config.ts、credentials.ts", "唯一持有可变状态：this.state = reduce(this.state, record)。管子进程、JSONL、IPC、时钟、偏好文件、凭据文件。", "不放业务规则。"],
-    D3: ["D-L3 · domain.ts、appearance.ts、api-domain.ts", "纯函数 reduce(state, record)、planIntent、toViewModel。把 RPC 事件投影成视图。", "不 import Electron、Node 或 L2/L4；没有 I/O，没有 Date.now()。"],
+    D3: ["D-L3 · domain.ts、appearance.ts、api-domain.ts", "纯函数 reduce(state, record)、planIntent、toViewModel。把 RPC 事件投影成视图。", "不 import Electron 或 L2/L4；没有 I/O，没有 Date.now()。工作区改动里 domain.ts 新引入了 node:path，只做纯路径计算。"],
     D4: ["D-L4 · renderer/", "画 JSON 视图，发意图。", "不解析 RPC，不存业务状态，不 import 领域代码。"],
   };
   const V = {

@@ -73,14 +73,14 @@
   <pre><code>interface Task  { id: number; text: string; status: "idle" | "inprogress" | "done"; from?: number }
 interface Model { list: ListState; nudged: boolean; spent: number }</code></pre>
   <p>九个动作：<code>new-list</code>、<code>add</code>、<code>start</code>、<code>done</code>、<code>remove</code>、<code>update</code>、<code>list</code>、<code>clear</code>、<code>split</code>。</p>
-  <p><code>split</code> 的规则在 <code>state.ts:345-356</code>。</p>
+  <p><code>split</code> 的规则在 <code>state.ts:344-354</code>。</p>
   <ol class="steps">
     <li>参数是 <code>id</code> 加 <code>texts[]</code>。<code>texts</code> 至少 2 个，否则返回 “texts (at least 2) required for split”。</li>
     <li>子任务<b>原位替换</b>原任务。子任务带 <code>from = 原 id</code>，id 从 <code>nextId</code> 起编。</li>
     <li>第一个子任务继承原状态，其余为 idle。所以拆分进行中的任务后，仍然只有一个任务在进行。</li>
     <li>已完成的任务不能拆。</li>
   </ol>
-  <blockquote class="src">Task #N is already done. Use add for new work instead of splitting it.<cite>state.ts:348</cite></blockquote>
+  <blockquote class="src">Task #N is already done. Use add for new work instead of splitting it.<cite>state.ts:347</cite></blockquote>
   <p>还有一条和计数有关。当前任务的 id 变了，<code>spent</code> 就清零（<code>state.ts</code> 的 <code>ok()</code>）。拆分进行中的任务时，第一个子任务是新 id，所以它从 0 开始计数。</p>
   <div class="callout note"><span class="ttl">补充：为什么是“原位”</span>子任务插在原任务的位置上，不是追加到末尾。清单的顺序因此保持“先做什么、后做什么”的原意。<code>from</code> 字段让你追溯每个子任务来自哪里。</div>
 </section>
@@ -122,12 +122,12 @@ interface Model { list: ListState; nudged: boolean; spent: number }</code></pre>
   <h3>① 工具说明里的原则（每次请求都在）</h3>
   <blockquote class="src">Keep each task small enough to finish and verify in one focused change. If a task turns out bigger, split it instead of letting it grow; if you find work outside the current task, add it as a new task.<cite>state.ts TOOL.description</cite></blockquote>
   <h3>② 刚认领时：SPLIT_CUE</h3>
-  <p><a class="term" href="glossary.html#split-cue">SPLIT_CUE</a>（<code>state.ts:114</code>）附在 <code>start</code> 结果的末尾。</p>
-  <blockquote class="src">Before you start: if this task holds two or more steps you can verify separately, split it now with `tilldone split`.<cite>state.ts:114</cite></blockquote>
+  <p><a class="term" href="glossary.html#split-cue">SPLIT_CUE</a>（<code>state.ts:113</code>）附在 <code>start</code> 结果的末尾。</p>
+  <blockquote class="src">Before you start: if this task holds two or more steps you can verify separately, split it now with `tilldone split`.<cite>state.ts:113</cite></blockquote>
   <p>理由写在源码注释里：这是模型对任务大小了解最多、还没花任何成本的时刻。</p>
   <h3>③ 做了很久时：每 15 次</h3>
-  <p><code>SPLIT_HINT_EVERY = 15</code>（<code>state.ts:117</code>）。<code>toolCalled</code>（<code>state.ts:431</code>）给当前任务的每个非 tilldone 工具调用记 <code>spent + 1</code>。到 15 的倍数时，生成一条<a class="term" href="glossary.html#split-hint">拆分提示</a>：</p>
-  <blockquote class="src">💡 TillDone: task #N has taken 15 tool calls so far. If it is bigger than one step, split it with `tilldone split` (id=N) and keep going.<cite>state.ts:439</cite></blockquote>
+  <p><code>SPLIT_HINT_EVERY = 15</code>（<code>state.ts:116</code>）。<code>toolCalled</code>（<code>state.ts:430</code>）给当前任务的每个非 tilldone 工具调用记 <code>spent + 1</code>。到 15 的倍数时，生成一条<a class="term" href="glossary.html#split-hint">拆分提示</a>：</p>
+  <blockquote class="src">💡 TillDone: task #N has taken 15 tool calls so far. If it is bigger than one step, split it with `tilldone split` (id=N) and keep going.<cite>state.ts:438</cite></blockquote>
   <p>提示的送达有一个细节。工具调用时，工具还没执行，所以 L2 先把提示暂存进一个 Map，键是 <code>toolCallId</code>。等这次调用的 <code>tool_result</code> 回来，再把提示追加到结果末尾（<code>index.ts</code>）。模型不需要额外的 turn。</p>
   <div class="diagram">
     <svg viewBox="0 0 860 150" role="img" aria-label="拆分提示的送达路径">
@@ -172,13 +172,14 @@ interface Model { list: ListState; nudged: boolean; spent: number }</code></pre>
     <div class="chart-foot">把工作量拖到 40，切换三种做法。“全部自己做”在第 15、30 次各提示一次。“第 20 步后 split”：第一个子任务是新 id，spent 从 0 重新数。“分派一个 subagent”：子 agent 内部做的几十步，spent 只记 1 次，提示永远不出现。<br><span class="data-note">简化模型：每步工作 = 1 次非 tilldone 工具调用；分派时父 agent 先自己做 2 次 read，再调 1 次 subagent；tilldone 自己的调用不计数。</span></div>
   </div>
   <div class="callout warn"><span class="ttl">盲区</span>原文 §7 第 1 条：子进程不加载 TillDone。一次 <code>subagent</code> 调用在 <code>spent</code> 里只算 1 次。分派出去的大任务看起来很“便宜”，不会触发拆分提示。</div>
+  <div class="callout note"><span class="ttl">补充：面板上的“工具次数”不是 spent</span>任务面板上每个任务旁的工具调用次数由桌面 D-L3 自己数（<code>src/domain.ts:282</code> 的 <code>tool_execution_start</code>），按任务 id 累计，到 15 次标为“偏重”（<code>toolCallsView</code>，<code>src/domain.ts:470</code>）。<code>spent</code> 只数当前任务，当前任务一换就清零。两者会分叉。例如：start #1 做 10 次 bash，start #2 做 3 次，再 start #1 做 6 次。面板上 #1 是 16 次，已标“偏重”；<code>spent</code> 却是 6，模型一次 15 次提示都没收到。所以面板标红不等于模型收到过拆分提示。这是课程作者对照源码的观察，原文没有讨论。</div>
 </section>
 
 <!-- ============ 6 ============ -->
 <section class="lesson-sec" id="s6">
   <h2><span class="num">06</span>人的入口：细分按钮</h2>
   <p>先说结论：牧羊人指出任务，模型决定怎么拆。桌面端自己不拆，也不调 <code>split</code>。</p>
-  <blockquote class="src">The shepherd points at a task; the model, which has the context, decides the subtasks.<cite>src/domain.ts:381</cite></blockquote>
+  <blockquote class="src">The shepherd points at a task; the model, which has the context, decides the subtasks.<cite>src/domain.ts:416</cite></blockquote>
   <p>任务面板上每个未完成任务都有“细分”按钮。点下后：</p>
   <ol class="steps">
     <li>桌面端按界面语言取文案 <code>splitRequest</code>，填入 id 和任务文本。</li>
@@ -220,7 +221,7 @@ interface Model { list: ListState; nudged: boolean; spent: number }</code></pre>
   <h2><span class="num">07</span>门禁与督促</h2>
   <p>账本还需要两只手：门禁保证“先认领再动手”，督促保证“没做完不收工”。</p>
   <h3>门禁</h3>
-  <p><a class="term" href="glossary.html#gate">门禁</a> <code>gate</code>（<code>state.ts:379</code>）只拦 <code>GATED_TOOLS = ["bash", "edit", "write", "subagent"]</code>（<code>state.ts:377</code>）。它依次检查三件事：</p>
+  <p><a class="term" href="glossary.html#gate">门禁</a> <code>gate</code>（<code>state.ts:378</code>）只拦 <code>GATED_TOOLS = ["bash", "edit", "write", "subagent"]</code>（<code>state.ts:376</code>）。它依次检查三件事：</p>
   <ol class="steps">
     <li>清单为空 → <code>noTasks</code>。</li>
     <li>全部完成 → <code>allDone</code>。</li>
@@ -233,9 +234,19 @@ interface Model { list: ListState; nudged: boolean; spent: number }</code></pre>
   </table></div>
   <p>原文的理由是：门禁是工作纪律，不是安全边界。详见 <a href="L06-pstack-meshing.html">L06</a> 的<a class="term" href="glossary.html#inverted-gate">反转门禁</a>。</p>
   <h3>督促</h3>
-  <p><a class="term" href="glossary.html#nudge">督促</a> <code>agentEnd</code>（<code>state.ts:451</code>）在 run 结束时检查清单。有未完成任务且 <code>nudged</code> 为假时，它返回 <code>tilldone-nudge</code> 消息，并把 <code>nudged</code> 置真。L2 用 <code>sendMessage(nudge, { triggerTurn: true })</code> 发出。</p>
+  <p><a class="term" href="glossary.html#nudge">督促</a> <code>agentEnd</code>（<code>state.ts:450</code>）在 run 结束时检查清单。有未完成任务且 <code>nudged</code> 为假时，它返回 <code>tilldone-nudge</code> 消息，并把 <code>nudged</code> 置真。L2 用 <code>sendMessage(nudge, { triggerTurn: true })</code> 发出。</p>
   <blockquote class="src">Either continue working on them or mark them done with `tilldone done`. Don't stop until it's done!<cite>state.ts agentEnd</cite></blockquote>
   <p><code>input</code> 事件复位<a class="term" href="glossary.html#nudge-latch">闩锁</a>。所以每条用户输入最多督促一次。督促之后模型仍然停下，说明它可能真卡住了，该交还给人。L01 的播放器演示了这个过程。</p>
+  <h3>桌面端怎样交还给人</h3>
+  <p>桌面端会判定每条督促的结果，并在停下时提示用户。这些都在 D-L3，只给界面，不进模型上下文（原文 §4.5，提交 <code>b89da3a</code>、<code>4965e82</code>）。</p>
+  <ol class="steps">
+    <li>收到 <code>tilldone-nudge</code> 时，<code>addNudge</code> 记下当时未完成的任务 id。</li>
+    <li>这次督促起的 run 结束时（下一次 <code>agent_end</code>），<code>judgeNudges</code> 判定结果：全部完成 → <code>done</code>；完成一部分 → <code>partial</code>；一个也没完成 → <code>stopped</code>；清单被换掉 → <code>replaced</code>。拆出的子任务还开着，原任务也算没完成。</li>
+    <li>督促消息卡片用界面语言写出结果，例如“⚠ 提醒之后没接着干，#2 还没干完”。模型看到的英文原话折在“TillDone 发给边牧的原话”里。</li>
+    <li>任务面板有一行督促统计，例如“催过 1 次，催完没接着干，等你发话”。</li>
+    <li>Pi 已停下、还有未完成任务、最新一条用户消息之后已经督促过时，输入框上方出现交还提示。</li>
+  </ol>
+  <blockquote class="src">边牧停下了：{tasks} 还没干完，也已经提醒过它。你可以回复它接着干，或点任务旁的“细分”把任务拆小。<cite>src/appearance.ts handoff</cite></blockquote>
 </section>
 
 <!-- ============ 8 ============ -->
@@ -282,7 +293,7 @@ interface Model { list: ListState; nudged: boolean; spent: number }</code></pre>
 </section>
 
 <nav id="cl-pager" data-current="L05-tilldone-split.html"></nav>
-<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§4（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§4（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 01a9921 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
 </main>
 </div>
 

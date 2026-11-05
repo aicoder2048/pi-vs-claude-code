@@ -77,7 +77,7 @@
     <tr><td>PStack</td><td>子 agent 的产出</td><td>只回传最终文本；并行模式每个子 agent 截断</td><td>每次 <code>subagent</code></td></tr>
   </table></div>
   <p>PStack 追加的 system prompt 原文是这样的（<code>pstack/index.ts:272-276</code>）：</p>
-  <blockquote class="src">Pstack Poteto Mode is enabled for this session. Follow its persisted workflow: use pstack_todo for non-trivial work, select and read the matching playbook, delegate through the subagent tool when delegation helps, verify real behavior, and name only principles that changed a decision.<cite>§3.1</cite></blockquote>
+  <blockquote class="src">Pstack Poteto Mode is enabled for this session. Follow its persisted workflow: use pstack_todo for non-trivial work, select and read the matching playbook, delegate through the subagent tool when delegation helps, verify real behavior, and name only principles that changed a decision. The full skill is at <code>&lt;pi-pstack&gt;/skills/poteto-mode/SKILL.md</code>.<cite>§3.1</cite></blockquote>
   <div class="callout tip"><span class="ttl">看表要点</span>看“进入方式”一列。TillDone 的五行里没有一行是 system prompt。PStack 的第一行就是。L04 会比较这两种策略。</div>
 </section>
 
@@ -118,11 +118,11 @@
     <li><a class="term" href="glossary.html#spent">spent</a>（当前任务已用工具次数）和 <code>nudged</code>（本条输入是否已督促）。它们只在扩展内部做决策。</li>
     <li>桌面端全部状态：运行中、待送达队列、弹窗、外观。</li>
     <li>每个任务的工具次数、模型请求次数。D-L3 从 RPC 事件里数，只给界面。</li>
-    <li><a class="term" href="glossary.html#subagent-tree">子 agent 实时树</a>。<code>src/domain.ts:503</code> 的 <code>parseChild</code> 解析 <code>subagent</code> 的 partial result，只给 L4。</li>
+    <li><a class="term" href="glossary.html#subagent-tree">子 agent 实时树</a>。<code>src/domain.ts:556</code> 的 <code>parseChild</code> 解析 <code>subagent</code> 的 partial result，只给 L4。</li>
     <li>API 凭据。Pi 自己解析 <code>auth.json</code>，桌面端不转发。</li>
   </ul>
   <div class="callout rule"><span class="ttl">本节核心句</span>这就是“界面通道和上下文通道分离”。界面通道直接来自 L3 状态，不经过模型转述，也不占上下文。</div>
-  <div class="callout note"><span class="ttl">补充：spent 和拆分提示的关系</span><code>spent</code> 本身不进上下文。但它到 15 的倍数时，扩展会生成一行提示，追加到工具结果末尾。所以模型看到的是“结论”（该考虑拆了），不是“计数器”。这正好符合 L3 原则：模型要做的决策是“拆不拆”，不需要知道每一次的计数。</div>
+  <div class="callout note"><span class="ttl">补充：spent 和拆分提示的关系</span><code>spent</code> 这个字段和它的连续值不进上下文。但它到 15 的倍数时，扩展会生成一行提示，追加到工具结果末尾。提示里带着当时的数字（“has taken 15 tool calls so far”），所以模型只在 15、30、45… 这几个点上看到一个数，看不到 16、17、29。也就是说，模型看到的是按 15 采样的“结论”（该考虑拆了），不是连续的“计数器”。这正好符合 L3 原则：模型要做的决策是“拆不拆”，不需要每一次的计数。</div>
 </section>
 
 <!-- ============ 5 ============ -->
@@ -143,7 +143,7 @@
     <li>全部完成 → <code>allDone</code>。</li>
     <li>没有进行中的任务 → <code>noneActive</code>。</li>
   </ol>
-  <p>桌面副本只拦四个工具：<code>bash</code>、<code>edit</code>、<code>write</code>、<code>subagent</code>（<code>state.ts:377</code> 的 <code>GATED_TOOLS</code>）。其他工具都放行，例如 <code>read</code> 和 <code>pstack_todo</code>。</p>
+  <p>桌面副本只拦四个工具：<code>bash</code>、<code>edit</code>、<code>write</code>、<code>subagent</code>（<code>state.ts:376</code> 的 <code>GATED_TOOLS</code>）。其他工具都放行，例如 <code>read</code> 和 <code>pstack_todo</code>。</p>
 </section>
 
 <!-- ============ 6 ============ -->
@@ -177,7 +177,7 @@
   <div class="quiz" data-answer="1">
     <div class="q">下面哪一项<b>不</b>进模型的上下文？</div>
     <div class="opts"><button>门禁拒绝理由</button><button>spent 计数本身</button><button>SPLIT_CUE</button><button>督促消息</button></div>
-    <div class="explain">原文 §3.2：<code>spent</code> 和 <code>nudged</code> 只在扩展内部做决策。模型只在满 15 次时看到一行提示。</div>
+    <div class="explain">原文 §3.2：<code>spent</code> 和 <code>nudged</code> 只在扩展内部做决策。模型只在满 15 的倍数时看到一行提示，提示里带着那一刻的数字；连续的计数不进上下文。</div>
   </div>
   <div class="quiz" data-answer="3">
     <div class="q">清单为空时，模型直接调用 <code>edit</code>，会收到什么？</div>
@@ -210,7 +210,7 @@
 </section>
 
 <nav id="cl-pager" data-current="L03-what-enters-context.html"></nav>
-<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§3.1、§3.2、§3.4（Claude Code 整理，2026-11-03，提交 f112eb9）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§3.1、§3.2、§3.4（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 01a9921 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
 </main>
 </div>
 
