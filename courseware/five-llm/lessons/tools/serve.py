@@ -1,10 +1,12 @@
-"""弈境结构精读：本地静态服务 + AI 助教（DeepSeek）转发。
+"""课程本地服务：静态页面 + AI 助教（DeepSeek）转发。各门课的这个文件逐字相同。
 
 以项目根目录为静态根（课程页可以链接 docs/ 下的原文），把 /api/tutor/chat 转发给 DeepSeek。
 API key 只留在本机，不进浏览器；.env 和所有点文件都不对外提供。
+课程名、端口、助教人设和每课的资料都写在 tools/sources.json（来源清单）里。
 
 用法（在课程目录下）:
-    uv run --no-project python tools/serve.py            # http://127.0.0.1:8772/lessons/
+    uv run --no-project python tools/serve.py            # 启动服务，地址见输出
+    uv run --no-project python tools/serve.py --check    # 列出每课的助教资料和没登记的引用，不启动服务
 
 <课程目录>/.env（必须加进 .gitignore）:
     DEEPSEEK_API_KEY=...           必填
@@ -25,37 +27,22 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import sources as S
+
 LESSONS = Path(__file__).resolve().parent.parent        # 课程目录
 ROOT = LESSONS.parent                                    # 项目根目录（静态服务的根）
+MANIFEST = LESSONS / "tools" / "sources.json"
 API = "https://api.deepseek.com/chat/completions"
-DEFAULT_PORT = 8772
-COURSE_TITLE = "弈境结构精读"
 NOTES = LESSONS / "study-notes"                         # “记笔记”整理出的 Markdown 笔记
+SKIP_PAGES = {"index.html", "glossary.html", "notes.html"}   # 其余 .html 都是课程页
 
-# ===== 课程配置：按课程修改 =====
-# 每节课都会带上的原文（相对项目根目录）。多篇原文就写多项。
-SOURCES = [
-    ("原文《弈境 · Five LLM 技术白皮书》v1.0（2026-10-30，部分内容已过时）", "docs/articles/five-llm-whitepaper.md"),
-    ("代码现状勘误（课程作者对照提交 4f65e37 的源码整理，与白皮书冲突时以它为准）", "docs/articles/code-status.md"),
-]
-# 个别课程额外附带的资料：{课程文件名: [(标签, 相对项目根目录的路径), ...]}
-A = "../../apps/five-llm/"
-EXTRA = {
-    "L01-overview.html": [("弈境 README", A + "README.md")],
-    "L02-ports-invariants.html": [("L3 源码 game-service.ts", A + "src/business/game-service.ts")],
-    "L03-sdk-vs-rpc.html": [("L1 源码 pi-driver.ts", A + "src/agent/pi-driver.ts")],
-    "L04-loop-hooks.html": [("L1 源码 pi-driver.ts", A + "src/agent/pi-driver.ts"), ("L2 源码 gomoku.ts", A + "src/extensions/gomoku.ts")],
-    "L05-gates-unused.html": [("L2 源码 gomoku.ts", A + "src/extensions/gomoku.ts")],
-    "L06-knowledge-routing.html": [("L3 源码 decision.ts", A + "src/business/decision.ts"), ("知识包入口 SKILL.md", A + "src/business/knowledge/SKILL.md")],
-    "L07-context-rebuild.html": [("L1 源码 pi-driver.ts", A + "src/agent/pi-driver.ts"), ("知识装配 knowledge-loader.ts", A + "src/agent/knowledge-loader.ts")],
-    "L08-forcing-search.html": [("L3 v2 设计记录：对手连续冲四反证", "docs/articles/forcing-review.md"), ("L3 v3 设计记录：己方强杀与漏胜反馈", "docs/articles/own-forcing-win.md")],
-    "L09-evidence-desktop.html": [("L3 v2 设计记录", "docs/articles/forcing-review.md"), ("L3 v3 设计记录", "docs/articles/own-forcing-win.md")],
-    "L10-lineage-review.html": [("L3 重构说明", "docs/articles/l3-knowledge-refactor.md")],
-}
-# 课程文件 = 课程目录下除 index.html / glossary.html 以外的所有 .html（自动发现）
-SKIP_PAGES = {"index.html", "glossary.html", "notes.html"}
 
-SYSTEM = """你是“弈境结构精读”的 AI 助教。学员正在浏览器里自学一节互动课程，随时向你提问。你像一位耐心、资深的 agent harness 工程师，坐在学员旁边一起读弈境（five-llm）的源码、白皮书和结构图
+def manifest() -> tuple:
+    """每次请求都重读，改了 sources.json 不用重启服务。"""
+    return S.load_manifest(MANIFEST)
+
+
+SYSTEM = """你是“{title}”的 AI 助教。学员正在浏览器里自学一节互动课程，随时向你提问。{persona}
 
 【目标】
 帮学员真正弄懂这节课：是什么、为什么、怎么用、代价和局限是什么。
@@ -92,9 +79,7 @@ SYSTEM = """你是“弈境结构精读”的 AI 助教。学员正在浏览器�
 2. 保留原文的限定语（如“初步”“原型”“尚未默认开启”），不要夸大。
 3. 学员附上配图截图、演示读数时：先说看到了什么，再对照本课内容解释。看不清就直说，不要猜。
 4. 学员说“考考我”：一次只出一道题，等他作答后再讲评。
-5. 白皮书是 v1.0（2026-10-30）。之后代码又改过：工具从 6 个增至 8 个，知识包升到 gomoku-knowledge/v3，新增连续冲四反证、己方强杀发现和提交前反馈门禁。白皮书与“代码现状勘误”冲突时，以勘误为准，并告诉学员白皮书哪里过时。
-6. 学员问代码细节时，引用附带源码里的函数名和文件名；源码没给的，直说不知道。
-7. 今天是 2026-11-04。课程快照是提交 4f65e37。不要编造之后的新进展。
+5. 学员问到附带资料里的内容时，引用资料的标签和其中的名字（函数名、小节标题、图号）。资料没给的，直说不知道。
 """
 
 
@@ -131,6 +116,35 @@ NOTE_SYSTEM = """你是一位专业的学习笔记整理师。学员在自学“
 """
 
 
+def system_prompt(course) -> str:
+    rules = [*course.rules, f"今天是 {datetime.date.today().isoformat()}。不要编造资料之外的新进展。"]
+    extra = "".join(f"{i}. {r}\n" for i, r in enumerate(rules, 6))
+    return SYSTEM.replace("{title}", course.title).replace("{persona}", course.persona) + extra
+
+
+def read_source(src) -> str | None:
+    f = ROOT / src.path
+    return f.read_text(encoding="utf-8") if f.is_file() else None
+
+
+def lesson_sources(lesson: str, course=None, sources=None) -> "S.Selection":
+    """按 sources.json 挑出这一课的助教资料。课文取自磁盘上的课程页，不信任浏览器传来的文字。"""
+    if sources is None:
+        course, sources = manifest()
+    text = S.lesson_text((LESSONS / lesson).read_text(encoding="utf-8"))
+    return S.select_sources(sources, lesson, text, read_source, course.budget)
+
+
+def sources_block(sel) -> str:
+    out = "\n【本课附带的资料，下面逐份给出全文】" + "；".join(s.label for s, _ in sel.kept) + "。回答时可以直接引用它们。\n"
+    out += "".join(f"\n--- {s.label}（{s.path}）---\n{body}\n" for s, body in sel.kept)
+    if sel.omitted:
+        out += "\n【超出资料预算，本课没有附上】" + "、".join(s.label for s in sel.omitted) + "。学员问到它们时，直说手上没有。\n"
+    if sel.missing:
+        out += "\n【资料文件缺失】" + "、".join(f"{s.label}（{s.path}）" for s in sel.missing) + "。不要假装读过它们。\n"
+    return out
+
+
 def lesson_files() -> set:
     return {p.name for p in LESSONS.glob("*.html") if p.name not in SKIP_PAGES}
 
@@ -161,15 +175,11 @@ def build_messages(req: dict, with_image: bool = True) -> list:
     if history[-1]["role"] != "user":
         raise ValueError("last message must be from the user")
 
-    sources = ""
-    for label, rel in SOURCES + EXTRA.get(lesson, []):
-        f = ROOT / rel
-        if f.exists():
-            sources += f"\n--- {label} ---\n{clip(f.read_text(encoding='utf-8'), 60000)}\n"
-    # 稳定前缀（system + 原文 + 课程全文），让 DeepSeek 的前缀缓存跨轮命中
-    system = SYSTEM + (
+    course, sources = manifest()
+    # 稳定前缀（system + 资料 + 课程全文），让 DeepSeek 的前缀缓存跨轮命中
+    system = system_prompt(course) + (
         f"\n\n=== 本课：{clip(ctx.get('title'), 200)}（{lesson}）===\n"
-        + sources +
+        + sources_block(lesson_sources(lesson, course, sources)) +
         f"\n--- 课程页面全文（演示由页面 JS 实时计算，这里只有文字部分）---\n{clip(ctx.get('lessonText'), 50000)}\n"
     )
     msgs = [{"role": "system", "content": system}]
@@ -217,7 +227,7 @@ def build_note_messages(req: dict) -> list:
         + f"\n=== 选中的对话（{len(history)} 条）===\n{talk}\n"
         + f"\n=== 课程页面全文（供核对事实，不要照抄）===\n{clip(ctx.get('lessonText'), 30000)}\n"
     )
-    return [{"role": "system", "content": NOTE_SYSTEM.format(course=COURSE_TITLE)}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": NOTE_SYSTEM.format(course=manifest()[0].title)}, {"role": "user", "content": user}]
 
 
 def slugify(title: str) -> str:
@@ -238,7 +248,7 @@ def save_note(req: dict, body: str, model: str) -> str:
         "---",
         "title: " + json.dumps(title, ensure_ascii=False),
         f"date: {today.isoformat()}",
-        "course: " + json.dumps(COURSE_TITLE, ensure_ascii=False),
+        "course: " + json.dumps(manifest()[0].title, ensure_ascii=False),
         "lesson: " + json.dumps(lesson_title, ensure_ascii=False),
         f"lesson_file: {lesson}",
         "source: " + json.dumps(f"与 AI 助教的对话（{len(history)} 条），由 {model} 整理", ensure_ascii=False),
@@ -313,9 +323,13 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/tutor/health"):
             key = bool(self.env.get("DEEPSEEK_API_KEY"))
             err = None if key else LESSONS.name + "/.env 里没有 DEEPSEEK_API_KEY（复制 .env.sample 为 .env 并填入你的 key）"
-            missing = [rel for _, rel in SOURCES if not (ROOT / rel).exists()]
-            if key and missing:
-                err = "还没下载原文：" + "、".join(missing) + "（见 README，运行 tools/fetch_article.py）"
+            try:
+                _, sources = manifest()
+                missing = [s.path for s in sources if s.scope == "all" and read_source(s) is None]
+                if key and missing:
+                    err = "还没下载原文：" + "、".join(missing) + "（见 README，运行 tools/fetch_article.py）"
+            except S.ManifestError as e:
+                err = str(e)
             return self._json(200, {"ok": err is None, "model": self.env.get("DEEPSEEK_MODEL", "deepseek-flash"), "error": err})
         if self.path.startswith("/api/notes"):
             return self._json(200, {"notes": list_notes()})
@@ -443,10 +457,37 @@ class Handler(SimpleHTTPRequestHandler):
                 pass
 
 
+def check() -> int:
+    """打印每课带哪些资料、超预算省略了哪些、课文里有哪些引用没登记。资料缺失时返回 1。"""
+    course, sources = manifest()
+    bad = 0
+    for lesson in sorted(lesson_files()):
+        sel = lesson_sources(lesson, course, sources)
+        used = sum(len(b) for _, b in sel.kept)
+        print(f"{lesson}  资料 {used:,}/{course.budget:,} 字：" + "、".join(s.id for s, _ in sel.kept))
+        if sel.omitted:
+            print("    超出预算未附：" + "、".join(s.id for s in sel.omitted))
+        for s in sel.missing:
+            print(f"    错误：资料文件缺失 {s.id}（{s.path}）")
+            bad = 1
+        refs = S.unregistered_refs(S.lesson_text((LESSONS / lesson).read_text(encoding="utf-8")), sources)
+        if refs:
+            print("    警告：引用了但没登记在 sources.json：" + "、".join(refs[:12]) + (f" 等 {len(refs)} 项" if len(refs) > 12 else ""))
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--port", type=int, default=None, help="默认用 sources.json 里的 course.port")
+    ap.add_argument("--check", action="store_true", help="检查来源清单，不启动服务")
     a = ap.parse_args()
+    try:
+        course, _ = manifest()
+    except S.ManifestError as e:
+        sys.exit(f"来源清单有误：{e}")
+    if a.check:
+        sys.exit(check())
+    a.port = a.port or course.port
     Handler.env = load_env()
     if not Handler.env.get("DEEPSEEK_API_KEY"):
         print(f"警告：{LESSONS.name}/.env 里没有 DEEPSEEK_API_KEY，AI 助教不可用（课程本身可以正常看）。")

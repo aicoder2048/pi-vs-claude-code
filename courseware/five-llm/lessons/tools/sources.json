@@ -1,0 +1,158 @@
+{
+  "course": {
+    "title": "弈境结构精读",
+    "prefix": "fl",
+    "port": 8772,
+    "persona": "你像一位耐心、资深的 agent harness 工程师，坐在学员旁边一起读弈境（five-llm）的源码、白皮书和结构图。",
+    "rules": [
+      "白皮书是 v1.0（2026-10-30）。之后代码又改过：工具从 6 个增至 8 个，知识包升到 gomoku-knowledge/v3，新增连续冲四反证、己方强杀发现和提交前反馈门禁。白皮书与“代码现状勘误”冲突时，以勘误为准，并告诉学员白皮书哪里过时。",
+      "课程快照是提交 4f65e37。"
+    ]
+  },
+  "sources": [
+    {
+      "id": "whitepaper",
+      "label": "原文《弈境 · Five LLM 技术白皮书》v1.0（2026-10-30，部分内容已过时）",
+      "path": "docs/articles/five-llm-whitepaper.md",
+      "scope": "all",
+      "aliases": [
+        "弈境 · Five LLM 技术白皮书",
+        "白皮书"
+      ]
+    },
+    {
+      "id": "code-status",
+      "label": "代码现状勘误（课程作者对照提交 4f65e37 的源码整理，与白皮书冲突时以它为准）",
+      "path": "docs/articles/code-status.md",
+      "scope": "all",
+      "aliases": [
+        "弈境代码现状勘误",
+        "code-status.md"
+      ]
+    },
+    {
+      "id": "readme",
+      "label": "弈境 README",
+      "path": "../../apps/five-llm/README.md",
+      "scope": [
+        "L01-overview.html"
+      ],
+      "aliases": [
+        "apps/five-llm/README.md"
+      ]
+    },
+    {
+      "id": "game-service-ts",
+      "label": "L3 源码 game-service.ts",
+      "path": "../../apps/five-llm/src/business/game-service.ts",
+      "scope": "cited",
+      "aliases": [
+        "game-service.ts"
+      ]
+    },
+    {
+      "id": "pi-driver-ts",
+      "label": "L1 源码 pi-driver.ts",
+      "path": "../../apps/five-llm/src/agent/pi-driver.ts",
+      "scope": "cited",
+      "aliases": [
+        "pi-driver.ts"
+      ]
+    },
+    {
+      "id": "gomoku-ts",
+      "label": "L2 源码 gomoku.ts",
+      "path": "../../apps/five-llm/src/extensions/gomoku.ts",
+      "scope": "cited",
+      "aliases": [
+        "gomoku.ts"
+      ]
+    },
+    {
+      "id": "decision-ts",
+      "label": "L3 源码 decision.ts",
+      "path": "../../apps/five-llm/src/business/decision.ts",
+      "scope": "cited",
+      "aliases": [
+        "decision.ts"
+      ]
+    },
+    {
+      "id": "knowledge-skill",
+      "label": "知识包入口 SKILL.md",
+      "path": "../../apps/five-llm/src/business/knowledge/SKILL.md",
+      "scope": [
+        "L06-knowledge-routing.html"
+      ],
+      "aliases": [
+        "knowledge/SKILL.md"
+      ]
+    },
+    {
+      "id": "knowledge-loader-ts",
+      "label": "知识装配 knowledge-loader.ts",
+      "path": "../../apps/five-llm/src/agent/knowledge-loader.ts",
+      "scope": [
+        "L07-context-rebuild.html"
+      ],
+      "aliases": [
+        "knowledge-loader.ts"
+      ]
+    },
+    {
+      "id": "forcing-ts",
+      "label": "L3 源码 forcing.ts",
+      "path": "../../apps/five-llm/src/business/forcing.ts",
+      "scope": "cited",
+      "aliases": [
+        "forcing.ts"
+      ]
+    },
+    {
+      "id": "electron-main-ts",
+      "label": "L0 桌面源码 main.ts",
+      "path": "../../apps/five-llm/src/electron/main.ts",
+      "scope": "cited",
+      "aliases": [
+        "main.ts"
+      ]
+    },
+    {
+      "id": "forcing-review",
+      "label": "L3 v2 设计记录：对手连续冲四反证",
+      "path": "docs/articles/forcing-review.md",
+      "scope": [
+        "L08-forcing-search.html",
+        "L09-evidence-desktop.html"
+      ],
+      "aliases": [
+        "forcing-review.md",
+        "L3 v2：候选的连续先手反证与提交前反馈"
+      ]
+    },
+    {
+      "id": "own-forcing-win",
+      "label": "L3 v3 设计记录：己方强杀与漏胜反馈",
+      "path": "docs/articles/own-forcing-win.md",
+      "scope": [
+        "L08-forcing-search.html",
+        "L09-evidence-desktop.html"
+      ],
+      "aliases": [
+        "own-forcing-win.md",
+        "L3 v3：己方强杀发现与提交前漏胜反馈"
+      ]
+    },
+    {
+      "id": "l3-refactor",
+      "label": "L3 重构说明",
+      "path": "docs/articles/l3-knowledge-refactor.md",
+      "scope": [
+        "L10-lineage-review.html"
+      ],
+      "aliases": [
+        "l3-knowledge-refactor.md"
+      ]
+    }
+  ]
+}

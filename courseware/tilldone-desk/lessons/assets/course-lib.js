@@ -25,6 +25,7 @@
     { step: 4, file: "L06-pstack-meshing.html", id: "L06", title: "PStack 与 TillDone 的咬合", src: "§5–6" },
     { step: 4, file: "L07-pitfalls-review.html", id: "L07", title: "坑、开放问题与全课复盘", src: "§7–8" },
   ];
+  CL.TUTOR_QUICK = [["这一节对应源码的哪个函数？", false]];
   CL.LESSONS.forEach((l, k) => { l.no = k + 1; l.group = "第 " + l.step + " 步 · " + CL.STEPS[l.step - 1].name; });
 
   /* 已学记录：只存在本机浏览器里，读不到也不影响页面 */

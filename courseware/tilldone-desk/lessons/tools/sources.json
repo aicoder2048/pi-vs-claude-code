@@ -1,0 +1,69 @@
+{
+  "course": {
+    "title": "边牧结构精读",
+    "prefix": "bm",
+    "port": 8771,
+    "persona": "你像一位耐心、资深的 agent harness 工程师，坐在学员旁边一起读边牧的源码和结构图。",
+    "rules": [
+      "本课程讲的是一个仍在变化的本地项目。原文标“推断”的地方没有实际运行验证，回答时保留这个限定。白皮书 v1.0 不含 pstack 部分，不要用它回答 pstack 问题。"
+    ]
+  },
+  "sources": [
+    {
+      "id": "article",
+      "label": "原文《边牧（TillDone Desk）结构梳理》",
+      "path": "docs/articles/tilldone-desk-anatomy.md",
+      "scope": "all",
+      "aliases": ["边牧（TillDone Desk）结构梳理"]
+    },
+    {
+      "id": "readme",
+      "label": "边牧 README",
+      "path": "../../apps/tilldone/README.md",
+      "scope": ["L01-overview.html", "L02-two-four-layers.html", "L07-pitfalls-review.html"],
+      "aliases": ["apps/tilldone/README.md"]
+    },
+    {
+      "id": "four-layer-discussion",
+      "label": "四层讨论稿",
+      "path": "../../discussions/2026-10-28-four-layer-harness.md",
+      "scope": ["L02-two-four-layers.html"],
+      "aliases": ["discussions/2026-10-28-four-layer-harness.md"]
+    },
+    {
+      "id": "state-ts",
+      "label": "扩展 L3 源码 state.ts",
+      "path": "../../apps/tilldone/extensions/tilldone/state.ts",
+      "scope": "cited",
+      "aliases": ["state.ts"]
+    },
+    {
+      "id": "l2-index-ts",
+      "label": "扩展 L2 源码 index.ts",
+      "path": "../../apps/tilldone/extensions/tilldone/index.ts",
+      "scope": ["L04-context-strategies.html", "L05-tilldone-split.html"],
+      "aliases": ["extensions/tilldone/index.ts", "E-L2index.ts"]
+    },
+    {
+      "id": "pstack-index-ts",
+      "label": "pstack 扩展源码 index.ts",
+      "path": "../../.pi/npm/node_modules/pi-pstack/extensions/pstack/index.ts",
+      "scope": ["L04-context-strategies.html", "L06-pstack-meshing.html"],
+      "aliases": ["pstack/index.ts"]
+    },
+    {
+      "id": "domain-ts",
+      "label": "桌面 L3 源码 domain.ts",
+      "path": "../../apps/tilldone/src/domain.ts",
+      "scope": "cited",
+      "aliases": ["domain.ts"]
+    },
+    {
+      "id": "desk-ts",
+      "label": "桌面 L2 源码 desk.ts",
+      "path": "../../apps/tilldone/src/desk.ts",
+      "scope": "cited",
+      "aliases": ["desk.ts"]
+    }
+  ]
+}

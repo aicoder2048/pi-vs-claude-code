@@ -76,7 +76,12 @@
 - 边牧：L04 的助教上下文包含 `state.ts`，L05 包含 `domain.ts`（用一个只构建消息、不发请求的函数断言）。
 - learner driver 抽查 2 问：在 L04 问切换分支后 `spent` / `nudged` 怎样，在 L05 问交还提示的条件。回答要引用源码，而不是“原文没给”。
 
-**Status**: Not Started
+**Status**: Complete
+- 课程配置（课程名、前缀、端口、人设、课程规则）也移进 `sources.json` 的 `course` 段，两门课的 `serve.py` 与模板逐字相同（`scripts/sync_course.py --check`：0 个文件不同）。
+- scope 列表的含义：列出的课一定带，其余课文提到时也带。
+- 检查入口是 `serve.py --check`：列出每课的资料、超预算省略项、资料缺失（报错）和没登记的引用（警告）。
+- 测试：模板 20 个 unittest 通过；两门课 check_page 三主题全部通过（边牧 10 页、弈境 13 页）。
+- learner driver 3 问：L05 引用 `handoffView` / `judgeNudges`（`domain.ts`）。L04 第一次答对内容但自称“state.ts 没附”，系统提示随后在资料前列出“本课附带的资料”，重问后引用 `toolCalled`（`state.ts:430`）。
 
 ## Stage 2: 勘误通道与读数一致性
 

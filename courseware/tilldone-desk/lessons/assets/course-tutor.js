@@ -50,8 +50,8 @@
     ["这张图该怎么看？它说明了本课的哪个设计点？", true],
     ["考考我：就这一节出一道题", false],
     ["这个设计的代价和局限是什么？", false],
-    ["这一节对应源码的哪个函数？", false],
     ["在 Claude Code / Codex 等现有 Agent 里，有没有类似的做法？", false],
+    ...(CL.TUTOR_QUICK || []),   // 课程自己的快捷提问，在 course-lib.js 里定义
   ];
   $(".tp-quick").innerHTML = QUICK.map((q, i) => '<button type="button" class="tp-q" data-i="' + i + '">' + q[0].split("？")[0].split("：")[0] + "</button>").join("");
   $(".tp-quick").addEventListener("click", (e) => {
