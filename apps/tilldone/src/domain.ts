@@ -6,6 +6,7 @@
 import { EMPTY_LIST, countByStatus, current, parseDetails, SPLIT_HINT_EVERY, STATUS_ICON, TOOL, type ListState } from "../extensions/tilldone/state.ts";
 
 import { marked } from "marked";
+import { resolve as resolvePath } from "node:path";
 
 import { DEFAULT_PREFERENCES, parsePreferences, copyFor, appearanceView, type Preferences } from "./appearance.ts";
 
@@ -322,7 +323,8 @@ export type Intent = { type: "submit"; message: string; images?: readonly Image[
 	/** Shows only one task's activity; null shows everything. */
 	| { type: "filterTask"; id: number | null }
 	| { type: "copyMessage"; id: string }
-	| { type: "openLink"; id: string; url: string }
+	/** reveal: show a local file in Finder instead of opening it. */
+	| { type: "openLink"; id: string; url: string; reveal?: boolean }
 	| { type: "preferences"; preferences: Preferences }
 	| { type: "apiOpen" | "apiClose" }
 	| { type: "apiLink"; provider: ApiProvider }
@@ -356,12 +358,12 @@ export function parseIntent(raw: unknown): Intent | undefined {
 	if (r.type === "filterTask" && (r.id === null || (Number.isInteger(r.id) && r.id > 0))) return { type: "filterTask", id: r.id };
 	if (r.type === "copyMessage" && typeof r.id === "string" && r.id.length > 0 && r.id.length <= 64) return { type: "copyMessage", id: r.id };
 	if (r.type === "openLink" && typeof r.id === "string" && r.id.length > 0 && r.id.length <= 64 && typeof r.url === "string" && r.url.length > 0 && r.url.length <= 2048) {
-		return { type: "openLink", id: r.id, url: r.url };
+		return { type: "openLink", id: r.id, url: r.url, ...(typeof r.reveal === "boolean" ? { reveal: r.reveal } : {}) };
 	}
 	if (r.type === "confirm" && typeof r.id === "string" && typeof r.confirmed === "boolean") return { type: "confirm", id: r.id, confirmed: r.confirmed };
 	if (r.type === "answer" && typeof r.id === "string" && (r.value === null || (typeof r.value === "string" && r.value.length <= MAX_ANSWER))) return { type: "answer", id: r.id, value: r.value };
 }
-export function planIntent(state: State, intent: Intent): { commands: RecordValue[]; events: RecordValue[]; restart?: "resume" | "fresh"; saveApi?: CredentialChanges; externalUrl?: string; clipboard?: string } {
+export function planIntent(state: State, intent: Intent): { commands: RecordValue[]; events: RecordValue[]; restart?: "resume" | "fresh"; saveApi?: CredentialChanges; externalUrl?: string; localFile?: LocalFile; clipboard?: string } {
 	const empty = { commands: [], events: [] };
 	if (intent.type === "apiOpen") return { commands: [], events: [{ type: "desk_api_open" }] };
 	if (intent.type === "apiClose") return state.api.saving ? empty : { commands: [], events: [{ type: "desk_api_close" }] };
@@ -393,7 +395,10 @@ export function planIntent(state: State, intent: Intent): { commands: RecordValu
 	// The renderer reports the address it shows; it opens only if this reply's own Markdown links to it.
 	if (intent.type === "openLink") {
 		const message = state.messages.find((m) => m.id === intent.id && m.kind === "assistant");
-		return message && openableUrl(intent.url) && linksIn(messageText(message)).includes(intent.url) ? { ...empty, externalUrl: intent.url } : empty;
+		if (!message || !linksIn(messageText(message)).includes(intent.url)) return empty;
+		if (openableUrl(intent.url)) return { ...empty, externalUrl: intent.url };
+		const path = localPath(intent.url, state.cwd);
+		return path ? { ...empty, localFile: { path, reveal: intent.reveal === true || !OPENABLE_FILE.test(path) } } : empty;
 	}
 	// A new session is a fresh Pi process with a new session file; mid-run, Stop first.
 	if (intent.type === "newSession") return state.connection === "ready" && !isRunning(state) ? { ...empty, restart: "fresh" } : empty;
@@ -477,6 +482,22 @@ function openableUrl(url: string): boolean {
 		return (parsed.protocol === "http:" || parsed.protocol === "https:") && !parsed.username && !parsed.password;
 	} catch { return false; }
 }
+export interface LocalFile { readonly path: string; readonly reveal: boolean }
+/**
+ * An absolute path, a home-relative one, a file URL on this machine, or a path relative to Pi's working directory
+ * (where the agent wrote its files). The main process expands "~/".
+ */
+function localPath(href: string, cwd: string): string | null {
+	if ((href.startsWith("/") && !href.startsWith("//")) || href.startsWith("~/")) return href;
+	try {
+		const url = new URL(href);
+		return url.protocol === "file:" && (url.host === "" || url.host === "localhost") ? decodeURIComponent(url.pathname) : null;
+	} catch {
+		return /^(?:\/\/|#|\?)/.test(href) ? null : resolvePath(cwd, href);
+	}
+}
+// Only documents and media open in their default app. Apps, scripts and unknown types could run code, so they are shown in Finder.
+const OPENABLE_FILE = /\.(pdf|png|jpe?g|gif|webp|heic|svg|txt|md|csv|tsv|json|log|html?|docx?|xlsx?|pptx?|key|pages|numbers|mp3|m4a|wav|mp4|mov)$/i;
 /** Link targets as the renderer's Markdown shows them: the same marked lexer, so addresses compare exactly. */
 function linksIn(source: string): string[] {
 	const hrefs: string[] = [];

@@ -435,16 +435,19 @@ function renderAsk(ask: View["dialog"], ui: View["ui"]) {
 		(ask.kind === "select" ? $("ask-options").querySelector("button") : ask.kind === "input" ? input : editor)?.focus();
 	}
 }
-// Links in replies open in the system browser; the main process checks the address against the reply first.
-function openLink(event: Event) {
+// Web links open in the browser and local files in their default app; Option-click or a right-click
+// (Control-click on a Mac) shows a local file in Finder. The main process checks the address against the reply first.
+function openLink(event: Event, reveal = false) {
 	const link = (event.target as Element).closest<HTMLElement>(".markdown .link");
 	const message = link?.closest<HTMLElement>(".message");
 	if (!link || !message?.dataset.key) return;
 	event.preventDefault();
-	void send({ type: "openLink", id: message.dataset.key, url: link.title });
+	void send({ type: "openLink", id: message.dataset.key, url: link.title, reveal: reveal || (event as MouseEvent).altKey === true });
 }
-$("conversation").addEventListener("click", openLink);
-$("conversation").addEventListener("keydown", (event) => { if (event.key === "Enter") openLink(event); });
+$("conversation").addEventListener("click", (event) => openLink(event));
+$("conversation").addEventListener("auxclick", (event) => { if (event.button === 1) openLink(event); });
+$("conversation").addEventListener("contextmenu", (event) => openLink(event, true));
+$("conversation").addEventListener("keydown", (event) => { if (event.key === "Enter") openLink(event, event.altKey); });
 $("composer").addEventListener("submit", (event) => {
 	event.preventDefault();
 	const input = $<HTMLTextAreaElement>("prompt");

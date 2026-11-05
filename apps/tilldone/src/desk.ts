@@ -1,5 +1,5 @@
 /** TillDone Desk L2: the mutable domain cell; transport facts in, JSON views out, intents to RPC. */
-import { initialState, reduce, toViewModel, parseIntent, planIntent, immediateUIResponse, viewChanged, type RecordValue } from "./domain.ts";
+import { initialState, reduce, toViewModel, parseIntent, planIntent, immediateUIResponse, viewChanged, type LocalFile, type RecordValue } from "./domain.ts";
 import type { Config } from "./config.ts";
 import type { Preferences } from "./appearance.ts";
 import { existsSync } from "node:fs";
@@ -18,7 +18,8 @@ export class Desk {
 	private restarting = false;
 	constructor(private readonly config: Config, private readonly publish: (view: ReturnType<typeof toViewModel>) => void,
 		private readonly options: { preferences?: Preferences; systemDark?: boolean; savePreferences?: (preferences: Preferences) => void;
-			credentials?: PiCredentials; openExternal?: (url: string) => Promise<void>; writeClipboard?: (text: string) => void;
+			credentials?: PiCredentials; openExternal?: (url: string) => Promise<void>; openLocal?: (file: LocalFile) => Promise<void>;
+			writeClipboard?: (text: string) => void;
 			sessionExists?: (path: string) => boolean } = {}) {
 		this.state = initialState(config.model, config.cwd, options.preferences, options.systemDark, Boolean(config.pstackExtension));
 		if (options.credentials) this.state = reduce(this.state, { type: "desk_api_summary", summary: options.credentials.summary() });
@@ -93,6 +94,10 @@ export class Desk {
 		if (plan.externalUrl) {
 			try { await this.options.openExternal?.(plan.externalUrl); }
 			catch { this.error("Cannot open the link in the browser."); }
+		}
+		if (plan.localFile) {
+			try { await this.options.openLocal?.(plan.localFile); }
+			catch (error) { this.error(`Cannot open ${plan.localFile.path}: ${error instanceof Error ? error.message : String(error)}`); }
 		}
 		if (plan.clipboard !== undefined) {
 			// Rejecting lets the renderer show an error instead of a "copied" mark.

@@ -2,7 +2,7 @@
 /** TillDone Desk L1 test double: deterministic RPC peer, no provider or model calls. */
 import { readFileSync, appendFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { JsonlDecoder } from "../src/jsonl.ts";
 const records = readFileSync(new URL("fixtures/rpc-probe.jsonl", import.meta.url), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.dir === "out").map((r) => r.rec);
 const state = records.find((r) => r.command === "get_state").data;
@@ -46,7 +46,10 @@ async function handle(r: any) {
 	}
 	if (r.message === "busy") { emit({ type: "agent_start" }); return; }
 	if (r.message === "markdown") {
-		const text = "## 周度小结\n\n第一行\n第二行，**加粗** 和 `inline`\n\n- 一\n- [x] 二\n\n| 指标 | 数值 |\n|:--|--:|\n| 收盘 | 135.2 |\n\n```ts\nconst a = 1 < 2;\n```\n\n> 引用\n\n见 [文档](https://example.com/docs)。<img src=x onerror=\"alert(1)\"> [脚本](javascript:alert(1))";
+		// Local file links point into the smoke test's own temp directory, which it fills before asking.
+		const dir = process.env.FAKE_PI_LOG ? dirname(process.env.FAKE_PI_LOG) : "/tmp";
+		const text = "## 周度小结\n\n第一行\n第二行，**加粗** 和 `inline`\n\n- 一\n- [x] 二\n\n| 指标 | 数值 |\n|:--|--:|\n| 收盘 | 135.2 |\n\n```ts\nconst a = 1 < 2;\n```\n\n> 引用\n\n见 [文档](https://example.com/docs)。<img src=x onerror=\"alert(1)\"> [脚本](javascript:alert(1))" +
+			`\n\n文件：[行程 PDF](<${dir}/行程 报告.pdf>)、[启动脚本](${dir}/run.command)、[已删除](${dir}/gone.pdf)`;
 		emit({ type: "message_start", message: { role: "assistant", content: [] } });
 		// Stream in pieces first, so the half-written Markdown renders on the way.
 		for (let i = 0; i < text.length; i += 40) emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text.slice(i, i + 40) } });

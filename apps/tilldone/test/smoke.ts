@@ -190,6 +190,7 @@ try {
 	await page.locator("#prompt").fill("markup"); await page.locator("#send").click();
 	await page.waitForFunction(() => document.getElementById("conversation")!.textContent!.includes("<img"));
 	assert.equal(await page.locator("#conversation img").count(), 0);
+	await writeFile(join(directory, "行程 报告.pdf"), "%PDF-1.4\n"); await writeFile(join(directory, "run.command"), "#!/bin/sh\n");
 	await page.locator("#prompt").fill("markdown"); await page.locator("#send").click();
 	await page.waitForFunction(() => document.querySelector(".message.assistant .markdown table td.align-right")?.textContent === "135.2");
 	const reply = page.locator(".message.assistant .markdown").last();
@@ -199,20 +200,39 @@ try {
 	assert.equal(await reply.locator("strong").innerText(), "加粗");
 	assert.match(await reply.locator("p").first().innerText(), /^第一行\n第二行/, "A single line break inside a paragraph is kept");
 	assert.equal(await reply.locator("a, img, script").count(), 0, "No anchors, images or scripts are created from model text");
-	assert.equal(await reply.locator(".link").getAttribute("title"), "https://example.com/docs");
+	assert.equal(await reply.locator(".link").first().getAttribute("title"), "https://example.com/docs");
 	// Links go to the system browser through the main process; record them instead of opening a real browser.
 	await application.evaluate(({ shell }) => {
 		(globalThis as any).__openedLinks = [];
 		shell.openExternal = async (url) => { (globalThis as any).__openedLinks.push(url); };
 	});
 	const pageUrl = page.url();
-	await reply.locator(".link").click();
+	await reply.locator(".link").first().click();
 	await reply.locator(".link-inert").click();
-	await reply.locator(".link").focus(); await page.keyboard.press("Enter");
+	await reply.locator(".link").first().focus(); await page.keyboard.press("Enter");
 	await page.waitForTimeout(200);
 	assert.deepEqual(await application.evaluate(() => (globalThis as any).__openedLinks), ["https://example.com/docs", "https://example.com/docs"],
 		"Click and Enter open the http(s) link; a javascript: link opens nothing");
 	assert.equal(page.url(), pageUrl, "The window itself never navigates");
+	// Local files: a document opens in its default app; Option-click and right-click show it in Finder; anything that could run is only shown.
+	await application.evaluate(({ shell }) => {
+		const g = globalThis as any; g.__opened = []; g.__revealed = [];
+		shell.openPath = async (path) => { g.__opened.push(path); return ""; };
+		shell.showItemInFolder = (path) => { g.__revealed.push(path); };
+	});
+	const pdf = reply.locator(".link", { hasText: "行程 PDF" });
+	await pdf.click();
+	await pdf.click({ modifiers: ["Alt"] });
+	await pdf.click({ button: "right" });
+	await pdf.click({ modifiers: ["Meta"] });
+	await reply.locator(".link", { hasText: "启动脚本" }).click();
+	await reply.locator(".link", { hasText: "已删除" }).click();
+	await page.waitForTimeout(300);
+	const files = await application.evaluate(() => ({ opened: (globalThis as any).__opened, revealed: (globalThis as any).__revealed }));
+	assert.deepEqual(files, { opened: [join(directory, "行程 报告.pdf"), join(directory, "行程 报告.pdf")], revealed: [join(directory, "行程 报告.pdf"), join(directory, "行程 报告.pdf"), join(directory, "run.command")] },
+		"Click and Cmd-click open the PDF; Option-click and right-click reveal it; the script is only revealed; a missing file does nothing");
+	assert.match(await page.locator("#error").innerText(), /gone\.pdf: file not found/, "A missing file says so");
+	assert.equal(page.url(), pageUrl, "Opening local files never navigates the window");
 	assert.match(await reply.innerText(), /<img src=x onerror="alert\(1\)">/, "Raw HTML stays literal text");
 	await page.locator(".message.assistant").last().hover();
 	await page.waitForTimeout(300);

@@ -414,7 +414,7 @@ describe("copying an assistant reply", () => {
 	});
 });
 describe("opening a link in a reply", () => {
-	const source = "见 [MU历史行情](https://finance.example.com/MU?range=1w&x=行情)、www.example.org 和 [脚本](javascript:alert(1))、[凭据](https://user:pw@evil.example.com/)、[相对](/docs)";
+	const source = "见 [MU历史行情](https://finance.example.com/MU?range=1w&x=行情)、www.example.org 和 [脚本](javascript:alert(1))、[凭据](https://user:pw@evil.example.com/)、[相对](/docs)、[PDF](</Users/me/Downloads/Trip 2026.pdf>)、[笔记](~/notes.md)、[图](file:///tmp/a%20b.png)、[相对文件](outputs/Trip.pdf)、[上级](../x.sh)、[锚点](#top)、[远程文件](file://evil.example/a.pdf)、[脚本](/tmp/run.command)、[应用](/Applications/Evil.app)、[sh](/tmp/x.sh)、[包](/tmp/archive.tar.gz)";
 	const reply = () => [
 		{ type: "message_start", message: { role: "user", content: "看 https://user.example.com/" } },
 		{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: source }] } },
@@ -442,9 +442,37 @@ describe("opening a link in a reply", () => {
 		expect(open(s, idOf(s, "user"), "https://user.example.com/").externalUrl).toBeUndefined();
 		expect(open(s, "message-99", "http://www.example.org").externalUrl).toBeUndefined();
 	});
-	test("links in the reply that are not plain http(s) addresses are not opened", () => {
+	test("links in the reply that are neither plain http(s) addresses nor absolute local paths are not opened", () => {
 		const s = reply(), id = idOf(s, "assistant");
-		for (const url of ["javascript:alert(1)", "https://user:pw@evil.example.com/", "/docs"]) expect(open(s, id, url).externalUrl).toBeUndefined();
+		for (const url of ["javascript:alert(1)", "https://user:pw@evil.example.com/", "file://evil.example/a.pdf", "#top"]) {
+			expect(open(s, id, url)).toEqual({ commands: [], events: [] });
+		}
+	});
+	test("a local document in the reply opens with its default app; Option-click reveals it in Finder", () => {
+		const s = reply(), id = idOf(s, "assistant");
+		expect(open(s, id, "/Users/me/Downloads/Trip 2026.pdf")).toEqual({ commands: [], events: [], localFile: { path: "/Users/me/Downloads/Trip 2026.pdf", reveal: false } });
+		expect(planIntent(s, { type: "openLink", id, url: "/Users/me/Downloads/Trip 2026.pdf", reveal: true }).localFile).toEqual({ path: "/Users/me/Downloads/Trip 2026.pdf", reveal: true });
+		expect(open(s, id, "~/notes.md").localFile).toEqual({ path: "~/notes.md", reveal: false });
+		expect(open(s, id, "file:///tmp/a%20b.png").localFile).toEqual({ path: "/tmp/a b.png", reveal: false });
+	});
+	test("a relative path resolves against Pi's working directory, where the agent wrote it", () => {
+		const s = reply(), id = idOf(s, "assistant");
+		expect(open(s, id, "outputs/Trip.pdf").localFile).toEqual({ path: "/work/outputs/Trip.pdf", reveal: false });
+		expect(open(s, id, "../x.sh").localFile).toEqual({ path: "/x.sh", reveal: true });
+	});
+	test("a local path that could run something is only revealed, never opened", () => {
+		const s = reply(), id = idOf(s, "assistant");
+		for (const path of ["/tmp/run.command", "/Applications/Evil.app", "/tmp/x.sh", "/docs", "/tmp/archive.tar.gz"]) {
+			expect(open(s, id, path).localFile).toEqual({ path, reveal: true });
+		}
+	});
+	test("a local path the reply does not link to is not touched", () => {
+		const s = reply();
+		expect(open(s, idOf(s, "assistant"), "/etc/hosts.pdf").localFile).toBeUndefined();
+	});
+	test("parses the optional reveal flag", () => {
+		expect(parseIntent({ type: "openLink", id: "m", url: "/a.pdf", reveal: true })).toEqual({ type: "openLink", id: "m", url: "/a.pdf", reveal: true });
+		expect(parseIntent({ type: "openLink", id: "m", url: "/a.pdf", reveal: "yes" })).toEqual({ type: "openLink", id: "m", url: "/a.pdf" });
 	});
 });
 describe("pstack Poteto Mode", () => {

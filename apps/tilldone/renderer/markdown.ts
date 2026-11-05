@@ -2,8 +2,8 @@
  * TillDone Desk L4: assistant Markdown as DOM, without HTML strings.
  * marked only tokenizes; every node is built from a fixed tag whitelist and filled with textContent,
  * so raw HTML stays literal text and nothing needs a sanitizer or a looser CSP.
- * Links never navigate the window. A plain http(s) link is marked openable; clicking it asks the main process,
- * which opens it in the system browser only if the reply's own Markdown links to that address.
+ * Links never navigate the window. A plain http(s) link or a local path is marked openable; clicking it asks
+ * the main process, which acts only if the reply's own Markdown links to that address.
  */
 import { lexer, type Token, type Tokens } from "marked";
 
@@ -45,8 +45,9 @@ function inline(tokens: readonly Token[] = []): MdNode[] {
 function openable(href: string): boolean {
 	try {
 		const url = new URL(href);
-		return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password;
-	} catch { return false; }
+		return ((url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password)
+			|| (url.protocol === "file:" && (url.host === "" || url.host === "localhost"));
+	} catch { return !/^(?:\/\/|#|\?)/.test(href); } // A path: absolute, "~/", or relative to Pi's working directory.
 }
 
 function cells(row: readonly Tokens.TableCell[], tag: "th" | "td", align: Tokens.Table["align"]): MdNode {

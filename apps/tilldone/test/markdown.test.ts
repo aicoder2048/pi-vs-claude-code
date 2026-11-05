@@ -36,9 +36,9 @@ test("links show their text and keep the address as a title", () => {
 	const links = p.children!.filter((n) => n.tag === "span");
 	expect(links.map((n) => [n.className, n.title, shape(n.children!)])).toEqual([["link", "https://example.com/a", ["docs"]], ["link", "https://example.com/b", ["https://example.com/b"]]]);
 });
-test("only plain http(s) links are marked as openable", () => {
-	const [p] = markdownTree("[a](https://a.example/) [b](javascript:alert(1)) [c](/rel) [d](mailto:x@y.z) [e](https://u:p@a.example/)");
-	expect(p.children!.filter((n) => n.tag === "span").map((n) => n.className)).toEqual(["link", "link-inert", "link-inert", "link-inert", "link-inert"]);
+test("plain http(s) links and local paths are marked as openable", () => {
+	const [p] = markdownTree("[a](https://a.example/) [b](javascript:alert(1)) [c](rel/x.pdf) [d](mailto:x@y.z) [e](https://u:p@a.example/) [f](/Users/me/x.pdf) [g](~/Downloads/x.pdf) [h](file:///tmp/x.pdf) [i](file://evil.example/x.pdf) [j](#top) [k](//evil.example/x)");
+	expect(p.children!.filter((n) => n.tag === "span").map((n) => n.className)).toEqual(["link", "link-inert", "link", "link-inert", "link-inert", "link", "link", "link", "link-inert", "link-inert", "link-inert"]);
 });
 test("images become their alt text, since the page loads no images", () => {
 	expect(shape(markdownTree("![chart](x.png)"))).toEqual([["p", ["span", ".image-alt", "🖼 chart"]]]);
