@@ -232,7 +232,7 @@
 </section>
 
 <nav id="cl-pager" data-current="L02-two-four-layers.html"></nav>
-<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§2、§2.1（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 01a9921 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
+<p class="disclaimer">原文：《边牧（TillDone Desk）结构梳理》§2、§2.1（Claude Code 整理，2026-11-03，提交 f112eb9；2026-11-04 对照提交 19dc761 更新）。标为“补充”的内容和模拟演示是课程作者的解释，不是原文观点。</p>
 </main>
 </div>
 
@@ -246,7 +246,7 @@ CL.onReady(function () {
     E4: ["E-L4 · 桌面副本里没有", "TUI 版的 ui.ts（widget、页脚、状态栏、工具卡片、/tilldone 浮层）在 RPC 下没有用处，提交 01a9921 把它和 themeMap.ts 从副本里删掉了。", "任务面板由 D-L4 用工具结果的 details 画。"],
     D1: ["D-L1 · pi 子进程 + Electron 运行时", "提供进程和窗口。整套 E- 跑在这个 pi 子进程里。", "不改动。"],
     D2: ["D-L2 · desk.ts、rpc.ts、jsonl.ts、main.ts、config.ts、credentials.ts", "唯一持有可变状态：this.state = reduce(this.state, record)。管子进程、JSONL、IPC、时钟、偏好文件、凭据文件。", "不放业务规则。"],
-    D3: ["D-L3 · domain.ts、appearance.ts、api-domain.ts", "纯函数 reduce(state, record)、planIntent、toViewModel。把 RPC 事件投影成视图。", "不 import Electron 或 L2/L4；没有 I/O，没有 Date.now()。工作区改动里 domain.ts 新引入了 node:path，只做纯路径计算。"],
+    D3: ["D-L3 · domain.ts、appearance.ts、api-domain.ts", "纯函数 reduce(state, record)、planIntent、toViewModel。把 RPC 事件投影成视图。", "不 import Electron 或 L2/L4；没有 I/O，没有 Date.now()。提交 19dc761 起 domain.ts 引入了 node:path，只做纯路径计算。"],
     D4: ["D-L4 · renderer/", "画 JSON 视图，发意图。", "不解析 RPC，不存业务状态，不 import 领域代码。"],
   };
   const V = {

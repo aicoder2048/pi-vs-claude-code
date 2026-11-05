@@ -1,6 +1,6 @@
 # 边牧（TillDone Desk）结构梳理：四层架构、上下文管理、TillDone 拆分与 PStack 的分工
 
-> 快照：仓库 `pi-vs-claude-code`，提交 `01a9921` 加工作区未提交改动（2026-11-04）。初版快照是 `f112eb9`（2026-11-03）；2026-11-04 对照源码更新了行号、E-L4、督促结果和面板计数（见 §4.5、§2.1）。
+> 快照：仓库 `pi-vs-claude-code`，提交 `19dc761`（2026-11-04）。初版快照是 `f112eb9`（2026-11-03）；2026-11-04 对照源码更新了行号、E-L4、督促结果和面板计数（见 §4.5、§2.1）。
 > 范围：`apps/tilldone`（桌面端）、它自带的扩展副本 `apps/tilldone/extensions/tilldone/`，以及项目本地安装的 `pi-pstack`（`.pi/npm/node_modules/pi-pstack/`）。
 > 来源可信度：源码 > README > 白皮书 > 讨论稿。白皮书 `apps/tilldone/docs/tilldone-desk-whitepaper.md` 是 v1.0（2026-10-31），**没有覆盖 pstack 部分**。用户决定等设计固定后再更新白皮书。
 > 本文由 Claude Code 在 2026-11-03 读源码后整理。标“推断”的地方没有实际运行验证。
