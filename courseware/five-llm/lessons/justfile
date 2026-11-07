@@ -3,10 +3,6 @@
 default:
     @just --list
 
-# Serve the course + AI tutor, e.g.: just courses 9000
-courses port="8772":
-    uv run --no-project python tools/serve.py --port {{port}}
-
 # 启动课程（含 AI 助教）；加 --lecture [L01] 同时让 AI 讲师开讲（不写课号从第一课开始）。如：just course --lecture --port 9000
 [continue]
 course *args:
