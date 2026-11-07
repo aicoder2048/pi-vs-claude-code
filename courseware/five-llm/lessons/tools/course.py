@@ -2,14 +2,17 @@
 
     python tools/course.py [PORT] [--port PORT] [--lecture [L02] [--from s3]]
 
-只开课程时，Ctrl+C 停止。带 --lecture 时，关掉讲课的浏览器窗口或按 Ctrl+C，课程服务也一起停止。
+端口被占用时自动顺延到下一个空闲端口，并打印说明。只开课程时，Ctrl+C 停止。带 --lecture 时，关掉讲课的浏览器窗口或按 Ctrl+C，课程服务也一起停止。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import signal
+import socket
 import subprocess
 import sys
 import time
@@ -61,6 +64,7 @@ def parse_args(argv: list[str], port: int | None = None, scripts: list[str] | No
     a = ap.parse_args(argv)
     if a.pos_port and a.port and a.pos_port != a.port:
         ap.error(f"端口写了两个不同的值：{a.pos_port} 和 {a.port}")
+    a.port_explicit = bool(a.port or a.pos_port)
     a.port = a.port or a.pos_port or fallback
     if not 1 <= a.port <= 65535:
         ap.error(f"端口号不合法：{a.port}")
@@ -80,6 +84,36 @@ def parse_args(argv: list[str], port: int | None = None, scripts: list[str] | No
     if a.lecture not in have:
         raise SystemExit(f"{a.lecture} 还没有讲稿，AI 讲师没法讲这一课。有讲稿的课：{'、'.join(have)}。")
     return a
+
+
+def port_free(port: int, host: str = "127.0.0.1") -> bool:
+    """能在 host:port 上绑定就算空闲。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def pick_port(wanted: int, explicit: bool, is_free=port_free, tries: int = 50) -> tuple[int, str | None]:
+    """从 wanted 开始找第一个空闲端口。返回（端口，提示）；wanted 本身空闲时提示为 None。
+
+    is_free 留给测试注入。往后 tries 个端口都被占用时，用 SystemExit 说明怎么办。
+    """
+    label = "指定端口" if explicit else "默认端口"
+    busy: list[int] = []
+    for port in range(wanted, min(wanted + tries, 65536)):
+        if is_free(port):
+            if not busy:
+                return port, None
+            also = f"（{'、'.join(map(str, busy[1:]))} 也被占用）" if len(busy) > 1 else ""
+            return port, (f"{label} {wanted} 被占用{also}，自动改用下一个可用端口 {port}。"
+                          f"\n  查看谁占用了 {wanted}：lsof -i :{wanted}"
+                          f"\n  关闭占用 {wanted} 的进程：lsof -ti :{wanted} -sTCP:LISTEN | xargs kill")
+        busy.append(port)
+    raise SystemExit(f"{label} {wanted} 被占用，往后 {len(busy) - 1} 个端口也都被占用。请用 --port 指定一个空闲端口，"
+                     f"或关闭占用 {wanted} 的进程：lsof -ti :{wanted} -sTCP:LISTEN | xargs kill")
 
 
 def ready_url(port: int, lessons_dir: str = LESSONS.name) -> str:
@@ -103,7 +137,15 @@ def wait_ready(port: int, server: subprocess.Popen, timeout: float = 15) -> None
 
 def main(argv: list[str] | None = None) -> int:
     a = parse_args(sys.argv[1:] if argv is None else argv)
-    server = subprocess.Popen([sys.executable, str(LESSONS / "tools" / "serve.py"), "--port", str(a.port)])
+    a.port, notice = pick_port(a.port, a.port_explicit)
+    if notice:
+        print(notice, flush=True)
+    # 被 kill、关终端窗口时也要走下面的 finally，停掉讲师和课程服务，否则服务成了孤儿、一直占着端口
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: sys.exit(0))
+    # kill -9 拦不住：把自己的 PID 告诉 serve.py，它发现父进程没了就自己退出
+    env = {**os.environ, "COURSE_PARENT_PID": str(os.getpid())}
+    server = subprocess.Popen([sys.executable, str(LESSONS / "tools" / "serve.py"), "--port", str(a.port)], env=env)
     lecture = None
     try:
         if not a.lecture:

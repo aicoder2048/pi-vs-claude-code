@@ -19,12 +19,15 @@ API key 只留在本机，不进浏览器；.env 和所有点文件都不对外�
 """
 
 import argparse
+import errno
+import os
 import datetime
 import json
 import posixpath
 import re
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from functools import partial
@@ -632,6 +635,24 @@ def check() -> int:
     return bad
 
 
+def watch_parent(interval: float = 0.5) -> None:
+    """由 course.py 启动时（环境变量 COURSE_PARENT_PID），父进程一没就退出，释放端口。
+
+    course.py 被 kill -9 时来不及停掉服务；不监视的话服务成了孤儿，一直占着端口。
+    """
+    want = os.environ.get("COURSE_PARENT_PID")
+    if not want:
+        return
+
+    def loop():
+        while os.getppid() == int(want):
+            time.sleep(interval)
+        print("启动课程的 course.py 已退出，课程服务也停止。", flush=True)
+        os._exit(0)
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=None, help="默认用 sources.json 里的 course.port")
@@ -655,7 +676,15 @@ def main():
     Handler.env = load_env()
     if not Handler.env.get("DEEPSEEK_API_KEY"):
         print(f"警告：{LESSONS.name}/.env 里没有 DEEPSEEK_API_KEY，AI 助教不可用（课程本身可以正常看）。")
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), partial(Handler, directory=str(ROOT)))
+    try:
+        srv = ThreadingHTTPServer(("127.0.0.1", a.port), partial(Handler, directory=str(ROOT)))
+    except OSError as e:
+        if e.errno != errno.EADDRINUSE:
+            raise
+        sys.exit(f"端口 {a.port} 被占用，课程服务没能启动。用 course.py 启动会自动顺延到空闲端口；"
+                 f"或用 --port 指定别的端口。\n  查看谁占用了它：lsof -i :{a.port}"
+                 f"\n  关闭占用它的进程：lsof -ti :{a.port} -sTCP:LISTEN | xargs kill")
+    watch_parent()
     for d in course_drift():
         print(f"来源漂移：{d['label']}：{d['summary']}（影响 {len(d['lessons'])} 课）")
     print(f"课程地址：http://127.0.0.1:{a.port}/{LESSONS.name}/   （AI 助教模型：{Handler.env.get('DEEPSEEK_MODEL', 'deepseek-flash')}，Ctrl+C 停止）")
