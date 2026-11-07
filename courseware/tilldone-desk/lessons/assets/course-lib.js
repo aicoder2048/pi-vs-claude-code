@@ -1,36 +1,22 @@
-/* 边牧结构精读 — 公用脚本（框架移植自 ta-knowhow/LESSONS/assets/ta-lib.js，去掉了行情图表部分）
- * 依赖: assets/glossary-data.js (window.CL_GLOSSARY)
- * 用法见 AUTHORING.md
+/* 公用脚本（框架文件，各门课相同；框架移植自 ta-knowhow/LESSONS/assets/ta-lib.js，去掉了行情图表部分）
+ * 依赖: assets/course-config.js (CL.CONFIG / CL.STEPS / CL.LESSONS，必须先加载)、assets/glossary-data.js (window.CL_GLOSSARY)
+ * 用法见 AUTHORING.md；升级用 sync_course.py，不要手改
  */
 (function () {
   "use strict";
   const CL = (window.CL = window.CL || {});
 
-  /* ================= 课程目录 (导航/翻页用) ================= */
-  /* ===== 课程配置：按课程修改 ===== */
-  // 学习路线：3–5 步。课程顺序 = 推荐学习顺序（翻页也按这个顺序）
-  CL.STEPS = [
-    { n: 1, name: "全景与双循环", desc: "边牧是什么，Pi 的两层循环怎样决定“停没停”。" },
-    { n: 2, name: "两套四层", desc: "扩展四层和桌面四层怎样叠在一起，谁是权威。" },
-    { n: 3, name: "上下文管理", desc: "什么进模型的上下文，什么只给界面；两种注入策略。" },
-    { n: 4, name: "拆分与分工", desc: "TillDone 原生拆分、PStack 的做法，以及两者怎样咬合、哪里有坑。" },
-  ];
-  // file 必须和课程文件名一致；src = 对应原文章节
-  CL.LESSONS = [
-    { step: 1, file: "L01-overview.html", id: "L01", title: "边牧全景：羊、边牧与双循环", src: "§0–1" },
-    { step: 2, file: "L02-two-four-layers.html", id: "L02", title: "两套四层叠在一起", src: "§2" },
-    { step: 3, file: "L03-what-enters-context.html", id: "L03", title: "什么进模型的上下文", src: "§3.1–3.2、§3.4" },
-    { step: 3, file: "L04-context-strategies.html", id: "L04", title: "两种注入策略与抗压缩", src: "§3.3、§3.5" },
-    { step: 4, file: "L05-tilldone-split.html", id: "L05", title: "TillDone 的原生拆分", src: "§4" },
-    { step: 4, file: "L06-pstack-meshing.html", id: "L06", title: "PStack 与 TillDone 的咬合", src: "§5–6" },
-    { step: 4, file: "L07-pitfalls-review.html", id: "L07", title: "坑、开放问题与全课复盘", src: "§7–8" },
-  ];
-  CL.TUTOR_QUICK = [["这一节对应源码的哪个函数？", false]];
+  /* ================= 课程配置：来自 assets/course-config.js ================= */
+  const CFG = CL.CONFIG;
+  if (!CFG || !CFG.prefix || !Array.isArray(CL.STEPS) || !Array.isArray(CL.LESSONS)) {
+    throw new Error("[CL] 缺少课程配置：页面要在 course-lib.js 之前加载 assets/course-config.js（见 AUTHORING.md 第 2 节）");
+  }
+  const KEY = (k) => CFG.prefix + "-" + k;   // localStorage 键都带课程前缀
   CL.LESSONS.forEach((l, k) => { l.no = k + 1; l.group = "第 " + l.step + " 步 · " + CL.STEPS[l.step - 1].name; });
 
   /* 已学记录：只存在本机浏览器里，读不到也不影响页面 */
-  CL.visited = function () { try { return JSON.parse(localStorage.getItem("bm-visited") || "[]"); } catch (e) { return []; } };
-  CL.resetVisited = function () { try { localStorage.removeItem("bm-visited"); } catch (e) { /* ignore */ } };
+  CL.visited = function () { try { return JSON.parse(localStorage.getItem(KEY("visited")) || "[]"); } catch (e) { return []; } };
+  CL.resetVisited = function () { try { localStorage.removeItem(KEY("visited")); } catch (e) { /* ignore */ } };
   CL.resetButton = function (onDone) {
     const b = document.createElement("button"); b.type = "button"; b.className = "reset-visited"; b.textContent = "重置";
     b.title = "清除所有课程的“已学”标记（只影响本机浏览器）";
@@ -43,8 +29,8 @@
     });
     return b;
   };
-  function unmarkVisited(file) { try { localStorage.setItem("bm-visited", JSON.stringify(CL.visited().filter((f) => f !== file))); } catch (e) { /* ignore */ } }
-  function markVisited(file) { try { const v = CL.visited(); if (!v.includes(file)) { v.push(file); localStorage.setItem("bm-visited", JSON.stringify(v)); } } catch (e) { /* ignore */ } }
+  function unmarkVisited(file) { try { localStorage.setItem(KEY("visited"), JSON.stringify(CL.visited().filter((f) => f !== file))); } catch (e) { /* ignore */ } }
+  function markVisited(file) { try { const v = CL.visited(); if (!v.includes(file)) { v.push(file); localStorage.setItem(KEY("visited"), JSON.stringify(v)); } } catch (e) { /* ignore */ } }
 
   /* ================= 主题：浅色 → 深色 → 水墨 轮换 ================= */
   CL.THEMES = [
@@ -52,8 +38,8 @@
     { id: "dark", label: "深色", icon: "☾" },
     { id: "ink", label: "水墨", icon: "墨" },
   ];
-  function storedTheme() { try { return localStorage.getItem("bm-theme"); } catch (e) { return null; } }
-  function saveTheme(t) { try { localStorage.setItem("bm-theme", t); } catch (e) { /* ignore */ } }
+  function storedTheme() { try { return localStorage.getItem(KEY("theme")); } catch (e) { return null; } }
+  function saveTheme(t) { try { localStorage.setItem(KEY("theme"), t); } catch (e) { /* ignore */ } }
   const st = storedTheme();
   if (st && CL.THEMES.some((t) => t.id === st)) document.documentElement.setAttribute("data-theme", st);
   CL.theme = function () {
@@ -119,7 +105,6 @@
   /* ================= Markdown（AI 助教回答、学习笔记共用） ================= */
   // 先转义再解析，不执行任何 HTML。支持：标题、列表、引用、表格、代码块、```mermaid 图、链接。
   // opts.flat = true：标题一律渲染成 <h4>（助教面板里不用多级标题）
-  CL.esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); };
   CL.md = function (src, opts) {
     opts = opts || {};
     const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
@@ -128,7 +113,8 @@
       .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
       .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>")
       .replace(/\[([^\]]+)\]\(((?:https?:\/\/|\.{0,2}\/|[\w-]+\.(?:html|md))[^)\s]*)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    const cells = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+    // 单元格按没有转义的 | 切分；\| 表示单元格里的竖线
+    const cells = (l) => l.trim().replace(/^\|/, "").replace(/(^|[^\\])\|$/, "$1").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
     const isSep = (l) => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(l || "");
     let out = "", list = null, i = 0;
     const flush = () => { if (list) { out += "</" + list + ">"; list = null; } };
@@ -213,9 +199,9 @@
   function initChecklist() {
     document.querySelectorAll("ul.checklist li").forEach((li) => li.addEventListener("click", () => li.classList.toggle("checked")));
   }
-  // 原文配图点击放大
+  // 配图点击放大（任何 <figure> 里的 <img>）
   function initFigZoom() {
-    document.querySelectorAll("main .fig img").forEach((img) => img.addEventListener("click", () => {
+    document.querySelectorAll("main figure img").forEach((img) => img.addEventListener("click", () => {
       const z = document.createElement("div"); z.className = "fig-zoom"; z.innerHTML = '<img alt="">';
       z.firstChild.src = img.src; z.addEventListener("click", () => z.remove());
       document.addEventListener("keydown", function k(e) { if (e.key === "Escape") { z.remove(); document.removeEventListener("keydown", k); } });
@@ -260,12 +246,12 @@
   }
   function navOpenSteps(curStep) {
     let open = null;
-    try { open = JSON.parse(localStorage.getItem("bm-nav-open") || "null"); } catch (e) { /* ignore */ }
+    try { open = JSON.parse(localStorage.getItem(KEY("nav-open")) || "null"); } catch (e) { /* ignore */ }
     if (!Array.isArray(open)) open = [1];
     if (curStep && !open.includes(curStep)) open.push(curStep);
     return open;
   }
-  function saveNavOpen(list) { try { localStorage.setItem("bm-nav-open", JSON.stringify(list)); } catch (e) { /* ignore */ } }
+  function saveNavOpen(list) { try { localStorage.setItem(KEY("nav-open"), JSON.stringify(list)); } catch (e) { /* ignore */ } }
   function courseNavHtml(cur, curStep, tocHtml) {
     const v = CL.visited(), done = CL.LESSONS.filter((l) => v.includes(l.file)).length, open = navOpenSteps(curStep);
     let h = '<div class="cn-head"><a class="cn-title" href="index.html">学习路线</a>' +
@@ -302,8 +288,8 @@
       top.className = "topbar";
       top.innerHTML = '<div class="topbar-inner">' +
         (hasNav ? '<button class="nav-btn" type="button" aria-label="打开学习路线">☰ 学习路线</button>' : "") +
-        '<a class="brand" href="index.html"><span class="seal">牧</span>边牧结构精读<small>互动课程</small></a>' +
-        '<nav><a href="index.html">课程目录</a><a href="glossary.html">术语表</a><a href="notes.html">学习笔记</a><a href="../docs/articles/tilldone-desk-anatomy.md" title="原文存档">原文</a>' +
+        '<a class="brand" href="index.html"><span class="seal">' + CL.esc(CFG.seal) + "</span>" + CL.esc(CFG.title) + "<small>互动课程</small></a>" +
+        '<nav><a href="index.html">课程目录</a><a href="glossary.html">术语表</a><a href="notes.html">学习笔记</a><a href="' + CL.esc(CFG.sourceLink) + '" title="原文存档">原文</a>' +
         '<button class="theme-btn" type="button" title="切换主题：浅色 → 深色 → 水墨">' + themeLabel() + "</button></nav></div>";
       const tb = top.querySelector(".theme-btn");
       tb.addEventListener("click", () => {

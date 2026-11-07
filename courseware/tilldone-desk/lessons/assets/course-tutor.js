@@ -3,12 +3,13 @@
  */
 (function () {
   "use strict";
-  const CL = window.CL;
+  const CL = window.CL, CFG = CL.CONFIG;   // 课程配置来自 assets/course-config.js
   const pg = document.getElementById("cl-pager");
   const LESSON = pg ? pg.dataset.current : location.pathname.split("/").pop();
   const lesson = CL.LESSONS.find((l) => l.file === LESSON);
   if (!lesson) return;
-  const STORE = "bm-tutor:" + LESSON;
+  const KEY = (k) => CFG.prefix + "-" + k;
+  const STORE = KEY("tutor:" + LESSON);
   const isHttp = location.protocol === "http:" || location.protocol === "https:";
 
   /* ---------- 状态 ---------- */
@@ -18,10 +19,10 @@
   let picking = false, picked = new Set(), noteBusy = false;   // “记笔记”勾选模式
 
   // 面板默认常开；用户手动收起后记住（所有课程共用这个偏好）
-  function panelPref() { try { return localStorage.getItem("bm-tutor-panel"); } catch (e) { return null; } }
-  function savePanelPref(v) { try { localStorage.setItem("bm-tutor-panel", v); } catch (e) { /* ignore */ } }
-  function widthPref() { try { return +localStorage.getItem("bm-tutor-w") || 0; } catch (e) { return 0; } }
-  function saveWidthPref(v) { try { if (v) localStorage.setItem("bm-tutor-w", String(v)); else localStorage.removeItem("bm-tutor-w"); } catch (e) { /* ignore */ } }
+  function panelPref() { try { return localStorage.getItem(KEY("tutor-panel")); } catch (e) { return null; } }
+  function savePanelPref(v) { try { localStorage.setItem(KEY("tutor-panel"), v); } catch (e) { /* ignore */ } }
+  function widthPref() { try { return +localStorage.getItem(KEY("tutor-w")) || 0; } catch (e) { return 0; } }
+  function saveWidthPref(v) { try { if (v) localStorage.setItem(KEY("tutor-w"), String(v)); else localStorage.removeItem(KEY("tutor-w")); } catch (e) { /* ignore */ } }
   function load() { try { return JSON.parse(localStorage.getItem(STORE) || "[]"); } catch (e) { return []; } }
   function save() { try { localStorage.setItem(STORE, JSON.stringify(history.slice(-40))); } catch (e) { /* ignore */ } }
 
@@ -46,12 +47,15 @@
   const msgsEl = $(".tp-msgs"), ta = $("textarea"), sendBtn = $(".tp-send"), imgChk = $(".tp-img");
 
   const QUICK = [
-    ["用更简单的话讲讲这一节", false],
-    ["这张图该怎么看？它说明了本课的哪个设计点？", true],
-    ["考考我：就这一节出一道题", false],
-    ["这个设计的代价和局限是什么？", false],
-    ["在 Claude Code / Codex 等现有 Agent 里，有没有类似的做法？", false],
-    ...(CL.TUTOR_QUICK || []),   // 课程自己的快捷提问，在 course-lib.js 里定义
+    // 通用快捷提问；课程可在 course-config.js 用 CL.TUTOR_QUICK_BASE 整组替换（如面向小学生的课）
+    ...(CL.TUTOR_QUICK_BASE || [
+      ["用更简单的话讲讲这一节", false],
+      ["这张图该怎么看？它说明了本课的哪个设计点？", true],
+      ["考考我：就这一节出一道题", false],
+      ["这个设计的代价和局限是什么？", false],
+      ["在 Claude Code / Codex 等现有 Agent 里，有没有类似的做法？", false],
+    ]),
+    ...(CL.TUTOR_QUICK || []),   // 课程自己的快捷提问，在 course-config.js 里定义
   ];
   $(".tp-quick").innerHTML = QUICK.map((q, i) => '<button type="button" class="tp-q" data-i="' + i + '">' + q[0].split("？")[0].split("：")[0] + "</button>").join("");
   $(".tp-quick").addEventListener("click", (e) => {
@@ -142,11 +146,11 @@
           context: { title: lesson.id + " " + lesson.title, lessonText: (document.querySelector("main") || document.body).innerText } }),
       });
       const j = await r.json().catch(() => ({ error: "HTTP " + r.status }));
-      if (!r.ok || !j.ok) throw new Error(j.error || "HTTP " + r.status);
+      if (!r.ok || !j.ok) throw new Shown(j.error || "课程服务没有正常回应，可以再点一次「整理为笔记」。");
       status.innerHTML = '✓ 已保存：<a href="notes.html#' + encodeURIComponent(j.file) + '" target="_blank">' + esc(j.file) + "</a>";
       picked = new Set(); render(); refreshPicked();
     } catch (e) {
-      status.innerHTML = '<span class="tp-err">⚠ ' + esc(e.message || e) + "</span>";
+      status.innerHTML = '<span class="tp-err">' + esc(e instanceof Shown ? e.message : friendly(e, false).replace("「重新发送」", "「整理为笔记」")) + "</span>";
     } finally { noteBusy = false; refreshPicked(); }
   }
 
@@ -184,7 +188,7 @@
     const sec = currentSection();
     const card = (pending && pending.chartCard) || (imgChk.checked && sec ? visibleCard(sec) : null);
     const scope = card || sec;
-    const readouts = scope ? [...scope.querySelectorAll(".readout, .chart-foot, table.tbl, figcaption, .diagram .cap, .diagram svg")].map((x) => (x.tagName.toLowerCase() === "svg" ? "【图示文字】" + [...x.querySelectorAll("text")].map((t) => t.textContent.trim()).filter(Boolean).join(" / ") : x.innerText.trim())).filter(Boolean).join("\n---\n") : "";
+    const readouts = scope ? [...scope.querySelectorAll(".readout, .chart-foot, table.tbl, figcaption, .diagram .cap, .diagram svg, figure svg")].map((x) => (x.tagName.toLowerCase() === "svg" ? "【图示文字】" + [...x.querySelectorAll("text")].map((t) => t.textContent.trim()).filter(Boolean).join(" / ") : x.innerText.trim())).filter(Boolean).join("\n---\n") : "";
     const ctx = {
       title: lesson.id + " " + lesson.title,
       lessonText: (document.querySelector("main") || document.body).innerText,
@@ -199,17 +203,19 @@
     return ctx;
   }
   function visibleCard(sec) {
-    const cards = [...sec.querySelectorAll(".chart-card, .fig, .diagram")];
+    const cards = [...sec.querySelectorAll(".chart-card, figure, .diagram")];
     let best = null, bestD = Infinity;
     for (const c of cards) { const r = c.getBoundingClientRect(); const d = Math.abs(r.top + r.height / 2 - window.innerHeight / 2); if (d < bestD) { bestD = d; best = c; } }
     return best;
   }
 
   /* ---------- 图表卡片上的“问 AI”按钮 ---------- */
-  document.querySelectorAll("main .chart-card, main .fig, main .diagram").forEach((card) => {
+  // 图卡：演示 .chart-card、SVG 图示 .diagram、任何 <figure>（原文配图 .fig 也是 figure）；嵌在别的图卡里的不重复加按钮
+  document.querySelectorAll("main .chart-card, main figure, main .diagram").forEach((card) => {
+    if (card.parentElement.closest(".chart-card, figure, .diagram")) return;
     const head = card.querySelector(".chart-head") || card; 
     const b = el("button", "btn tutor-ask", "问 AI"); b.type = "button"; b.title = "带着这张图（截图/图示文字 + 当前参数 + 读数）问 AI 助教";
-    b.addEventListener("click", () => { pending = Object.assign(pending || {}, { chartCard: card }); imgChk.checked = true; open(); ta.value = ta.value || (card.classList.contains("chart-card") ? "这个演示该怎么看？现在的结果说明了什么？" : "这张图该怎么看？它说明了本课的哪个设计点？"); ta.focus(); });
+    b.addEventListener("click", () => { pending = Object.assign(pending || {}, { chartCard: card }); imgChk.checked = true; open(); ta.value = ta.value || (card.classList.contains("chart-card") ? (CL.TUTOR_ASK_DEMO || "这个演示该怎么看？现在的结果说明了什么？") : (CL.TUTOR_ASK_FIG || "这张图该怎么看？它说明了本课的哪个设计点？")); ta.focus(); });
     if (head === card) { b.style.position = "absolute"; b.style.top = "10px"; b.style.right = "10px"; if (getComputedStyle(card).position === "static") card.style.position = "relative"; }
     head.appendChild(b);
   });
@@ -236,6 +242,14 @@
   $(".tp-form").addEventListener("submit", (e) => { e.preventDefault(); if (busy) stop(); else ask(ta.value); });
   ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!busy) ask(ta.value); } });
 
+  class Shown extends Error {}   // 服务端给的错误说明，原样显示
+  const RETRY_HINT = "可以点「重新发送」再试一次。";
+  function friendly(e, gotResponse) {
+    if (e instanceof Shown) return e.message;
+    console.warn("[AI 助教]", e);   // 原始错误留在控制台，方便排查
+    return gotResponse ? "回答中途断了。" + RETRY_HINT : "连不上本地课程服务。请确认 serve.py 还在运行，然后点「重新发送」。";
+  }
+
   async function ask(q) {
     q = (q || "").trim(); if (!q || busy) return;
     if (!document.body.classList.contains("tutor-open")) open();
@@ -244,17 +258,19 @@
     if (ctx.needImage) { const card = ctx.needImage; delete ctx.needImage; ctx.image = await CL.snapshot(card); if (!ctx.image) delete ctx.image; }
     const meta = [ctx.chart ? "🖼 " + chartName((pending && pending.chartCard) || visibleCard(currentSection()) || document.body) : "", ctx.selection ? "❝ " + ctx.selection.slice(0, 60) : "", ctx.image ? "已附截图" : ""].filter(Boolean).join(" · ");
     history.push({ role: "user", content: q, meta });
-    const ans = { role: "assistant", content: "", streaming: true };
+    const ans = { role: "assistant", content: "", streaming: true, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };   // 讲师按 id 认新回答
     history.push(ans);
     ta.value = ""; pending = null; imgChk.checked = false; updateWhere();
     busy = true; sendBtn.textContent = "停止"; render();
     ctrl = new AbortController();
+    let gotResponse = false;
     try {
       const res = await fetch("/api/tutor/chat", {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: ctrl.signal,
         body: JSON.stringify({ lesson: LESSON, context: ctx, messages: history.slice(0, -1).slice(-30).map((m) => ({ role: m.role, content: m.content })) }),
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || "HTTP " + res.status); }
+      gotResponse = true;
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Shown(j.error || "课程服务没有正常回应。" + RETRY_HINT); }
       const rd = res.body.getReader(), dec = new TextDecoder(); let buf = "";
       for (;;) {
         const { value, done } = await rd.read(); if (done) break;
@@ -266,13 +282,14 @@
           const d = JSON.parse(line.slice(5));
           if (d.thinking && !ans.content) ans.thinking = true;
           if (d.t) { ans.content += d.t; ans.thinking = false; }
-          if (d.error) throw new Error(d.error);
+          if (d.tool) { (ans.tools = ans.tools || []).push(d.tool); }   // 助教联网：搜索词 / 读取的网址
+          if (d.error) throw new Shown(d.error);
           if (d.done && d.usage) ans.usage = d.usage.total_tokens;
           renderLast();
         }
       }
     } catch (e) {
-      if (e.name !== "AbortError") ans.error = String(e.message || e);
+      if (e.name !== "AbortError") ans.error = friendly(e, gotResponse);
     } finally {
       ans.streaming = false; ans.thinking = false; busy = false; ctrl = null; sendBtn.textContent = "发送";
       if (!ans.content && !ans.error) ans.error = "已停止";
@@ -280,6 +297,13 @@
     }
   }
   function stop() { if (ctrl) ctrl.abort(); }
+  function resend() {
+    const n = history.length, ans = history[n - 1], q = history[n - 2];
+    if (busy || !ans || !ans.error || !q || q.role !== "user") return;
+    history.splice(n - 2, 2);
+    ask(q.content);
+  }
+  msgsEl.addEventListener("click", (e) => { if (e.target.closest(".tp-retry")) resend(); });
 
   async function checkServer() {
     if (!isHttp) { serverOk = false; render(); return; }
@@ -293,14 +317,17 @@
   }
 
   /* ---------- 渲染 ---------- */
+  const localUrl = "http://127.0.0.1:" + CFG.port + "/" + CFG.lessonsDir + "/" + LESSON;
   function render() {
     if (!isHttp || serverOk === false) {
       msgsEl.innerHTML = '<div class="tp-offline"><b>AI 助教需要本地服务。</b><p>' + (panel.dataset.err ? esc(panel.dataset.err) + "。" : "现在页面是直接从文件打开的，没法安全地调用 DeepSeek。") +
-        "</p><p>在终端运行：</p><pre>cd lessons\nuv run --no-project python tools/serve.py</pre><p>然后打开 <a href=\"http://127.0.0.1:8771/lessons/" + LESSON + "\">http://127.0.0.1:8771/lessons/" + LESSON + "</a>。API key 只留在本机服务里，不进页面。</p></div>";
+        "</p><p>在终端运行：</p><pre>cd " + esc(CFG.lessonsDir) + "\nuv run --no-project python tools/serve.py</pre><p>然后打开 <a href=\"" + esc(localUrl) + "\">" + esc(localUrl) + "</a>。API key 只留在本机服务里，不进页面。</p></div>";
       return;
     }
     if (!history.length) {
-      msgsEl.innerHTML = '<div class="tp-empty"><p>我读过本课的原文和全部内容。可以问我：</p><ul><li>没看懂的概念或句子（先在正文里选中它）</li><li>某张图或某个演示该怎么看（点它右上角的“问 AI”）</li><li>让我出题考你</li><li>这个设计和你熟悉的系统（操作系统、数据库、消息队列）有什么对应</li></ul><p class="data-note">回答由 ' + esc(model) + " 生成，可能出错；以原文为准。</p></div>";
+      // 空面板的提示：课程可在 course-config.js 用 CL.TUTOR_TIPS（列表项，纯文字）和 CL.TUTOR_NOTE（免责一句）替换
+      const tips = CL.TUTOR_TIPS || ["没看懂的概念或句子（先在正文里选中它）", "某张图或某个演示该怎么看（点它右上角的“问 AI”）", "让我出题考你", "这个设计和你熟悉的系统（操作系统、数据库、消息队列）有什么对应"];
+      msgsEl.innerHTML = '<div class="tp-empty"><p>我读过本课的原文和全部内容。可以问我：</p><ul>' + tips.map((t) => "<li>" + esc(t) + "</li>").join("") + '</ul><p class="data-note">回答由 ' + esc(model) + " 生成，可能出错；" + esc(CL.TUTOR_NOTE || "以原文为准。") + "</p></div>";
       return;
     }
     msgsEl.innerHTML = history.map(msgHtml).join("");
@@ -318,9 +345,11 @@
     if (m.role === "user") return '<div class="tp-msg user' + pick + '">' + (m.meta ? '<div class="tp-meta">' + esc(m.meta) + "</div>" : "") + "<div>" + esc(m.content).replace(/\n/g, "<br>") + "</div></div>";
     const { text, errata } = splitErrata(m.content || "");
     let body = text ? CL.md(text, { flat: true }) : m.thinking ? '<span class="tp-dots">思考中</span>' : m.streaming ? '<span class="tp-dots">连接中</span>' : "";
+    if (m.tools && m.tools.length) body = '<div class="tp-tools">' + m.tools.map((x) => "<div>" + esc(x) + "</div>").join("") + "</div>" + body;
     body += errata.map(errataHtml).join("");
-    if (m.error) body += '<div class="tp-err">⚠ ' + esc(m.error) + "</div>";
-    return '<div class="tp-msg ai' + pick + '">' + body + (m.streaming && m.content ? '<span class="tp-caret"></span>' : "") + "</div>";
+    if (m.error) body += '<div class="tp-err">' + esc(m.error) +
+      (i === history.length - 1 && !busy && !picking ? ' <button type="button" class="btn tp-retry">重新发送</button>' : "") + "</div>";
+    return '<div class="tp-msg ai' + pick + '"' + (m.id ? ' data-id="' + esc(m.id) + '"' : "") + ">" + body + (m.streaming && m.content ? '<span class="tp-caret"></span>' : "") + "</div>";
   }
 
   // 助教在回答末尾用 ```errata 代码块报告“课文与资料矛盾”。流式输出时未写完的块先隐藏。
