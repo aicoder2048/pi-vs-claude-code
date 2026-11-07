@@ -1,4 +1,4 @@
-/* 弈境结构精读 — 公用样式（所有课程、术语表、首页共用；框架移植自 ta-knowhow/LESSONS）
+/* 公用样式（框架文件，各门课相同，用 sync_course.py 升级；课程自己的样式写在 course-theme.css。框架移植自 ta-knowhow/LESSONS）
  * 三个主题：浅色 (默认) / 深色 / 水墨。用顶栏的主题按钮轮换。
  * 所有颜色都走下面的变量；课程页的局部样式也只用这些变量。
  */
@@ -222,8 +222,8 @@ main { min-width: 0; }
 .hero p { margin: 0; color: var(--hero-sub); max-width: 780px; }
 .hero .meta { display: flex; gap: 8px 20px; flex-wrap: wrap; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--hero-line); font-size: 13px; color: var(--hero-sub); }
 .hero .meta span::before { content: "◆ "; color: var(--hero-accent); }
-@media (max-width: 600px) { .topbar-inner { flex-wrap: wrap; } .topbar nav { flex-wrap: wrap; margin-left: 0; } }
 @media (max-width: 600px) { .hero { padding: 24px 18px; } .hero h1 { font-size: 25px; } :root[data-theme="ink"] .hero::after { display: none; } }
+@media (max-width: 600px) { .topbar-inner { flex-wrap: wrap; } .topbar nav { flex-wrap: wrap; margin-left: 0; } }
 
 /* ---------- 正文 ---------- */
 section.lesson-sec { margin-top: 52px; scroll-margin-top: 80px; }
@@ -399,7 +399,8 @@ a.term:hover { color: var(--brand-2); }
 .tp-msg.ai h4 { margin: 8px 0 2px; font-size: 15px; color: var(--brand); }
 .tp-msg.ai hr { border: 0; border-top: 1px dashed var(--line); }
 .tp-msg.ai .tp-tbl { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; }
-.tp-err { color: var(--down); font-size: 13.5px; margin-top: 4px; }
+.tp-err { color: var(--ink-2); font-size: 13.5px; margin-top: 6px; padding: 6px 10px; border-left: 3px solid var(--warn-bd); background: var(--warn-bg); border-radius: 4px; }
+.tp-err .tp-retry { margin-left: 6px; padding: 2px 10px; font-size: 13px; }
 .tp-dots { color: var(--ink-3); } .tp-dots::after { content: "…"; animation: tpblink 1s steps(2) infinite; }
 .tp-caret { display: inline-block; width: 7px; height: 15px; background: var(--accent); vertical-align: -2px; margin-left: 2px; animation: tpblink .9s steps(2) infinite; }
 @keyframes tpblink { 50% { opacity: 0; } }
@@ -465,6 +466,10 @@ body.tp-dragging .layout { transition: none; }
 .fig figcaption b { color: var(--accent); margin-right: 6px; font-weight: 700; }
 .fig .tutor-ask { position: absolute; top: 10px; right: 10px; }
 :root[data-theme="dark"] .fig img { filter: brightness(.92); }
+/* 没有 .fig 的 <figure> 也能点图放大、在右上角“问 AI” */
+main figure { position: relative; }
+main figure img { cursor: zoom-in; }
+main figure > .tutor-ask { position: absolute; top: 10px; right: 10px; }
 .fig-zoom { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.78); display: grid; place-items: center; cursor: zoom-out; padding: 24px; }
 .fig-zoom img { max-width: 96vw; max-height: 92vh; background: #fff; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
 
@@ -524,6 +529,8 @@ body.tp-dragging .layout { transition: none; }
 main pre { max-width: 100%; overflow-x: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; font-size: 13px; line-height: 1.5; }
 
 /* 助教回答里的疑似勘误卡片 */
+.tp-tools { margin: 0 0 8px; padding: 4px 8px; border-left: 2px solid var(--line); font-size: 12.5px; color: var(--ink-3); }
+.tp-tools > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tp-errata { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--warn-bd); background: var(--warn-bg); border-radius: 4px; font-size: 13.5px; }
 .tp-errata b { display: block; margin-bottom: 4px; }
 .tp-errata p { margin: 2px 0; }

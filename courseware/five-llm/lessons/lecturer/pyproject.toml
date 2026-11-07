@@ -1,0 +1,19 @@
+[project]
+name = "lecturer"
+version = "0.1.0"
+description = "AI 讲师：用 Playwright 带学生走读互动课程，并语音讲解"
+requires-python = ">=3.11"
+dependencies = [
+    "edge-tts>=7.0",
+    "playwright>=1.48",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

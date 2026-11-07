@@ -17,3 +17,7 @@ tmp/
 HANDOFF.md
 .claude/skills/ext-walkthrough-workspace/
 .codegraph/
+
+# AI 讲师：合成的语音（可重新生成）和 uv 虚拟环境
+**/lecturer/audio/
+.venv/

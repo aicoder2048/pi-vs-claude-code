@@ -1,11 +1,13 @@
 """Load lesson pages in real Chrome, report JS errors / missing glossary terms / broken links, save screenshots.
 
 Usage (from LESSONS/):
-  uv run --no-project --with playwright python tools/check_page.py L01-xxx.html [more.html ...] [--shots DIR] [--dark] [--mobile]
+  uv run --no-project --with playwright python tools/check_page.py L01-xxx.html [more.html ...] [--shots DIR] [--theme light|dark|ink] [--width N] [--mobile]
+--theme forces the course theme via localStorage (prefix read from tools/sources.json or assets/course-config.js).
 Exit code 1 if any page has errors.
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -13,6 +15,18 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def course_prefix() -> str:
+    """localStorage 键前缀：先看 tools/sources.json，没有就从 assets/course-config.js 里读。"""
+    try:
+        return json.loads((ROOT / "tools" / "sources.json").read_text(encoding="utf-8"))["course"]["prefix"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    m = re.search(r'prefix:\s*"([^"]+)"', (ROOT / "assets" / "course-config.js").read_text(encoding="utf-8"))
+    if not m:
+        sys.exit("找不到课程前缀：tools/sources.json 或 assets/course-config.js 里要有 prefix")
+    return m.group(1)
 
 
 def main():
@@ -31,7 +45,7 @@ def main():
         vp = {"width": 390, "height": 900} if a.mobile else {"width": a.width, "height": 900}
         ctx = browser.new_context(viewport=vp, color_scheme="dark" if a.dark else "light")
         if a.theme:
-            ctx.add_init_script(f"try{{localStorage.setItem('fl-theme','{a.theme}')}}catch(e){{}}")
+            ctx.add_init_script(f"try{{localStorage.setItem('{course_prefix()}-theme','{a.theme}')}}catch(e){{}}")
         for name in a.pages:
             path = (ROOT / name).resolve()
             page = ctx.new_page()
@@ -60,6 +74,10 @@ def main():
             for c in charts:
                 if c[1] == 0:
                     errors.append(f"demo did not render: #{c[0]}")
+            # 数据驱动课程的行情图（.chart 里由图表库画出 canvas）
+            for cid, ok in page.eval_on_selector_all(".chart", "els => els.map(e => [e.id, !!e.querySelector('canvas')])"):
+                if not ok:
+                    errors.append(f"chart did not render: #{cid}")
             imgs = page.eval_on_selector_all("main img", "els => els.map(e => [e.getAttribute('src'), e.naturalWidth])")
             for src, w in imgs:
                 if not w:

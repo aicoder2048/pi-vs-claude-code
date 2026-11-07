@@ -229,6 +229,35 @@ class Drift(unittest.TestCase):
         self.assertTrue(s.snapshot["kind"] == "file" and S.snapshot_copy(self.snaps, s).read_text() == "hi\n")
 
 
+class HiddenPath(unittest.TestCase):
+    """点文件不对外提供；URL 编码和 .. 都绕不过。"""
+
+    def test_dotfile_is_hidden(self):
+        self.assertTrue(serve.is_hidden_path("/lessons/.env"))
+
+    def test_percent_encoded_dot_is_hidden(self):
+        self.assertTrue(serve.is_hidden_path("/lessons/%2Eenv"))
+
+    def test_dot_directory_is_hidden(self):
+        self.assertTrue(serve.is_hidden_path("/lessons/tools/%2esnapshots/article.txt"))
+        self.assertTrue(serve.is_hidden_path("/.git/config"))
+
+    def test_dot_segments_are_normalised_first(self):
+        self.assertTrue(serve.is_hidden_path("/lessons/assets/../.env?x=1"))
+
+    def test_ordinary_paths_pass(self):
+        self.assertFalse(serve.is_hidden_path("/lessons/L01-a.html"))
+        self.assertFalse(serve.is_hidden_path("/lessons/study-notes/251106-L01-note.md"))
+        self.assertFalse(serve.is_hidden_path("/api/tutor/health"))
+
+
+class LoadEnv(unittest.TestCase):
+    def test_quotes_around_values_are_stripped(self):
+        f = Path(tempfile.mkdtemp()) / ".env"
+        f.write_text('DEEPSEEK_API_KEY="sk-a"\nDEEPSEEK_MODEL=\'m\'\n# X=1\n', encoding="utf-8")
+        self.assertEqual(serve.load_env(f), {"DEEPSEEK_API_KEY": "sk-a", "DEEPSEEK_MODEL": "m"})
+
+
 class BuildMessages(unittest.TestCase):
     """serve.build_messages 只构建消息、不发请求：断言助教拿到了课文引用的来源。"""
 
@@ -290,7 +319,7 @@ class BuildMessages(unittest.TestCase):
 
     def test_course_rules_and_title_reach_the_system_prompt(self):
         s = self.system("L02-b.html")
-        self.assertTrue("测试课" in s and "8. 课程规则" in s and "ARTICLE BODY" in s)
+        self.assertTrue("测试课" in s and "10. 课程规则" in s and "ARTICLE BODY" in s)
 
 
 if __name__ == "__main__":

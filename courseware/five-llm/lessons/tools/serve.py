@@ -13,6 +13,7 @@ API key 只留在本机，不进浏览器；.env 和所有点文件都不对外�
     DEEPSEEK_API_KEY=...           必填
     DEEPSEEK_MODEL=deepseek-flash  可选
     DEEPSEEK_EFFORT=low            可选：low | high | max
+    DEEPSEEK_WEB=off               可选：关闭助教联网（默认开：DeepSeek Search / Fetch，每次成功请求约 0.00075 美元）
 
 计费提醒：DeepSeek 官方 API 按量计费（预充值）。
 """
@@ -20,6 +21,7 @@ API key 只留在本机，不进浏览器；.env 和所有点文件都不对外�
 import argparse
 import datetime
 import json
+import posixpath
 import re
 import sys
 import threading
@@ -28,14 +30,48 @@ import urllib.request
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote
 
 import sources as S
+import web as W
 
 LESSONS = Path(__file__).resolve().parent.parent        # 课程目录
 ROOT = LESSONS.parent                                    # 项目根目录（静态服务的根）
 MANIFEST = LESSONS / "tools" / "sources.json"
 SNAPDIR = LESSONS / "tools" / ".snapshots"              # file 类来源的快照副本（点目录不对外提供）
 API = "https://api.deepseek.com/chat/completions"
+
+RETRY_HINT = "可以点「重新发送」再试一次。"
+
+
+def friendly_error(e: Exception) -> str:
+    """把异常换成给学员看的一句话。原始错误由 log_error 写进服务日志。"""
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code in (401, 403):
+            return "DeepSeek 不认这个 API key。请检查 .env 里的 DEEPSEEK_API_KEY。"
+        if e.code == 402:
+            return "DeepSeek 账户余额不足，充值后再发送。"
+        if e.code == 429:
+            return "向 DeepSeek 发送得太频繁了，稍等几秒。" + RETRY_HINT
+        if e.code >= 500:
+            return "DeepSeek 服务暂时出了问题，不是你的操作有误。过一会儿" + RETRY_HINT
+        return "DeepSeek 没有接受这次请求。" + RETRY_HINT
+    if isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError):
+        return "DeepSeek 很久没有响应。" + RETRY_HINT
+    if isinstance(e, urllib.error.URLError):
+        return "连不上 DeepSeek，请检查网络。" + RETRY_HINT
+    return "回答中途断了。" + RETRY_HINT
+
+
+def log_error(where: str, e: Exception) -> None:
+    """完整错误只写进终端日志，方便排查。"""
+    detail = ""
+    if isinstance(e, urllib.error.HTTPError):
+        try:
+            detail = " " + e.read().decode("utf-8", "replace")[:500]
+        except Exception:
+            pass
+    sys.stderr.write(f"[{where}] {type(e).__name__}: {e}{detail}\n")
 NOTES = LESSONS / "study-notes"                         # “记笔记”整理出的 Markdown 笔记
 ERRATA = LESSONS / "errata.md"                           # 助教发现的疑似勘误
 ERRATA_LOCK = threading.Lock()                           # 多个回答同时结束时，串行改 errata.md
@@ -90,8 +126,10 @@ SYSTEM = """你是“{title}”的 AI 助教。学员正在浏览器里自学一
 {"section": "课程页面的小节标题", "claim": "课文原话（不超过 80 字）", "evidence": "资料里的事实（不超过 120 字）", "source": "资料标签"}
 ```
 7. 你的推理结果和学员附上的演示读数不一致时，明说“演示读数与我的分析不一致”，并写出两边的数。不要为了迁就读数改结论，也不要无视读数。
+8. 课程演示是简化模型。演示里的规则和数字，不能说成原文的机制或实验结论。课文与资料矛盾时，按第 6 条处理，不要替课文圆场。
+9. 引用出处（小节、图号、文件名、行号）要准确。记不准出处时，只说“资料提到”，不要编节号或数字。
 """
-FIXED_RULES = 7
+FIXED_RULES = 9
 
 
 NOTE_SYSTEM = """你是一位专业的学习笔记整理师。学员在自学“{course}”时，和 AI 助教有几段对话。请把选中的对话整理成一篇结构清楚、可以长期保存和复习的中文学习笔记。
@@ -127,8 +165,10 @@ NOTE_SYSTEM = """你是一位专业的学习笔记整理师。学员在自学“
 """
 
 
-def system_prompt(course) -> str:
+def system_prompt(course, web: bool = False) -> str:
     rules = [*course.rules, f"今天是 {datetime.date.today().isoformat()}。不要编造资料之外的新进展。"]
+    if web:
+        rules.append(W.RULE)
     extra = "".join(f"{i}. {r}\n" for i, r in enumerate(rules, FIXED_RULES + 1))
     return SYSTEM.replace("{title}", course.title).replace("{persona}", course.persona) + extra
 
@@ -197,15 +237,25 @@ def lesson_files() -> set:
     return {p.name for p in LESSONS.glob("*.html") if p.name not in SKIP_PAGES}
 
 
-def load_env() -> dict:
+def load_env(path: Path | None = None) -> dict:
+    """读 .env：KEY=value，值两边的引号去掉（和 lecturer/llm.py 一致）。"""
     env = {}
-    f = LESSONS / ".env"
+    f = path or LESSONS / ".env"
     if f.exists():
         for line in f.read_text(encoding="utf-8").splitlines():
             if "=" in line and not line.lstrip().startswith("#"):
                 k, v = line.split("=", 1)
-                env[k.strip()] = v.strip()
+                env[k.strip()] = v.strip().strip("'\"")
     return env
+
+
+def is_hidden_path(path: str) -> bool:
+    """点文件和点目录（.env、.snapshots、.git …）不对外提供。先解码再判断，%2E 绕不过。"""
+    clean = posixpath.normpath(unquote(path.split("?", 1)[0]))
+    return any(seg.startswith(".") for seg in clean.split("/") if seg)
+
+
+LOCAL_HOST = re.compile(r"^(127\.0\.0\.1|localhost)(:\d+)?$")
 
 
 def clip(s, n: int) -> str:
@@ -213,7 +263,7 @@ def clip(s, n: int) -> str:
     return s if len(s) <= n else s[:n] + "\n…（已截断）"
 
 
-def build_messages(req: dict, with_image: bool = True) -> list:
+def build_messages(req: dict, with_image: bool = True, web: bool = False) -> list:
     lesson = req.get("lesson", "")
     if lesson not in lesson_files():
         raise ValueError("unknown lesson")
@@ -225,7 +275,7 @@ def build_messages(req: dict, with_image: bool = True) -> list:
 
     course, sources = manifest()
     # 稳定前缀（system + 资料 + 课程全文），让 DeepSeek 的前缀缓存跨轮命中
-    system = system_prompt(course) + (
+    system = system_prompt(course, web) + (
         f"\n\n=== 本课：{clip(ctx.get('title'), 200)}（{lesson}）===\n"
         + sources_block(lesson_sources(lesson, course, sources)) + drift_block(lesson) +
         f"\n--- 课程页面全文（演示由页面 JS 实时计算，这里只有文字部分）---\n{clip(ctx.get('lessonText'), 50000)}\n"
@@ -359,14 +409,21 @@ class Handler(SimpleHTTPRequestHandler):
         origin = self.headers.get("Origin") or ""
         return origin == "" or re.match(r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$", origin) is not None
 
+    def _local_host(self) -> bool:
+        """Host 头必须是本机地址：防止别的网站用 DNS rebinding 冒充本机读课程文件。"""
+        host = self.headers.get("Host") or ""
+        return host == "" or LOCAL_HOST.match(host) is not None
+
     def do_GET(self):
+        if not self._local_host():
+            return self._json(403, {"error": "only local pages may use this server"})
         if self.path in ("/", "/index.html"):
             self.send_response(302)
             self.send_header("Location", "/" + LESSONS.name + "/")
             return self.end_headers()
         if self.path == "/favicon.ico":
             self.path = "/" + LESSONS.name + "/assets/favicon.svg"
-        if "/." in self.path:
+        if is_hidden_path(self.path):
             return self._json(404, {"error": "not found"})
         if self.path.startswith("/api/tutor/health"):
             key = bool(self.env.get("DEEPSEEK_API_KEY"))
@@ -390,7 +447,8 @@ class Handler(SimpleHTTPRequestHandler):
     def guess_type(self, path):  # 让浏览器直接显示 Markdown 原文
         return "text/plain; charset=utf-8" if str(path).endswith(".md") else super().guess_type(path)
 
-    def _open_upstream(self, key: str, msgs: list, stream: bool = True, max_tokens: int = 8000):
+    def _open_upstream(self, key: str, msgs: list, stream: bool = True, max_tokens: int = 8000,
+                       tools: bool = False, tool_choice: str | None = None):
         body = {
             "model": self.env.get("DEEPSEEK_MODEL", "deepseek-flash"),
             "messages": msgs,
@@ -398,6 +456,10 @@ class Handler(SimpleHTTPRequestHandler):
             "max_tokens": max_tokens,
             "reasoning_effort": self.env.get("DEEPSEEK_EFFORT", "low"),
         }
+        if tools:   # 联网工具；带 tools 时，本轮的 reasoning_content 要随 assistant 消息传回（见 web.py）
+            body["tools"] = W.TOOLS
+            if tool_choice:
+                body["tool_choice"] = tool_choice
         if stream:
             body["stream_options"] = {"include_usage": True}
         up = urllib.request.Request(API, json.dumps(body).encode(), {
@@ -424,10 +486,9 @@ class Handler(SimpleHTTPRequestHandler):
             if choice.get("finish_reason") == "length":
                 body += "\n\n> ⚠ 笔记超出长度上限，结尾被截断。可以少选几条对话，再整理一次。\n"
             name = save_note(req, body, model)
-        except urllib.error.HTTPError as e:
-            return self._json(502, {"error": f"DeepSeek 返回 {e.code}: {e.read().decode('utf-8', 'replace')[:300]}"})
         except (urllib.error.URLError, TimeoutError) as e:
-            return self._json(502, {"error": f"连不上 DeepSeek: {getattr(e, 'reason', e)}"})
+            log_error("笔记", e)
+            return self._json(502, {"error": friendly_error(e).replace("「重新发送」", "「整理为笔记」")})
         except OSError as e:
             return self._json(500, {"error": f"写笔记文件失败: {e}"})
         sys.stderr.write(f"笔记已保存：{NOTES.name}/{name}\n")
@@ -437,7 +498,7 @@ class Handler(SimpleHTTPRequestHandler):
         is_note = self.path.startswith("/api/tutor/note")
         if not (is_note or self.path.startswith("/api/tutor/chat")):
             return self._json(404, {"error": "not found"})
-        if not self._local_origin():
+        if not (self._local_origin() and self._local_host()):
             return self._json(403, {"error": "only local pages may call the tutor"})
         key = self.env.get("DEEPSEEK_API_KEY")
         if not key:
@@ -451,26 +512,26 @@ class Handler(SimpleHTTPRequestHandler):
                 raise ValueError("bad request")
             if is_note:
                 return self._note(key, req)
-            msgs = build_messages(req)
+            web = W.enabled(self.env)
+            msgs = build_messages(req, web=web)
         except (ValueError, json.JSONDecodeError, OSError) as e:
             return self._json(400, {"error": str(e)})
 
         note = None
         try:
             try:
-                resp = self._open_upstream(key, msgs)
+                resp = self._open_upstream(key, msgs, tools=web)
             except urllib.error.HTTPError as e:
                 has_image = isinstance(msgs[-1]["content"], list)
                 if not (has_image and e.code in (400, 422)):
                     raise
                 # 模型不接受图片：去掉截图，只用图示说明和读数重试一次
-                resp = self._open_upstream(key, build_messages(req, with_image=False))
+                msgs = build_messages(req, with_image=False, web=web)
+                resp = self._open_upstream(key, msgs, tools=web)
                 note = "（当前模型不支持读图，已改用图片说明和读数回答）\n\n"
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "replace")[:500]
-            return self._json(502, {"error": f"DeepSeek 返回 {e.code}: {detail}"})
-        except urllib.error.URLError as e:
-            return self._json(502, {"error": f"连不上 DeepSeek: {e.reason}"})
+        except (urllib.error.URLError, TimeoutError) as e:
+            log_error("助教", e)
+            return self._json(502, {"error": friendly_error(e)})
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -480,30 +541,55 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode())
             self.wfile.flush()
 
-        usage, thinking, answer = None, False, []
+        usage, thinking, answer, rounds = None, False, [], 0
+        post = W.make_post(key)
         try:
             if note:
                 send({"t": note})
-            with resp:
-                for raw in resp:
-                    line = raw.decode("utf-8", "replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    chunk = json.loads(data)
-                    usage = chunk.get("usage") or usage
-                    for ch in chunk.get("choices") or []:
-                        d = ch.get("delta") or {}
-                        if d.get("reasoning_content") and not thinking:
-                            thinking = True
-                            send({"thinking": True})
-                        if d.get("content"):
-                            answer.append(d["content"])
-                            send({"t": d["content"]})
-                        if ch.get("finish_reason") == "length":
-                            send({"t": "\n\n> ⚠ 回答超出长度上限，结尾被截断（末尾的勘误也可能丢失）。可以让助教“分两次讲”。"})
+            while True:   # 每一轮：流式读回答；模型要联网就执行工具、把结果交回去，再读下一轮
+                acc, reasoning, content = W.ToolCallAccumulator(), [], []
+                with resp:
+                    for raw in resp:
+                        line = raw.decode("utf-8", "replace").strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        chunk = json.loads(data)
+                        if chunk.get("usage"):
+                            u = chunk["usage"]
+                            usage = u if usage is None else {**u, "total_tokens": usage.get("total_tokens", 0) + u.get("total_tokens", 0)}
+                        for ch in chunk.get("choices") or []:
+                            d = ch.get("delta") or {}
+                            if d.get("reasoning_content"):
+                                reasoning.append(d["reasoning_content"])
+                                if not thinking:
+                                    thinking = True
+                                    send({"thinking": True})
+                            if d.get("content"):
+                                content.append(d["content"])
+                                answer.append(d["content"])
+                                send({"t": d["content"]})
+                            if d.get("tool_calls"):
+                                acc.feed(d["tool_calls"])
+                            if ch.get("finish_reason") == "length":
+                                send({"t": "\n\n> ⚠ 回答超出长度上限，结尾被截断（末尾的勘误也可能丢失）。可以让助教“分两次讲”。"})
+                calls = acc.calls()
+                if not calls:
+                    break
+                rounds += 1
+                msgs.append({"role": "assistant", "content": "".join(content), "reasoning_content": "".join(reasoning), "tool_calls": calls})
+                if content:   # 模型在调用工具前说的话（“我查一下”），和后面的回答隔开
+                    answer.append("\n\n")
+                    send({"t": "\n\n"})
+                for c in calls:
+                    label, result = W.run_tool(c["function"]["name"], c["function"]["arguments"], post)
+                    sys.stderr.write(f"[联网] {label}\n")
+                    send({"tool": label})
+                    msgs.append({"role": "tool", "tool_call_id": c["id"], "content": result})
+                # 工具轮数用完：仍带 tools（思考模式的上下文要求），但禁止再调用，逼模型直接回答
+                resp = self._open_upstream(key, msgs, tools=True, tool_choice="none" if rounds >= W.MAX_ROUNDS else None)
             found = S.parse_errata("".join(answer), req["lesson"])
             new = []
             if found:
@@ -515,8 +601,9 @@ class Handler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:
+            log_error("助教", e)
             try:
-                send({"error": f"中途出错：{e}"})
+                send({"error": friendly_error(e)})
             except Exception:
                 pass
 
