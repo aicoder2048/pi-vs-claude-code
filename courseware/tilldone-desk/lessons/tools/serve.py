@@ -223,7 +223,7 @@ def course_drift() -> list:
 
 
 def drift_block(lesson: str) -> str:
-    items = [d for d in course_drift() if lesson in d["lessons"]]
+    items = [d for d in S.learner_facing(course_drift()) if lesson in d["lessons"]]
     if not items:
         return ""
     out = "\n【来源自快照后的变化】课文按快照写成。学员问到下面这些来源时，分开说“课文（快照）说……”和“来源现在……”，不要把现状说成课文的说法。\n"
@@ -442,7 +442,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/notes"):
             return self._json(200, {"notes": list_notes()})
         if self.path.startswith("/api/drift"):
-            return self._json(200, {"drift": course_drift()})
+            return self._json(200, {"drift": S.learner_facing(course_drift())})
         if self.path.startswith("/api/errata"):
             return self._json(200, {"errata": S.read_errata(ERRATA)})
         return super().do_GET()
@@ -630,7 +630,8 @@ def check() -> int:
         if refs:
             print("    警告：引用了但没登记在 sources.json：" + "、".join(refs[:12]) + (f" 等 {len(refs)} 项" if len(refs) > 12 else ""))
     for d in course_drift():
-        print(f"漂移：{d['id']}（{d['path']}）{d['summary']}；影响 " + ("、".join(d["lessons"]) or "无课程"))
+        what = "跳过漂移检查" if d["status"] == "unchecked" else "漂移"
+        print(f"{what}：{d['id']}（{d['path']}）{d['summary']}；影响 " + ("、".join(d["lessons"]) or "无课程"))
         bad |= d["status"] in ("missing", "error")
     return bad
 
@@ -685,8 +686,12 @@ def main():
                  f"或用 --port 指定别的端口。\n  查看谁占用了它：lsof -i :{a.port}"
                  f"\n  关闭占用它的进程：lsof -ti :{a.port} -sTCP:LISTEN | xargs kill")
     watch_parent()
+    unchecked = [d for d in course_drift() if d["status"] == "unchecked"]
     for d in course_drift():
-        print(f"来源漂移：{d['label']}：{d['summary']}（影响 {len(d['lessons'])} 课）")
+        if d["status"] != "unchecked":
+            print(f"来源漂移：{d['label']}：{d['summary']}（影响 {len(d['lessons'])} 课）")
+    if unchecked:
+        print(f"跳过来源漂移检查：{len(unchecked)} 份资料的快照是 git 提交，这里不是那个 git 仓库（打包分发的课程正常如此）。")
     print(f"课程地址：http://127.0.0.1:{a.port}/{LESSONS.name}/   （AI 助教模型：{Handler.env.get('DEEPSEEK_MODEL', 'deepseek-flash')}，Ctrl+C 停止）")
     try:
         srv.serve_forever()

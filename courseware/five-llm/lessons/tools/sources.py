@@ -268,6 +268,21 @@ def fingerprint(f: Path) -> dict:
     return {"kind": "file", "sha256": _sha256(f)}
 
 
+def _can_check_git(cwd: Path, commit: str) -> bool:
+    """在 git 仓库里、且仓库里有快照那个提交，才查得了。课程打包解压后两者通常都不成立。"""
+    try:
+        _git(cwd, "rev-parse", "--is-inside-work-tree")
+        _git(cwd, "cat-file", "-e", f"{commit}^{{commit}}")
+        return True
+    except RuntimeError:
+        return False
+
+
+def learner_facing(items: list) -> list:
+    """给学员和助教看的漂移：只有确实变了或文件没了。查不了、查出错只给维护者看（--check、启动日志）。"""
+    return [d for d in items if d["status"] in ("changed", "missing")]
+
+
 def snapshot_copy(snapdir: Path, src: Source) -> Path:
     return Path(snapdir) / f"{src.id}.txt"
 
@@ -284,6 +299,8 @@ def drift(src: Source, root: Path, snapdir: Path) -> dict | None:
     try:
         if snap["kind"] == "git":
             commit = snap.get("commit", "")
+            if not _can_check_git(f.parent, commit):
+                return {**base, "status": "unchecked", "summary": f"不在 git 仓库里，或仓库里没有快照提交 {commit}，跳过检查"}
             log = _git(f.parent, "log", "--oneline", f"{commit}..HEAD", "--", f.name).strip()
             stat = _git(f.parent, "diff", "--stat", commit, "--", f.name).strip()
             if not log and not stat:

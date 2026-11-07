@@ -194,6 +194,24 @@ class Drift(unittest.TestCase):
         (repo / "a.ts").write_text("v3\n", encoding="utf-8")
         self.assertIn("未提交改动", S.drift(s, self.root, self.snaps)["summary"])
 
+    def test_git_source_outside_any_repo_is_unchecked_not_error(self):
+        # 课程打成 zip 解压后不再是 git 仓库：查不了，不能当成“来源变了”
+        import shutil
+        repo, s = self.git_source()
+        shutil.rmtree(repo / ".git")
+        d = S.drift(s, self.root, self.snaps)
+        self.assertEqual(d["status"], "unchecked")
+
+    def test_git_source_whose_snapshot_commit_is_unknown_is_unchecked(self):
+        # 解压到别的 git 仓库里：仓库里没有快照那个提交
+        repo, s = self.git_source()
+        s = S.Source(s.id, s.label, s.path, s.scope, s.aliases, {"kind": "git", "commit": "deadbee"})
+        self.assertEqual(S.drift(s, self.root, self.snaps)["status"], "unchecked")
+
+    def test_learner_facing_drift_drops_unchecked_and_errors(self):
+        items = [{"status": s} for s in ("changed", "missing", "unchecked", "error")]
+        self.assertEqual([d["status"] for d in S.learner_facing(items)], ["changed", "missing"])
+
     def test_untracked_file_snapshots_as_file(self):
         f = self.root / "note.md"
         f.write_text("old\n", encoding="utf-8")
