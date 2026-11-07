@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from course import default_port, first_lesson, parse_args, ready_url  # noqa: E402
 
 
-def parse(argv):
-    return parse_args(argv, port=8766, first="L01")
+def parse(argv, scripts=("L01", "L02")):
+    return parse_args(argv, port=8766, scripts=list(scripts))
 
 
 def test_defaults_to_course_only_on_default_port():
@@ -68,3 +68,22 @@ def test_default_port_reads_manifest(tmp_path):
     m = tmp_path / "sources.json"
     m.write_text(json.dumps({"course": {"port": 9123}}))
     assert default_port(m) == 9123
+
+
+def test_lecture_without_any_script_explains_what_to_do(capsys):
+    with pytest.raises(SystemExit) as e:
+        parse(["--lecture"], scripts=[])
+    msg = str(e.value.code)
+    assert "还没有讲稿" in msg and "去掉 --lecture" in msg and "AUTHORING.md" in msg
+    assert "usage:" not in capsys.readouterr().err  # 不是用法错误，不打印 usage
+
+
+def test_lecture_for_a_lesson_without_script_lists_the_ones_that_have_one():
+    with pytest.raises(SystemExit) as e:
+        parse(["--lecture", "L09"])
+    msg = str(e.value.code)
+    assert "L09" in msg and "L01、L02" in msg
+
+
+def test_course_without_lecture_needs_no_scripts():
+    assert parse([], scripts=[]).lecture is None

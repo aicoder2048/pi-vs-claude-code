@@ -29,13 +29,28 @@ def default_port(manifest: Path = LESSONS / "tools" / "sources.json") -> int:
         return FALLBACK_PORT
 
 
-def first_lesson(scripts_dir: Path = LESSONS / "lecturer" / "scripts") -> str | None:
-    ids = sorted(p.stem for p in scripts_dir.glob("*.json"))
+SCRIPTS = LESSONS / "lecturer" / "scripts"
+
+NO_SCRIPTS = """还没有讲稿（lecturer/scripts/ 是空的），AI 讲师没法开讲。
+  · 先上课：去掉 --lecture，只开课程和 AI 助教。
+  · 要讲师：按 lecturer/AUTHORING.md 写讲稿（用 interactive-courseware 技能生成），再 --lecture。"""
+
+
+def script_lessons(scripts_dir: Path = SCRIPTS) -> list[str]:
+    """有讲稿的课号，按课号排序。"""
+    return sorted(p.stem for p in scripts_dir.glob("*.json"))
+
+
+def first_lesson(scripts_dir: Path = SCRIPTS) -> str | None:
+    ids = script_lessons(scripts_dir)
     return ids[0] if ids else None
 
 
-def parse_args(argv: list[str], port: int | None = None, first: str | None = None) -> argparse.Namespace:
-    """port、first 留给测试注入；平时从 sources.json 和 lecturer/scripts/ 读。"""
+def parse_args(argv: list[str], port: int | None = None, scripts: list[str] | None = None) -> argparse.Namespace:
+    """port、scripts 留给测试注入；平时从 sources.json 和 lecturer/scripts/ 读。
+
+    讲稿缺失不是用法错误：用 SystemExit 给一句说明和下一步，不打印 usage。
+    """
     fallback = port or default_port()
     ap = argparse.ArgumentParser(prog="course.py", description="启动课程服务，可选 AI 讲师")
     ap.add_argument("pos_port", nargs="?", type=int, metavar="PORT", help="端口（旧写法，等同 --port）")
@@ -51,14 +66,19 @@ def parse_args(argv: list[str], port: int | None = None, first: str | None = Non
         ap.error(f"端口号不合法：{a.port}")
     if a.start and not a.lecture:
         ap.error("--from 只能和 --lecture 一起用")
+    if not a.lecture:
+        return a
+    have = script_lessons() if scripts is None else scripts
+    if not have:
+        raise SystemExit(NO_SCRIPTS)
     if a.lecture == FIRST:
-        a.lecture = first or first_lesson()
-        if not a.lecture:
-            ap.error("lecturer/scripts/ 里还没有讲稿，讲师没法开讲")
-    elif a.lecture:
-        a.lecture = a.lecture.upper()
-        if not re.fullmatch(r"[A-Z]+\d+", a.lecture):
-            ap.error(f"课号不对：{a.lecture}，应该像 L02 这样（字母加数字，和讲稿文件名一致）")
+        a.lecture = have[0]
+        return a
+    a.lecture = a.lecture.upper()
+    if not re.fullmatch(r"[A-Z]+\d+", a.lecture):
+        ap.error(f"课号不对：{a.lecture}，应该像 L02 这样（字母加数字，和讲稿文件名一致）")
+    if a.lecture not in have:
+        raise SystemExit(f"{a.lecture} 还没有讲稿，AI 讲师没法讲这一课。有讲稿的课：{'、'.join(have)}。")
     return a
 
 
