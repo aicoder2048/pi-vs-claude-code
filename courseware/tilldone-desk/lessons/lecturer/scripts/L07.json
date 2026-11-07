@@ -1,0 +1,336 @@
+{
+  "lesson": "L07-pitfalls-review.html",
+  "title": "坑、开放问题与全课复盘",
+  "steps": [
+    {
+      "id": "s0-01",
+      "section": "s0",
+      "kind": "say",
+      "target": ".hero",
+      "say": "欢迎来到最后一课。上一课讲了 PStack 和 TillDone 怎样咬合，代码里只有三个接缝。前六课讲边牧怎样工作。这一课讲它在哪里会出问题，最后把全课串成一张图。"
+    },
+    {
+      "id": "s0-02",
+      "section": "s0",
+      "kind": "say",
+      "target": ".objectives",
+      "say": "学完这一课，你应该能做到四件事。说出原文列的六条坑和后果。解释为什么分派给子 agent 的工作，不会触发拆分提示。分清原文的事实、推断和还没做的建议。最后，按三条线复述整门课。"
+    },
+    {
+      "id": "s1-01",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .tbl-wrap",
+      "say": "第一个重点：六条坑分两类。前四条是约束的漏洞。有些工作或步骤，不在 TillDone 的视野里。后两条是文档和文本的问题。好比一道围栏，前四条是围栏上的缺口，后两条是告示牌写旧了。"
+    },
+    {
+      "id": "s1-02",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .tbl-wrap",
+      "say": "请留意表里的性质这一列。有的是事实，命令行就能证明。有的是推断，比如全局扩展会不会进子 agent，原文没有实际运行验证。还有一条是风险，最小修正还没做。讲坑的时候，这三种要分开说。"
+    },
+    {
+      "id": "s2-02",
+      "section": "s2",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-pick [data-p=\"sub\"]"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"own\"]",
+          "value": "5"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"inner\"]",
+          "value": "40"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "下面的走查一条一条看。先看第一条，子 agent 不受管。子 agent 内部做 40 次调用，父进程自己再做 5 次。自己做的话，spent 是 45，拆分提示 3 次。分派给子 agent，spent 只有 6，提示 0 次。工作量一样。"
+    },
+    {
+      "id": "s2-03",
+      "section": "s2",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-pick [data-p=\"sub\"]"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"own\"]",
+          "value": "5"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"inner\"]",
+          "value": "5"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "再把子 agent 的调用拉到 5 次。现在自己做 spent 是 10，分派是 6，两边都是 0 次提示。所以差别只在大任务上出现。工作越多，分派后漏掉的提示越多。"
+    },
+    {
+      "id": "s2-04",
+      "section": "s2",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-pick [data-p=\"ext\"]"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"nested\"]",
+          "value": "true"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "第二条，全局扩展与嵌套。父进程用 no extensions 挡住了全局扩展。第一层子 agent 的命令行里没有这道挡板，原文推断它大概会加载，没有验证过。更确定的是：子 agent 再派一层，选了 anthropic 模型，计费门拦不到。"
+    },
+    {
+      "id": "s2-05",
+      "section": "s2",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-pick [data-p=\"nudge\"]"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"tdDone\"]",
+          "value": "true"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"others\"]",
+          "value": "true"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"verify\"]",
+          "value": "true"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "第三条，督促不管流程步骤。先把两份清单都勾满。tilldone 未完成 0 项，pstack todo 未勾 0 项，不督促，也没有漏洞。这是正常的收尾。"
+    },
+    {
+      "id": "s2-06",
+      "section": "s2",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-pick [data-p=\"nudge\"]"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"tdDone\"]",
+          "value": "true"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"others\"]",
+          "value": "true"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"verify\"]",
+          "value": "false"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "现在只取消验证真实行为那一项。pstack todo 有 1 项没勾，可结果还是不督促。因为 agent end 时只看 tilldone 清单。模型可以跳过验证，照样停下。课程补充一句，这在界面上也看不出来，面板显示全部完成。"
+    },
+    {
+      "id": "s2-07",
+      "section": "s2",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-pick [data-p=\"mix\"]"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"mixed\"]",
+          "value": "false"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "第四条，两份清单错位。先看分工正确的情况：任务面板上只有工作项，进度就是真实的工作进度。"
+    },
+    {
+      "id": "s2-08",
+      "section": "s2",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-pick [data-p=\"mix\"]"
+        },
+        {
+          "set": "#d1-ctrl input[data-k=\"mixed\"]",
+          "value": "true"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "再勾上模型把 playbook 步骤也抄进了 tilldone。面板上出现了读原则这类伪任务，5 项里有 3 项是伪任务。牧羊人看到的进度，不再等于工作进度。原文建议的最小修正，是在工具说明里加一句分工，还没做。"
+    },
+    {
+      "id": "s3-01",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 ul",
+      "say": "第二个重点：子 agent 是 TillDone 的盲区。约束只到父进程为止。一次 subagent 调用，在 spent 里只算 1 次。子 agent 内部做了多少，拆分提示和面板计数都看不到。所以分派出去的大任务，看起来很便宜。"
+    },
+    {
+      "id": "s3-02",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 .callout.note",
+      "say": "课程这里补充了一个推论。第五课讲过，15 次提示是用来发现太粗的任务的。而分派给子 agent，恰好是处理大任务的常见做法。所以最需要提醒的任务，反而最难触发提醒。这是课程作者的推论，不是原文的话。"
+    },
+    {
+      "id": "s3-03",
+      "section": "s3",
+      "kind": "proxy",
+      "target": "#s3",
+      "say": "听到这里，你可能会问：能不能让子 agent 的工作也算进 spent 里？我们请助教说说。",
+      "question": "边牧里一次 subagent 调用在 spent 里只算 1 次。有没有办法把子 agent 内部的工作量也计入，让拆分提示能触发？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s4-01",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 .grid-3",
+      "say": "原文留下三个开放问题。一，两份清单的分工怎样告诉模型，最小修正还没做。二，白皮书过时了，用户决定等设计固定再更新，免得白做。三，细分请求按界面语言取中文或英文，界面设置会影响模型的输入。"
+    },
+    {
+      "id": "s4-02",
+      "section": "s4",
+      "kind": "proxy",
+      "target": "#s4",
+      "say": "讲到开放问题，你可能会想：原文的最小修正只是在工具说明里加一句话，这样真的够吗？我们请助教评价一下。",
+      "question": "原文建议的最小修正，是在 TillDone 的工具说明里加一句话说明两份清单的分工。只靠改提示词，能解决两份清单错位的问题吗？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s4-03",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 .callout.tip",
+      "say": "还有一个读课程时的提醒。本课程按某个提交编写，后来又对照新提交更新过。边牧还在变化。遇到和代码不一致的地方，以源码为准。"
+    },
+    {
+      "id": "s5-01",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 .tbl-wrap",
+      "say": "想在边牧里动手，从这张表的文件开始。门禁、计费门、拆分提示、督促，都在扩展的 state 文件里。桌面端的投影在 domain 文件里。PStack 的工具和技能文档，在它的 npm 包里。我们不念路径，需要时回来查。"
+    },
+    {
+      "id": "s6-01",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6",
+      "say": "第三个重点：全课复盘。整门课沿三条线展开：四层、上下文、拆分与分工，再加上这一课的坑。下面的概念图把每个关键概念连到讲它的那一课。"
+    },
+    {
+      "id": "s6-02",
+      "section": "s6",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#demo2 button[data-line=\"arch\"]"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "我点四层这条线。第一课的进程全景和双循环，第二课的两套四层，以及谁是权威。一句话：规矩只在扩展里执行一次，桌面端只读结果，停没停只认 agent settled。"
+    },
+    {
+      "id": "s6-03",
+      "section": "s6",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#demo2 button[data-line=\"split\"]"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "再点拆分与分工。第五课：TillDone 只给拆分的时机和账本，拆不拆由模型决定。第六课：两份清单，tilldone 是硬约束，pstack todo 是软约束，两边只有三个接缝。"
+    },
+    {
+      "id": "s7-01",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 0,
+      "say": "做几道自测题。第一题，模型把大任务分派给子 agent，子 agent 内部用了 40 次工具调用。父进程里这个任务的 spent 增加多少？A，40。B，1。C，0。D，15。选完按空格。",
+      "explain": "答案是 B，只加 1。一次 subagent 调用只算 1 次，子进程不加载 TillDone，内部调用看不到。容易选 A：那是自己做时的数字，分派后正好看不见。"
+    },
+    {
+      "id": "s7-02",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 1,
+      "say": "第二题，tilldone 清单全部完成，但 pstack todo 里验证真实行为没勾。run 结束时会怎样？A，督促一次，提醒验证。B，门禁拦下下一次调用。C，不督促，模型可以停。D，计费门拦下。选完按空格。",
+      "explain": "答案是 C。agent end 时只看 tilldone 清单。最迷惑的是 A：PStack 的流程步骤既没有督促，也没有门禁，我们在演示里亲眼看到了。"
+    },
+    {
+      "id": "s7-03",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 2,
+      "say": "第三题，子 agent 大概会加载全局扩展，这一条原文给的是什么性质的结论？A，测试验证过的事实。B，README 写明的规则。C，pstack 文档的说明。D，根据命令行缺少 no extensions 做出的推断，没有实际运行验证。选完按空格。",
+      "explain": "答案是 D。原文明确标为推断，依据是子进程的命令行。容易选 B：README 写明的是另一件事，计费门只覆盖第一层。"
+    },
+    {
+      "id": "s7-04",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 3,
+      "say": "第四题，为什么白皮书现在不更新？A，设计还在变，用户决定等设计固定后再更新，避免白做。B，白皮书内容是对的。C，白皮书已经删除。D，pstack 不属于边牧。选完按空格。",
+      "explain": "答案是 A。白皮书还停在不含 PStack 的版本。用户决定等设计彻底固定再更新。B 不对，它确实过时了，反转门禁、计费门都没写。"
+    },
+    {
+      "id": "s7-05",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .tbl-wrap",
+      "say": "用一条线收束这一课。坑大多出在 TillDone 看不见的地方：子 agent 的内部工作、第二层的模型、pstack todo 的流程步骤。另一类是分工只写在 README 里，模型看不到。最小修正都还没做。"
+    },
+    {
+      "id": "s7-06",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .related",
+      "say": "最后总结整门课。回到第一课：羊不进圈，边牧不歇。TillDone 管做什么、做完没，用门禁和督促守住；PStack 管怎么做，只靠提示词。规矩在 Pi 子进程里执行，桌面端只读结果，停没停只认 agent settled。"
+    },
+    {
+      "id": "s7-07",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .related",
+      "say": "上下文那条线，TillDone 用工具说明、工具结果和督促消息说话，PStack 改 system prompt，用子 agent 隔离。两者只有三个接缝，分工靠模型摸索。这就是边牧的全貌。想复习，可以从第一课从头再来。谢谢你学完这门课。"
+    }
+  ]
+}

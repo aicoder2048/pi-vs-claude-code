@@ -84,7 +84,7 @@
     <li><b>做自测题</b>：每课最后有 3–5 道题。答错会显示解释。</li>
     <li><b>问 AI 助教</b>：右侧的 AI 助教读过原文和本课全部内容。可以选中一段话问它，或点图片、演示右上角的“问 AI”。</li>
   </ol>
-  <div class="callout note"><span class="ttl">启用 AI 助教</span>在终端运行 <code>cd lessons &amp;&amp; uv run --no-project python tools/serve.py</code>，然后打开 <a href="http://127.0.0.1:8771/lessons/">http://127.0.0.1:8771/lessons/</a>。模型是 DeepSeek（默认 <code>deepseek-flash</code>），走 DeepSeek 官方 API，<b>按量计费</b>。API key 放在 <code>lessons/.env</code>，只在本机服务里用，不进页面。直接双击打开 HTML 也能学，只是没有 AI 助教。</div>
+  <div class="callout note"><span class="ttl">启用 AI 助教和 AI 讲师</span>在终端运行 <code>cd lessons &amp;&amp; just course</code>，然后打开 <a href="http://127.0.0.1:8771/lessons/">http://127.0.0.1:8771/lessons/</a>。想让 AI 讲师带着读，改用 <code>just course --lecture</code>（第一次先 <code>just lecture-audio</code> 合成语音，免费）。模型是 DeepSeek（默认 <code>deepseek-flash</code>），走 DeepSeek 官方 API，<b>按量计费</b>。API key 放在 <code>lessons/.env</code>，只在本机服务里用，不进页面。直接双击打开 HTML 也能学，只是没有 AI 助教。</div>
   <p class="disclaimer">课程内容以原文为准；“补充”标注的部分是课程作者的解释，不是原文观点。课程编写规范见 <code>lessons/AUTHORING.md</code>。</p>
 </div>
 

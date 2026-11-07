@@ -1,0 +1,344 @@
+{
+  "lesson": "L04-context-strategies.html",
+  "title": "两种注入策略与抗压缩",
+  "steps": [
+    {
+      "id": "s0-01",
+      "section": "s0",
+      "kind": "say",
+      "target": ".hero",
+      "say": "欢迎来到第四课。上一课我们看了，两个扩展各往模型的上下文里放了什么。这一课问的是，它们怎么放进去。一句话预告：TillDone 和 PStack 选了相反的两条路，而状态都不放在对话里。"
+    },
+    {
+      "id": "s0-02",
+      "section": "s0",
+      "kind": "say",
+      "target": ".objectives",
+      "say": "学完这一课，你应该能说清四件事。第一，TillDone 用哪三条通道送规矩，为什么不改 system prompt。第二，PStack 的两处注入。第三，subagent 怎样隔离上下文，代价是什么。第四，各种状态从哪里恢复。"
+    },
+    {
+      "id": "s1-01",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .vs",
+      "say": "先讲第一个重点：两条相反的路。TillDone 从不改 system prompt，规矩全靠工具说明、工具结果和自定义消息送进去。PStack 正相反，每次请求都改 system prompt，还在首条消息里展开整份技能。"
+    },
+    {
+      "id": "s1-02",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .vs",
+      "say": "打个比方。TillDone 像路口的红绿灯，你走到那儿才亮。PStack 像车里的导航，一路都在耳边说。规矩只在触发的时刻才需要，所以 TillDone 不占开头。PStack 的工作方式要贯穿全程，所以它占了每次请求的开头。"
+    },
+    {
+      "id": "s2-01",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .diagram",
+      "say": "这张图是 TillDone 的三条通道。工具说明，每次请求都在。工具结果和工具错误，在触发规矩的时候出现。督促消息，在 run 结束时发出。三条都不经过 system prompt。"
+    },
+    {
+      "id": "s2-02",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 ul",
+      "say": "好处有两个。第一，规矩跟着工具走，只要工具还注册着，说明就在。第二，别人改 system prompt 碰不到它。Pi 升级换了默认提示词，或者别的扩展改写提示词，TillDone 的规矩照样送到。"
+    },
+    {
+      "id": "s3-01",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 .steps",
+      "say": "PStack 有两处注入。一处每次都在：开启 Poteto Mode 后，每次请求都在 system prompt 末尾追加一段说明。一处只发生一次：首条消息里，Pi 把整份 SKILL 文件展开。之后它留在历史里，不再重发。"
+    },
+    {
+      "id": "s3-02",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 .callout.note",
+      "say": "课程这里补充了一个细节：PStack 是追加，不是替换。它在已有提示词后面接一段，不会丢掉 Pi 的默认提示词。另外，那段说明里还写着技能文件的路径。模型忘了细节，可以自己再读一遍。"
+    },
+    {
+      "id": "s4-01",
+      "section": "s4",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "set": "#d1-up",
+          "value": "false"
+        },
+        {
+          "set": "#d1-ext",
+          "value": "true"
+        },
+        {
+          "set": "#d1-cmp",
+          "value": "false"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "下面动手看外部变化时，谁还到得了模型。我只勾另一个扩展整段替换 system prompt。看读数：TillDone 五项全部能到达。PStack 四项里有一项可能丢失，就是追加在 system prompt 里的那段说明。"
+    },
+    {
+      "id": "s4-02",
+      "section": "s4",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "set": "#d1-up",
+          "value": "false"
+        },
+        {
+          "set": "#d1-ext",
+          "value": "false"
+        },
+        {
+          "set": "#d1-cmp",
+          "value": "true"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "换成只勾对话被压缩。这次两边都有风险。TillDone 有一项，就是早期的清单变化。PStack 有三项：技能全文、待办清单、subagent 结论。多数能用工具拿回来，比如调一次 tilldone list。"
+    },
+    {
+      "id": "s4-03",
+      "section": "s4",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "set": "#d1-up",
+          "value": "true"
+        },
+        {
+          "set": "#d1-ext",
+          "value": "false"
+        },
+        {
+          "set": "#d1-cmp",
+          "value": "false"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "再只勾 Pi 升级换了默认提示词。两边全部能到达，九项都没事。不过表里标了推断：PStack 的说明措辞，可能和新的默认提示词冲突。注意，这些判断来自读源码，没有实际运行验证。"
+    },
+    {
+      "id": "s5-01",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 .src",
+      "say": "第二个重点：subagent 的上下文隔离。子 agent 在自己的进程里干活，不带会话。完整过程留在子进程里，父上下文只拿到结论。原文把它归为 Delegation，也就是委派。"
+    },
+    {
+      "id": "s5-02",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 ul",
+      "say": "父上下文到底收到多少，看几个细节。结论放在工具结果里，完整消息放在 details 里，details 不进模型。并行模式每个结果截断到 50 KB。链式模式只回传最后一步。并行最多 8 个任务，同时跑 4 个。"
+    },
+    {
+      "id": "s5-03",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5",
+      "say": "所以，桌面端那棵子 agent 实时树，读的是 details。你在界面上看得到子 agent 的过程，模型却看不到。这一点很容易搞混。界面上看到的，不等于模型知道的。"
+    },
+    {
+      "id": "s6-01",
+      "section": "s6",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "set": "#d2-k",
+          "value": "4"
+        },
+        {
+          "set": "#d2-n",
+          "value": "20"
+        },
+        {
+          "set": "#d2-t",
+          "value": "800"
+        },
+        {
+          "set": "#d2-s",
+          "value": "500"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "这个模拟比较内联做和分派 subagent。默认是 4 个子任务，每个 20 次工具调用，每个结果 800 token。读数：内联时父上下文涨了 70400。分派时只涨 2800，约为内联的百分之四。"
+    },
+    {
+      "id": "s6-02",
+      "section": "s6",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "set": "#d2-k",
+          "value": "4"
+        },
+        {
+          "set": "#d2-n",
+          "value": "20"
+        },
+        {
+          "set": "#d2-t",
+          "value": "3000"
+        },
+        {
+          "set": "#d2-s",
+          "value": "500"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "我把每个工具结果拖到 3000。内联时父上下文涨到 246400，分派时还是 2800。但看总新增 token：分派是 262000，反而是内联的 1.06 倍。隔离买到的是父上下文干净，不是更低的总花费。"
+    },
+    {
+      "id": "s6-03",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 .callout.warn",
+      "say": "隔离还有一个代价。子 agent 内部做了什么，父 agent 只能从结论里知道。TillDone 也看不见它：一次 subagent 调用，在计数里只算 1 次。第五课和第七课会再讲这个盲区。"
+    },
+    {
+      "id": "s6-04",
+      "section": "s6",
+      "kind": "proxy",
+      "target": "#s6",
+      "say": "讲到这儿，你可能会问：既然分派不省总 token，那什么时候才值得用 subagent？我们请助教来说说。",
+      "question": "既然分派 subagent 不减少总 token，什么情况下值得分派、什么情况下应该内联做？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s7-01",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .src",
+      "say": "第三个重点：抗压缩。结论是，两个扩展都不依赖对话记忆。压缩只改模型看到的历史，碰不到扩展内存，也碰不到会话文件。好比你的记事本被人缩写了，但账本还锁在柜子里。"
+    },
+    {
+      "id": "s7-02",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .tbl-wrap",
+      "say": "这张表看三类状态。TillDone 清单，从会话里最后一个有效快照恢复，还会逐字段校验。PStack 的待办清单和 Poteto 开关，从它自己的记录项恢复。而计数和督促闩锁，根本不持久化。"
+    },
+    {
+      "id": "s7-03",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .callout.warn",
+      "say": "有个坑要记住。在会话树里切到另一个分支时，TillDone 会从新分支重建清单。PStack 不监听这个事件，待办和开关还是切换前的值，可能和新分支对不上。两边在这里不同步。"
+    },
+    {
+      "id": "s7-04",
+      "section": "s7",
+      "kind": "demo",
+      "target": "#demo3",
+      "actions": [
+        {
+          "click": "#d3-reset"
+        },
+        {
+          "click": "#d3-cmp"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "动手看。我先点重来，再点压缩。读数说，模型上下文里前 5 条消息变成了摘要。但扩展内存和会话文件都没变，清单完整，计数仍是 6。模型要全貌，调一次 list 就行。"
+    },
+    {
+      "id": "s7-05",
+      "section": "s7",
+      "kind": "demo",
+      "target": "#demo3",
+      "actions": [
+        {
+          "click": "#d3-reset"
+        },
+        {
+          "click": "#d3-cmp"
+        },
+        {
+          "click": "#d3-rst"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "再点重启并恢复会话。扩展内存从会话文件重建，清单、待办、Poteto 开关都回来了。但计数从 6 归零，督促闩锁也复位了。所以下一次 15 次提示，要从头数。"
+    },
+    {
+      "id": "s7-06",
+      "section": "s7",
+      "kind": "proxy",
+      "target": "#s7",
+      "say": "用过会话分支的同学可能会担心：PStack 的待办和新分支对不上，实际会出什么问题？我们请助教说说。",
+      "question": "在边牧里切换会话分支后，PStack 的 todos 和 Poteto 开关仍是切换前的值，实际可能造成什么问题？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s8-01",
+      "section": "s8",
+      "kind": "quiz",
+      "target": "#s8 .quiz",
+      "nth": 0,
+      "say": "做几道自测题。第一题，注意是选不用的：TillDone 不用哪条通道把规矩送给模型？A，工具声明里的工具说明。B，工具结果和工具错误。C，在 before agent start 钩子里改写 system prompt。D，督促自定义消息。选完按空格。",
+      "explain": "答案是 C。TillDone 从不改 system prompt，它只用工具说明、工具结果和自定义消息。改 system prompt 的是 PStack，别把两者记反了。"
+    },
+    {
+      "id": "s8-02",
+      "section": "s8",
+      "kind": "quiz",
+      "target": "#s8 .quiz",
+      "nth": 1,
+      "say": "第二题，PStack 的 Poteto Mode 说明多久注入一次？A，只在首条消息里一次。B，开启后每次请求都追加到 system prompt。C，每次调用待办工具时。D，只在压缩之后。选完按空格。",
+      "explain": "答案是 B。每次请求都追加这段说明。最迷惑人的是 A：首条消息里只展开一次的，是另一样东西，整份技能文件。"
+    },
+    {
+      "id": "s8-03",
+      "section": "s8",
+      "kind": "quiz",
+      "target": "#s8 .quiz",
+      "nth": 2,
+      "say": "第三题，subagent 跑完后，父 agent 的上下文里有什么？A，子 agent 的全部消息。B，子 agent 的全部工具结果。C，什么都没有。D，子 agent 的结论文本，并行时每个截断到 50 KB。选完按空格。",
+      "explain": "答案是 D。结论放在工具结果里。完整消息放在 details 里，只给界面和会话文件，不进模型上下文。C 也不对，父 agent 总要拿到结论。"
+    },
+    {
+      "id": "s8-04",
+      "section": "s8",
+      "kind": "quiz",
+      "target": "#s8 .quiz",
+      "nth": 3,
+      "say": "第四题，重启并恢复会话后，下面哪个状态会归零？A，计数 spent。B，TillDone 清单。C，PStack 的待办清单。D，Poteto 开关。选完按空格。",
+      "explain": "答案是 A。计数和督促闩锁不持久化，重启就归零。清单从快照恢复，待办和开关从 PStack 的记录项恢复，所以 B、C、D 都会回来。"
+    },
+    {
+      "id": "s8-05",
+      "section": "s8",
+      "kind": "say",
+      "target": "#s8 .tbl-wrap",
+      "say": "用一条线串起这一课。TillDone 不碰 system prompt，规矩在触发时刻送到。PStack 每次请求都追加说明。subagent 让父上下文保持干净，但不省总花费，也带来盲区。状态都放在会话文件里，压缩碰不到。"
+    },
+    {
+      "id": "s8-06",
+      "section": "s8",
+      "kind": "say",
+      "target": "#s8 .related",
+      "say": "下一课讲 TillDone 的原生拆分。我们会看到，TillDone 只提供拆分的时机和账本，怎么拆由模型决定。刚才说的计数归零，在那里会派上用场。我们下一课见。"
+    }
+  ]
+}

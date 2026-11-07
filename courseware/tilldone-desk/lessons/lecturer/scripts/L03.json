@@ -1,0 +1,132 @@
+{
+  "lesson": "L03-what-enters-context.html",
+  "title": "什么进模型的上下文",
+  "steps": [
+    {
+      "id": "s0-01", "section": "s0", "kind": "say", "target": ".hero",
+      "say": "欢迎来到第三课。上一课我们看了两套四层，记住了一句话：第四层不占上下文。这一课把它讲具体。一句话预告：模型只看到上下文里的东西，所以放什么、什么时候放，就是规矩能不能起作用的关键。"
+    },
+    {
+      "id": "s0-02", "section": "s0", "kind": "say", "target": ".objectives",
+      "say": "学完这一课，你应该能说清四件事。第一，怎样判断一个字段该不该进上下文。第二，TillDone 和 PStack 各往上下文里放了什么。第三，哪些东西只给界面、不给模型。第四，提示词的三个时机，以及什么叫错误即提示词。"
+    },
+    {
+      "id": "s1-01", "section": "s1", "kind": "say", "target": "#s1 .callout.rule",
+      "say": "先讲第一个重点：第三层原则。结论是，上下文里每个字段都要有业务理由。检验标准只有一个问题：它帮模型做哪个决策？答不上来，就不进上下文。好比给新同事交接，只交他做决定用得上的东西，不把你的草稿纸也塞给他。"
+    },
+    {
+      "id": "s1-02", "section": "s1", "kind": "say", "target": "#s1",
+      "say": "TillDone 的业务语义其实很少，就四样：清单、门禁、拆分、督促。但每一样都必须让模型看见，否则规矩不起作用。模型不知道有门禁，就会一次次撞上去。所以少，但一样都不能缺。"
+    },
+    {
+      "id": "s2-01", "section": "s2", "kind": "say", "target": "#s2 .tbl-wrap",
+      "say": "这张表是原文的完整列表。前五行来自 TillDone：工具说明、清单变化、门禁拒绝理由、拆分提示、督促消息。后四行来自 PStack：一段追加的 system prompt、整份技能说明、它自己的待办清单、子 agent 的产出。"
+    },
+    {
+      "id": "s2-02", "section": "s2", "kind": "say", "target": "#s2 .callout.tip",
+      "say": "看表要盯住进入方式那一列。TillDone 的五行里，没有一行是 system prompt。它全靠工具声明、工具结果、工具错误和自定义消息。PStack 的第一行就是追加 system prompt。两种做法各有道理，下一课专门比较。"
+    },
+    {
+      "id": "s3-01", "section": "s3", "kind": "demo", "target": "#demo1",
+      "actions": [{"set": "#d1-poteto", "value": "false"}, {"click": "#d1-sc [data-sc=\"plain\"]"}, {"wait": 400}],
+      "say": "这个组装器显示一次请求里模型看到哪些块。先看普通请求，不开 Poteto Mode。一共 5 块，TillDone 贡献 2 块，就是工具声明和它自己的工具结果。它改 system prompt 的块数是 0。"
+    },
+    {
+      "id": "s3-02", "section": "s3", "kind": "demo", "target": "#demo1",
+      "actions": [{"set": "#d1-poteto", "value": "true"}, {"click": "#d1-sc [data-sc=\"plain\"]"}, {"wait": 400}],
+      "say": "现在勾上 Poteto Mode，同样是普通请求。变成 6 块，PStack 一下贡献了 3 块，而且改了 system prompt，追加了一段。TillDone 还是 2 块，还是 0 处改 system prompt。两个扩展的风格，一眼就能看出来。"
+    },
+    {
+      "id": "s3-03", "section": "s3", "kind": "demo", "target": "#demo1",
+      "actions": [{"set": "#d1-poteto", "value": "false"}, {"click": "#d1-sc [data-sc=\"hint\"]"}, {"wait": 400}],
+      "say": "关掉 Poteto，切到第 15 次工具调用。TillDone 变成 3 块，多出来的是结果末尾的一行拆分提示。注意右栏，spent 等于 15 这个计数，模型看不到。提示在工具调用时决定，等结果回来才追加，不多花一个 turn。"
+    },
+    {
+      "id": "s3-04", "section": "s3", "kind": "demo", "target": "#demo1",
+      "actions": [{"set": "#d1-poteto", "value": "true"}, {"click": "#d1-sc [data-sc=\"sub\"]"}, {"wait": 400}],
+      "say": "最后看调用 subagent，开着 Poteto。6 块里 PStack 占 4 块。关键在于，子 agent 只把最终结论送回父上下文。它内部走了多少步、试错了几次，父模型都看不到，全留在子进程里。"
+    },
+    {
+      "id": "s4-01", "section": "s4", "kind": "say", "target": "#s4 ul",
+      "say": "第二个重点：不进上下文的东西。结论是，只帮扩展或界面做决定的，不进上下文。原文列了五类：spent 和 nudged 这两个内部状态，桌面端的全部状态，每个任务的计数，子 agent 实时树，还有 API 凭据。"
+    },
+    {
+      "id": "s4-02", "section": "s4", "kind": "say", "target": "#s4 .callout.rule",
+      "say": "这就是界面通道和上下文通道分离。界面通道直接来自第三层的状态，不经过模型转述，也不占上下文。好比驾驶舱：仪表盘给人看，它不需要飞行员念出来，也不占飞行员的脑子。这正是上一课第四层的意思。"
+    },
+    {
+      "id": "s4-03", "section": "s4", "kind": "say", "target": "#s4 .callout.note",
+      "say": "课程这里补充了一个细节。spent 的连续值不进上下文，但它每到 15 的倍数，就生成一行提示，提示里带着当时的数字。所以模型只在 15、30、45 这几个点看到一个数。它拿到的是该考虑拆了这个结论，不是一个计数器。"
+    },
+    {
+      "id": "s4-04", "section": "s4", "kind": "proxy", "target": "#s4",
+      "say": "讲到这儿，你可能会担心：子 agent 的完整过程不进父上下文，那父模型怎么知道它做得对不对？我们请助教来说说。",
+      "question": "边牧里 subagent 只把最终文本送回父上下文，父模型看不到子 agent 的过程。那父模型怎么判断子 agent 做得对不对？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s5-01", "section": "s5", "kind": "say", "target": "#s5 .tbl-wrap",
+      "say": "TillDone 在三个时机把规矩送进上下文，从不改 system prompt。事前，工具说明每次请求都在，告诉模型规矩。事中，触发规矩时给出门禁理由和拆分提示。事后，run 结束时发督促，防止半途收工。"
+    },
+    {
+      "id": "s5-02", "section": "s5", "kind": "say", "target": "#s5 blockquote",
+      "say": "第三个重点：错误即提示词。门禁不在 system prompt 里提前写请先建清单。它等模型真的越过规矩，再用工具错误告诉它，下一步该调用什么。好比门口的保安，不贴满墙的规定，你走到门口，他才说请先登记，登记台在左边。"
+    },
+    {
+      "id": "s5-03", "section": "s5", "kind": "say", "target": "#s5 ol.steps",
+      "say": "门禁按顺序查三件事：清单是不是空的，是不是全部做完了，有没有进行中的任务。任何一项不满足就拦下，给出对应的理由。桌面副本只拦四个工具：bash、edit、write 和 subagent。读文件这类工具都放行。"
+    },
+    {
+      "id": "s5-04", "section": "s5", "kind": "proxy", "target": "#s5",
+      "say": "你可能会问，等模型撞上再纠正，不是白白浪费了一次调用吗？为什么不干脆提前写进 system prompt？我们请助教谈谈这个取舍。",
+      "question": "TillDone 用“错误即提示词”，等模型越过规矩再用工具错误纠正，而不是提前写进 system prompt。这样做的代价和好处各是什么？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s6-01", "section": "s6", "kind": "demo", "target": "#demo2",
+      "actions": [{"set": "#d2-tui", "value": "false"}, {"click": "#d2-acts [data-k=\"reset\"]"}, {"click": "#d2-acts [data-k=\"edit\"]"}, {"wait": 300}],
+      "say": "现在我们来当模型，目标是做成一次 edit。我先直接点 edit。已走 1 步，被拦 1 次。看日志里的拒绝理由：没有定义任务，先用 tilldone 的 new list 或 add。理由里直接写着下一步该调什么。"
+    },
+    {
+      "id": "s6-02", "section": "s6", "kind": "demo", "target": "#demo2",
+      "actions": [{"set": "#d2-tui", "value": "false"}, {"click": "#d2-acts [data-k=\"reset\"]"}, {"click": "#d2-acts [data-k=\"edit\"]"}, {"click": "#d2-acts [data-k=\"add\"]"}, {"click": "#d2-acts [data-k=\"edit\"]"}, {"click": "#d2-acts [data-k=\"start\"]"}, {"click": "#d2-acts [data-k=\"edit\"]"}, {"wait": 300}],
+      "say": "这次照着理由一步步做。edit 被拦，加两个任务。再试 edit，又被拦，这次理由变成没有进行中的任务。那就 start 一个。再 edit，通过了。已走 5 步，被拦 2 次，第 5 步做成了第一次 edit。最少只要 3 步：add、start、edit。"
+    },
+    {
+      "id": "s6-03", "section": "s6", "kind": "demo", "target": "#demo2",
+      "actions": [{"set": "#d2-tui", "value": "false"}, {"click": "#d2-acts [data-k=\"reset\"]"}, {"click": "#d2-acts [data-k=\"pstack_todo\"]"}, {"wait": 300}],
+      "say": "再比较两个版本的门禁。按桌面版规则，清单为空时点 PStack 的待办工具，被拦 0 次，直接放行。因为桌面版只拦四个会改东西的工具，别的扩展加的工具不受影响。"
+    },
+    {
+      "id": "s6-04", "section": "s6", "kind": "demo", "target": "#demo2",
+      "actions": [{"set": "#d2-tui", "value": "true"}, {"click": "#d2-acts [data-k=\"reset\"]"}, {"click": "#d2-acts [data-k=\"pstack_todo\"]"}, {"wait": 300}],
+      "say": "勾上 TUI 原版门禁，同样点一次。被拦 1 次。原版只放行 tilldone 和只读工具，PStack 这类别的扩展加的工具也会被拦。原文说，在一次 Blackjack 运行里，原版门禁就这样拦了它 5 次。"
+    },
+    {
+      "id": "s7-01", "section": "s7", "kind": "quiz", "target": "#s7 .quiz", "nth": 0,
+      "say": "做几道自测题。第一题，TillDone 用哪种方式把规矩送进上下文？A，改写 system prompt。B，在每条用户消息前加一段。C，工具说明、工具结果和自定义消息。D，写进会话文件的自定义条目。选完按空格。",
+      "explain": "答案是 C。TillDone 从不改 system prompt。事前靠工具说明，事中靠工具结果和工具错误，事后靠督促消息。A 最迷惑人，因为改 system prompt 的是 PStack，不是 TillDone。"
+    },
+    {
+      "id": "s7-02", "section": "s7", "kind": "quiz", "target": "#s7 .quiz", "nth": 1,
+      "say": "第二题，注意，选不进上下文的那一项。A，门禁拒绝理由。B，spent 计数本身。C，拆分提示。D，督促消息。选完按空格。",
+      "explain": "答案是 B。spent 只在扩展内部做决策，连续的计数不进上下文。C 容易混淆：拆分提示会进上下文，里面还带着当时的数字，但那只是每满 15 次的一个采样。"
+    },
+    {
+      "id": "s7-03", "section": "s7", "kind": "quiz", "target": "#s7 .quiz", "nth": 2,
+      "say": "第三题，清单为空时，模型直接调用 edit，会收到什么？A，什么都不收到，调用被静默丢弃。B，一条督促消息。C，一个确认弹窗。D，一个工具错误，里面写着先用 tilldone 的 new list 或 add。选完按空格。",
+      "explain": "答案是 D，这就是错误即提示词。我们在演示里亲眼看到了这条理由。A 最危险：如果静默丢弃，模型不知道哪里错了，只会反复重试。"
+    },
+    {
+      "id": "s7-04", "section": "s7", "kind": "quiz", "target": "#s7 .quiz", "nth": 3,
+      "say": "第四题，PStack 的整份 poteto mode 技能说明，怎样进入上下文？A，首条消息由 Pi 展开，之后留在历史里。B，每次请求追加到 system prompt。C，作为待办工具的结果。D，不进上下文。选完按空格。",
+      "explain": "答案是 A，整份技能说明只展开一次。B 最迷惑人：每次请求追加到 system prompt 的确实有，但那是另一段很短的说明，不是整份文档。"
+    },
+    {
+      "id": "s7-05", "section": "s7", "kind": "say", "target": "#s7 .tbl-wrap",
+      "say": "用一条线把这一课串起来。上下文里的每个字段，都要回答它帮模型做哪个决策。TillDone 只放五类东西，全部不碰 system prompt；PStack 放四类，第一类就是 system prompt。只给界面的东西走另一条通道。规矩在事前、事中、事后三个时机送达，越界时用错误告诉模型下一步。"
+    },
+    {
+      "id": "s7-06", "section": "s7", "kind": "say", "target": "#s7 .related",
+      "say": "下一课比较两种注入策略：TillDone 不碰 system prompt，PStack 直接追加。我们还会看到，会话被压缩之后，哪种做法的规矩还留得住。我们下一课见。"
+    }
+  ]
+}

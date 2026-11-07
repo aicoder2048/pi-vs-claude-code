@@ -1,0 +1,252 @@
+{
+  "lesson": "L01-overview.html",
+  "title": "边牧全景：羊、边牧与双循环",
+  "steps": [
+    {
+      "id": "s0-01",
+      "section": "s0",
+      "kind": "say",
+      "target": ".hero",
+      "say": "欢迎来到边牧结构精读的第一课。边牧是一个桌面应用，它让编码 agent 先列清单再动手，没做完不许停。这一课先建立全景：谁在哪个进程里，谁管什么，以及停没停由什么决定。"
+    },
+    {
+      "id": "s0-02",
+      "section": "s0",
+      "kind": "say",
+      "target": ".objectives",
+      "say": "学完这一课，你应该能说清四件事。第一，边牧放羊的比喻里，谁是谁。第二，TillDone 和 PStack 各管什么。第三，边牧的进程结构，哪个进程不受 TillDone 管。第四，为什么桌面端只把 agent settled 当作空闲。"
+    },
+    {
+      "id": "s1-01",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .grid-3",
+      "say": "先讲第一个重点，这个比喻。羊是任务，清单里的每一项工作。边牧是装了 TillDone 的 AI，它负责赶羊。牧羊人是你，也就是用户。你指方向，还可以指着一只羊，让边牧把它拆小。"
+    },
+    {
+      "id": "s1-02",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .callout.rule",
+      "say": "口号是：羊不进圈，边牧不歇。项目说这是唯一认可的映射，后面每一课都会用到它。所以记住一点：边牧不是用户，也不是任务，它是那个被规矩约束着干活的 AI。"
+    },
+    {
+      "id": "s2-01",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .vs",
+      "say": "第二个重点：两个扩展，两种约束力。TillDone 立规矩。先列清单、认领一个任务，才许动手，这是门禁。清单没做完，run 结束时催一次，这是督促。这些是硬约束，模型绕不过去。"
+    },
+    {
+      "id": "s2-02",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .vs",
+      "say": "PStack 给做法：Playbook、原则、subagent 分派、按角色选模型。它是可选的，加了环境变量才加载。它是软约束，只靠提示词引导，模型不照做，也没有东西拦着它。"
+    },
+    {
+      "id": "s2-03",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .callout.rule",
+      "say": "这句话是整门课的核心句。TillDone 管做什么、做完没，用硬约束守住。PStack 管怎么做，只靠提示词引导。打个比方，TillDone 像考勤和验收，PStack 像操作手册。"
+    },
+    {
+      "id": "s2-04",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .callout.warn",
+      "say": "这里有个常见误解：TillDone 是大脑，管拆任务；PStack 是手脚，管执行。原文说这只对一半。TillDone 自己不拆任务，拆不拆、怎么拆，是模型决定的。第六课会展开。"
+    },
+    {
+      "id": "s3-01",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 pre",
+      "say": "再看进程。边牧不把 Pi 嵌进自己的进程。它用 RPC 模式起一个 Pi 子进程，两边用 JSONL 一行一行收发命令和事件。命令行里有个 no extensions 参数，所以子进程里只有这两个扩展。"
+    },
+    {
+      "id": "s3-02",
+      "section": "s3",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#demo1 [data-q=\"rules\"]"
+        },
+        {
+          "wait": 500
+        }
+      ],
+      "say": "我点 TillDone 的规矩在哪执行。请看高亮的地方：规矩在 Pi 子进程里执行。模型每调用一次工具，都要先过 TillDone 的钩子。桌面端只把结果画出来，从不重新执行规矩。"
+    },
+    {
+      "id": "s3-03",
+      "section": "s3",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#demo1 [data-q=\"free\"]"
+        },
+        {
+          "wait": 500
+        }
+      ],
+      "say": "再点哪里不受 TillDone 管。这次亮了三处：subagent 子进程，和桌面端的两层。桌面端只画结果，不调用模型，本来不需要管。真正干活又不受管的，只有 subagent。它没有门禁，也不会被督促。"
+    },
+    {
+      "id": "s3-04",
+      "section": "s3",
+      "kind": "proxy",
+      "target": "#s3",
+      "say": "讲到这儿，你可能会问：既然 subagent 不受管，为什么不让它也加载 TillDone？我们请助教来说说。",
+      "question": "边牧的 subagent 子进程为什么不加载 TillDone？这样有什么好处和风险？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s4-01",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 .grid-2",
+      "say": "第三个重点：Pi 的双循环。外层是 settle 外循环，内层是 run 内循环。一个 run 里反复执行 turn，一个 turn 就是一次 LLM 请求，加上它的工具调用。run 结束后，如果还有排队的消息，外循环就再起一个 run。"
+    },
+    {
+      "id": "s4-02",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 ul",
+      "say": "数量关系记几条。用户一句话，就是一次 settle。通常只有一个 run，被督促时有两个。督促每条用户消息最多一次，所以你不插话时，run 不超过两个。中途插话也算一条用户消息，督促会重新可用。"
+    },
+    {
+      "id": "s4-03",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 .callout.rule",
+      "say": "所以桌面端只认 agent settled 才算空闲。agent end 只说明一个 run 结束了。督促可能马上让外循环再转一圈。好比学生交卷，老师翻一眼说还有题没做，又把卷子递回去，考试其实没结束。"
+    },
+    {
+      "id": "s5-01",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "set": "#d2-end",
+          "value": "false"
+        },
+        {
+          "click": "#d2-sc [data-sc=\"nudge\"]"
+        },
+        {
+          "click": "#d2-all"
+        },
+        {
+          "wait": 500
+        }
+      ],
+      "say": "下面的播放器按顺序列出 RPC 线上的事件。我选 run 1 没做完、督促后做完，按正确做法播完。看读数：12 个事件，2 个 run，督促 1 次。界面一次也没有误报空闲。"
+    },
+    {
+      "id": "s5-02",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "set": "#d2-end",
+          "value": "true"
+        },
+        {
+          "click": "#d2-sc [data-sc=\"nudge\"]"
+        },
+        {
+          "click": "#d2-all"
+        },
+        {
+          "wait": 500
+        }
+      ],
+      "say": "现在勾上错误做法，把 agent end 当空闲，同一个场景再播一遍。读数变了：界面误报空闲 1 次。就在 run 1 结束那一刻。其实督促马上起了 run 2，模型还在干活，界面却说它闲了。"
+    },
+    {
+      "id": "s5-03",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "set": "#d2-end",
+          "value": "false"
+        },
+        {
+          "click": "#d2-sc [data-sc=\"stuck\"]"
+        },
+        {
+          "click": "#d2-all"
+        },
+        {
+          "wait": 500
+        }
+      ],
+      "say": "最后一个场景：督促后仍没做完。这次 11 个事件，也是 2 个 run，督促 1 次。但清单还剩 1 个未完成任务。督促闩锁已经用掉，不会再催，Pi 停稳，控制权交还给你。"
+    },
+    {
+      "id": "s5-04",
+      "section": "s5",
+      "kind": "proxy",
+      "target": "#s5",
+      "say": "用过 Claude Code 的同学可能会联想到 Stop hook，它也能在 agent 想停的时候拦一下。两者像不像？我们请助教比较一下。",
+      "question": "边牧的督促和 Claude Code 的 Stop hook 有什么异同？请用 3 句话、120 字以内回答，先给结论，说明哪些是课程资料之外的补充，不要列表和表格。"
+    },
+    {
+      "id": "s6-01",
+      "section": "s6",
+      "kind": "quiz",
+      "target": "#s6 .quiz",
+      "nth": 0,
+      "say": "做几道自测题。第一题，在边牧的比喻里，牧羊人指什么？A，TillDone 扩展。B，PStack 扩展。C，用户。D，Pi 运行时。选完按空格。",
+      "explain": "答案是 C，用户。任务是羊，装了 TillDone 的 AI 是边牧，用户是牧羊人。容易选错的是 A：TillDone 是规矩本身，装了它的 AI 才是边牧。"
+    },
+    {
+      "id": "s6-02",
+      "section": "s6",
+      "kind": "quiz",
+      "target": "#s6 .quiz",
+      "nth": 1,
+      "say": "第二题，哪一项最准确地描述了两个扩展的分工？A，TillDone 拆任务，PStack 执行任务。B，TillDone 管做什么、做完没，用硬约束；PStack 管怎么做，靠提示词。C，两者都用门禁约束模型。D，PStack 驱动任务面板，TillDone 驱动 subagent。选完按空格。",
+      "explain": "答案是 B，这就是本课的核心句。最迷惑人的是 A，它就是那个常见误解。TillDone 自己不拆任务，拆的决定由模型做出。"
+    },
+    {
+      "id": "s6-03",
+      "section": "s6",
+      "kind": "quiz",
+      "target": "#s6 .quiz",
+      "nth": 2,
+      "say": "第三题，桌面端为什么不把 agent end 当作空闲？A，agent end 事件经常丢失。B，agent end 只在出错时发出。C，Pi 不会发出 agent end。D，督促可能让 settle 外循环再起一个 run。选完按空格。",
+      "explain": "答案是 D。run 1 结束时还有未完成任务，督促消息进入排队，外循环再起 run 2。前三项都不对：每个 run 结束都会发出 agent end，它只是不代表停稳。只有 agent settled 才表示真正停下。"
+    },
+    {
+      "id": "s6-04",
+      "section": "s6",
+      "kind": "quiz",
+      "target": "#s6 .quiz",
+      "nth": 3,
+      "say": "第四题，哪个进程不加载 TillDone？A，subagent 子进程。B，RPC 模式的 Pi 子进程。C，两者都加载。D，两者都不加载。选完按空格。",
+      "explain": "答案是 A。subagent 子进程的命令行里没有加载 TillDone，所以子 agent 不受门禁和督促管。RPC 模式的 Pi 子进程正是规矩执行的地方，所以 B 不对。"
+    },
+    {
+      "id": "s6-05",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 .tbl-wrap",
+      "say": "用一条线把这一课串起来。羊不进圈，边牧不歇，这是目标。TillDone 用硬约束守住做什么、做完没，PStack 用提示词教怎么做。规矩只在 Pi 子进程里执行。而停没停，只看 agent settled。"
+    },
+    {
+      "id": "s6-06",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 .related",
+      "say": "下一课讲两套四层叠在一起。我们会看到，边牧自己有四层，TillDone 扩展也有四层，两套怎样咬合，为什么桌面端只读结果，不亲自执行规矩。我们下一课见。"
+    }
+  ]
+}

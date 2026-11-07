@@ -1,0 +1,374 @@
+{
+  "lesson": "L06-pstack-meshing.html",
+  "title": "PStack 与 TillDone 的咬合",
+  "steps": [
+    {
+      "id": "s0-01",
+      "section": "s0",
+      "kind": "say",
+      "target": ".hero",
+      "say": "欢迎来到第六课。上一课讲了 TillDone 自己怎样拆任务。这一课把 PStack 加进来。Poteto Mode 下，模型同时维护两份清单，还要穿过两道门。我们逐步看它们怎样咬合。"
+    },
+    {
+      "id": "s0-02",
+      "section": "s0",
+      "kind": "say",
+      "target": ".objectives",
+      "say": "学完这一课，你应该能说清五件事。PStack 在 Pi 里注册了什么。两份清单各放什么，哪一份才有约束力。一次 Poteto 会话的六步咬合。计费门怎样判。以及代码里真正的三个接缝。"
+    },
+    {
+      "id": "s1-01",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .tbl-wrap",
+      "say": "先看 PStack 带进来什么。它是一个 npm 包。它在 Pi 里注册两个命令、四个钩子、四个工具，全在一个文件里。最要紧的是两个工具。pstack todo 管一份流程清单。subagent 负责分派子 agent。"
+    },
+    {
+      "id": "s1-02",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .callout.warn",
+      "say": "注意子 agent 的命令行。它是一个新的 Pi 进程，不加载 TillDone。所以子 agent 里没有门禁，也没有督促。这和第一课讲的边界是同一件事。第七课会讲它带来的坑。"
+    },
+    {
+      "id": "s1-03",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .callout.note",
+      "say": "边牧怎样打开 Poteto Mode？桌面端改写会话的第一条消息，让它以 skill 开头。PStack 的 input 钩子看到它，就开启 mode。为什么不用现成的命令？原文说，那条命令在 RPC 下会报错。这是 PStack 的 bug。"
+    },
+    {
+      "id": "s2-01",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .tbl-wrap",
+      "say": "第一个重点：两份清单的分工。tilldone 清单放工作项，也就是羊。pstack todo 放流程步骤，是 playbook 的步骤逐字抄进来。打个比方，tilldone 是要交的作业，pstack todo 是做作业的方法步骤。"
+    },
+    {
+      "id": "s2-02",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .tbl-wrap",
+      "say": "关键差别在约束力。只有 tilldone 驱动任务面板、门禁和督促，是硬约束。pstack todo 只有模型自己看得见，没有门禁也没有督促，是软约束。这正是第一课那句核心句，落到了两份清单上。"
+    },
+    {
+      "id": "s2-03",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .callout.warn",
+      "say": "但有个关键限制。这条分工只写在 README 里。TillDone 的工具说明和 PStack 的技能文档，都没提到另一份清单。所以模型看不到这条分工，得自己摸索。"
+    },
+    {
+      "id": "s2-04",
+      "section": "s2",
+      "kind": "proxy",
+      "target": "#s2",
+      "say": "听到这里，你可能会问：既然分工这么重要，为什么不直接写进模型能看到的提示词里？我们请助教说说。",
+      "question": "两份清单的分工只写在 README 里，为什么不直接写进 TillDone 的工具说明或 PStack 的技能文档？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s3-01",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3",
+      "say": "第二个重点：两道门。边牧的 tool call 钩子先查计费门，再查门禁。计费门只看 subagent 和 pstack config。门禁只看四个会改东西的工具。下面的播放器把一次 Poteto 会话拆成六步。"
+    },
+    {
+      "id": "s3-02",
+      "section": "s3",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "set": "#d1-gate",
+          "value": "desk"
+        },
+        {
+          "click": "#d1-reset"
+        },
+        {
+          "click": "#d1-next"
+        },
+        {
+          "click": "#d1-next"
+        },
+        {
+          "click": "#d1-next"
+        },
+        {
+          "click": "#d1-next"
+        },
+        {
+          "click": "#d1-next"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "我用桌面反转门禁，一步步走到第 5 步。看调用框：任务进行中，模型调 subagent 做并行评审。它先过计费门，role 映射到继承父模型，放行。再过门禁，有进行中的任务，放行。到这里共 9 次调用，一次没被拦。"
+    },
+    {
+      "id": "s3-03",
+      "section": "s3",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "set": "#d1-gate",
+          "value": "desk"
+        },
+        {
+          "click": "#d1-all"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "直接播完。六步走完，共 13 次工具调用，门禁一次也没拦。最后两份清单都做完了，tilldone 没有未完成项，所以不督促。记住，督促只看 tilldone 这一份。"
+    },
+    {
+      "id": "s3-04",
+      "section": "s3",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "set": "#d1-gate",
+          "value": "tui"
+        },
+        {
+          "click": "#d1-all"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "现在切到 TUI 原版门禁，再播完。门禁拦了 3 次。原版不认识 pstack todo，清单空着时拦它，工作项全做完后又拦它。最后那次没法补救：验证步骤一直没勾，可 tilldone 已经全完成，督促也不管。"
+    },
+    {
+      "id": "s3-05",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 .callout.tip",
+      "say": "所以边牧的桌面副本把门禁反转了：只拦四个会改东西的工具，别的扩展加的工具直接放行。第 5 步的 subagent 要过两道门。计费门是硬规则，有没有任务都生效。门禁要求有进行中的任务。"
+    },
+    {
+      "id": "s4-01",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 ul",
+      "say": "再看计费门。它拒绝任何会落到 anthropic 模型的子 agent 调用。原因是用户的 Anthropic API 按量计费，没有充值。规则有两条。某一项写了显式 model，就只看它。没写，就按 role 查模型池，池里每个都算。"
+    },
+    {
+      "id": "s4-02",
+      "section": "s4",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "set": "#d2-mode",
+          "value": "single"
+        },
+        {
+          "set": "#d2-ents select[data-i=\"0\"][data-k=\"model\"]",
+          "value": ""
+        },
+        {
+          "set": "#d2-ents select[data-i=\"0\"][data-k=\"role\"]",
+          "value": "swarm workers"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "我拼一个单个的 subagent 调用。不写 model，role 选 swarm workers。它映射到继承父模型。判定放行，接着交给门禁去查。父会话的模型，在边牧启动前已经检查过了。"
+    },
+    {
+      "id": "s4-03",
+      "section": "s4",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "set": "#d2-mode",
+          "value": "single"
+        },
+        {
+          "set": "#d2-ents select[data-i=\"0\"][data-k=\"model\"]",
+          "value": ""
+        },
+        {
+          "set": "#d2-ents select[data-i=\"0\"][data-k=\"role\"]",
+          "value": "arena runners"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "把 role 换成 arena runners。它的模型池里有两个：一个 openai codex，一个 anthropic。只要混着一个 anthropic，整次调用就被拦下，一个子 agent 都不启动。模型会读到一段拒绝理由，告诉它改用什么。"
+    },
+    {
+      "id": "s4-04",
+      "section": "s4",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "set": "#d2-mode",
+          "value": "tasks"
+        },
+        {
+          "set": "#d2-ents select[data-i=\"0\"][data-k=\"model\"]",
+          "value": "openai-codex/gpt-6.1-sol"
+        },
+        {
+          "set": "#d2-ents select[data-i=\"0\"][data-k=\"role\"]",
+          "value": "judgment and prose"
+        },
+        {
+          "set": "#d2-ents select[data-i=\"1\"][data-k=\"model\"]",
+          "value": ""
+        },
+        {
+          "set": "#d2-ents select[data-i=\"1\"][data-k=\"role\"]",
+          "value": "swarm workers"
+        },
+        {
+          "set": "#d2-ents select[data-i=\"2\"][data-k=\"model\"]",
+          "value": ""
+        },
+        {
+          "set": "#d2-ents select[data-i=\"2\"][data-k=\"role\"]",
+          "value": ""
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "再试并行 tasks。第一项的 role 是 judgment and prose，它映射到 anthropic。但我给这一项写了显式 model，是 openai codex。第二项继承父模型。判定放行。因为显式 model 优先，role 根本不查。"
+    },
+    {
+      "id": "s4-05",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 .callout.warn",
+      "say": "计费门只管第一层。子 agent 不加载 TillDone，所以它再派出去的子 agent，不经过计费门。课程这里还补充了一个观察。计费门查整个模型池，可 PStack 每个 task 只取池里的一个。所以计费门有时比实际更严。"
+    },
+    {
+      "id": "s4-06",
+      "section": "s4",
+      "kind": "proxy",
+      "target": "#s4",
+      "say": "既然计费门只管第一层，自然会问：第二层要是选了 anthropic 模型，怎么办？我们请助教来答。",
+      "question": "边牧的计费门只覆盖第一层子 agent。如果子 agent 再派子 agent 并选了 anthropic 模型，会怎样？有什么办法挡住？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s5-01",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 .steps",
+      "say": "TillDone 和 PStack 在代码里只有三处结合。一，反转的门禁，让 PStack 的工具能通过。二，计费门，检查子 agent 的模型。三，子 agent 进度显示，只给界面看。除此之外，两边互不认识。"
+    },
+    {
+      "id": "s5-02",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo3",
+      "actions": [
+        {
+          "click": "#demo3 [data-s=\"1\"]"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "我点反转门禁。高亮的是 TillDone 那一侧。会改东西的只有四个工具：bash、edit、write、subagent。pstack todo、pstack config、read 都直接放行。subagent 还要有进行中的任务。"
+    },
+    {
+      "id": "s5-03",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo3",
+      "actions": [
+        {
+          "click": "#demo3 [data-s=\"none\"]"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "say": "再点没有接缝的地方。亮的是两份清单中间那条虚线。它们之间没有任何代码连接。原文的证据是一次搜索。TillDone 的代码只在计费部分提到 PStack。PStack 的技能文档，完全没提 TillDone。"
+    },
+    {
+      "id": "s6-01",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 .vs",
+      "say": "第三个重点：大脑和手脚的说法只对一半。讨论稿说 TillDone 是大脑，管拆任务；PStack 是手脚，管执行。可 TillDone 自己不拆任务，它是账本、闸门加督促。PStack 也不只是手脚，它带着自己的计划清单，还会把工作分派出去。"
+    },
+    {
+      "id": "s6-02",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 .callout.rule",
+      "say": "所以原文的结论还是那句核心句：TillDone 管做什么、做完没，用硬约束守住；PStack 管怎么做，只靠提示词引导。两份清单的分工模型看不到，现在的配合是模型每次自己摸索出来的。"
+    },
+    {
+      "id": "s6-03",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 .callout.warn",
+      "say": "注意这个限定语。“靠模型摸索”是推断。依据是那次搜索结果，没有对模型行为做过实验。所以我们说它可能不稳定，不说它一定不稳定。"
+    },
+    {
+      "id": "s7-01",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 0,
+      "say": "做几道自测题。第一题，Poteto Mode 下，哪份清单驱动任务面板、门禁和督促？A，pstack todo。B，两份都驱动。C，tilldone。D，都不驱动，靠 system prompt。选完按空格。",
+      "explain": "答案是 C，tilldone。README 原话就是只有 tilldone 驱动面板、门禁和督促。容易选 B：pstack todo 虽然也是清单，但它只有提示词约束。"
+    },
+    {
+      "id": "s7-02",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 1,
+      "say": "第二题。在 TUI 原版门禁下，会话开头的 pstack todo set 会怎样？A，正常通过。B，被拦下，因为原版只放行 tilldone 和只读工具。C，被计费门拦下。D，触发督促。选完按空格。",
+      "explain": "答案是 B。原版不认识别的扩展加的工具，清单为空时就拦它。容易选 C。可计费门根本不查 pstack todo，它只看 subagent 和 pstack config。"
+    },
+    {
+      "id": "s7-03",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 2,
+      "say": "第三题，一次并行调用。task A 写了显式 model openai codex。它的 role 却映射到 anthropic。task B 没写 model，继承父模型。计费门怎样判？A，因 A 的 role 拒绝。B，因 B 继承父模型拒绝。C，只拒绝 task A。D，放行。选完按空格。",
+      "explain": "答案是 D，放行。A 写了显式 model，就只看它，是 openai codex。B 继承父模型，也不是 anthropic。最迷惑的是 A 选项：显式 model 优先，role 不再查。"
+    },
+    {
+      "id": "s7-04",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 3,
+      "say": "第四题，注意是选不是接缝的那一项。A，TillDone 的工具说明里写明两份清单的分工。B，反转的门禁。C，计费门。D，桌面解析子 agent 进度。选完按空格。",
+      "explain": "答案是 A。两份清单的分工只写在 README 里，TillDone 的工具说明没提 pstack todo。B、C、D 正是原文列出的三个接缝。"
+    },
+    {
+      "id": "s7-05",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .tbl-wrap",
+      "say": "用一条线串起这一课。PStack 带来一份流程清单和子 agent 分派。两份清单里，只有 tilldone 有约束力。每次工具调用要先过计费门、再过门禁。两边在代码里只有三个接缝，分工靠模型自己摸索。"
+    },
+    {
+      "id": "s7-06",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .related",
+      "say": "下一课是最后一课：坑、开放问题与全课复盘。这一课埋了几个伏笔：子 agent 不受管，分工模型看不到。下一课我们看，它们在实际运行中变成了什么样的坑。我们下一课见。"
+    }
+  ]
+}
