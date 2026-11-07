@@ -1,0 +1,326 @@
+{
+  "lesson": "L03-sdk-vs-rpc.html",
+  "title": "Pi SDK 接入：每手一个 Session",
+  "steps": [
+    {
+      "id": "s0-01",
+      "section": "s0",
+      "kind": "say",
+      "target": ".hero",
+      "say": "欢迎来到第三课，Pi SDK 接入。上一课我们看了业务层的端口和不变量。这一课转到 L1 这一侧。一句话预告：弈境不启动 pi 子进程，而是把 Pi 当成引擎嵌进主进程，每手棋创建一个全新的内存 Session。"
+    },
+    {
+      "id": "s0-02",
+      "section": "s0",
+      "kind": "say",
+      "target": ".objectives",
+      "say": "学完这一课，你应该能说清五件事。驱动 Pi 有哪四种方式。RPC 和 SDK 怎么选，SDK 有哪三项代价。PiDriver 创建 Session 的五步。每个屏蔽项挡住了什么。还有，弈境怎样不用 before agent start，就切换了系统提示词。"
+    },
+    {
+      "id": "s1-01",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .tbl-wrap",
+      "say": "程序驱动 Pi 有四种方式。print 跑一次打印回答，JSON 事件流跑一次逐行输出事件，这两种是一次性的，适合脚本。能撑起交互式桌面应用的，只有 RPC 子进程和 TypeScript SDK 两种。"
+    },
+    {
+      "id": "s1-02",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .codebox",
+      "say": "同一个仓库里，两种选择都有，正好可以对照。边牧用 spawn 启动一个 pi 子进程，走 RPC 模式。弈境直接调用 createAgentSession，把 Pi 建在自己的进程里，会话管理器还是内存版的。"
+    },
+    {
+      "id": "s2-01",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 blockquote.src",
+      "say": "第一个重点：选型原则。白皮书一句话说清：要复用一个现成的 Pi 体验，就用 RPC；要把 Pi 当成引擎，嵌进领域应用，就用 SDK。打个比方，RPC 是请一位外包师傅上门，SDK 是把发动机装进自己的车里。"
+    },
+    {
+      "id": "s2-02",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .vs",
+      "say": "两边的差别很具体。边牧原样加载现成扩展，一个长寿命子进程，业务状态只能从事件流推断，好处是进程隔离。弈境用内联工厂，每手一个内存 Session，工具里同步调用 port.commit，界面状态全部来自 GameState。"
+    },
+    {
+      "id": "s2-03",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 ol",
+      "say": "弈境需要五项能力，只有 SDK 能干净地给。每手一个全新 Session。系统提示词按局面切换。只开放领域工具。同步、权威的提交，错误当场返回模型。还有精细的循环控制，数请求、提交即停。"
+    },
+    {
+      "id": "s2-04",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .callout.warn",
+      "say": "当然 SDK 有代价，原文列了三项。一，和应用同一个进程，失去进程级的故障隔离。二，Pi 的版本锁进应用依赖，升级要跟着应用发版。三，内存 Session 不落盘，失败回合的完整过程事后找不回来。",
+      "nth": 0
+    },
+    {
+      "id": "s2-05",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .callout.note",
+      "say": "这也解释了上一课提到的分层差异。用 RPC 时，Pi 是一个黑盒进程，边牧把它整体算作 L1。用 SDK 时，Pi 的扩展面直接向宿主敞开，所以弈境把扩展算 L2，PiDriver 算 L1。层的边界跟着进程边界走。"
+    },
+    {
+      "id": "s3-01",
+      "section": "s3",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#demo1 [data-app=five]"
+        },
+        {
+          "click": "#demo1 [data-mode=sdk]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "来给需求打分。先选弈境，配进程内 SDK。5 项需求中 5 项干净满足，0 项有代价。这是仓库里的实际选择，需求和接入方式对上了。"
+    },
+    {
+      "id": "s3-02",
+      "section": "s3",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#demo1 [data-app=five]"
+        },
+        {
+          "click": "#demo1 [data-mode=rpc]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "同样是弈境，换成 RPC 子进程。5 项需求里 0 项干净满足，5 项都有代价。比如每手一个新 Session，就得每手重启进程。同步提交，也变成了跨进程的请求和应答。"
+    },
+    {
+      "id": "s3-03",
+      "section": "s3",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#demo1 [data-app=till]"
+        },
+        {
+          "click": "#demo1 [data-mode=sdk]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "反过来看边牧。边牧配 SDK，只有 1 项干净满足，2 项有代价，还有 2 项做不到：Pi 崩溃不拖垮界面，和直接用本机装好的 pi。"
+    },
+    {
+      "id": "s3-04",
+      "section": "s3",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#demo1 [data-app=till]"
+        },
+        {
+          "click": "#demo1 [data-mode=rpc]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "边牧换回 RPC，5 项全部干净满足。所以结论是：选型取决于需求，不是哪种方式更先进。课程也说明了，这里的逐项打分有一部分是作者的推断，原文没有逐项打分。"
+    },
+    {
+      "id": "s4-01",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 ol.steps",
+      "say": "第二个重点：PiDriver 每手做的五步。一，设置，关掉压缩，重试最多一次，关掉遥测。二，资源加载器，设好屏蔽项，只给一个内联扩展工厂。三，reload 并检查扩展有没有加载错误。四，创建 Session，做工具隔离校验。五，用完 dispose。"
+    },
+    {
+      "id": "s4-02",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 .callout.rule",
+      "say": "记住这一节的核心句：每手一个内存 Session，只调一次 prompt，用完就 dispose。Pi 的会话从来不是状态的权威。真正的权威还是上一课讲的业务层，Pi 每手只是借来用一次。"
+    },
+    {
+      "id": "s4-03",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 .callout.note",
+      "say": "课程补充了一个问题：既然配置里已经有工具白名单，为什么还要运行时校验？因为配置可能写错。PiDriver 再查一遍：活跃工具必须都在白名单里，而且必须有 place stone。不满足，回合在发出任何请求之前就失败。"
+    },
+    {
+      "id": "s4-04",
+      "section": "s4",
+      "kind": "proxy",
+      "target": "#s4",
+      "say": "讲到这儿，你可能会想：每手都新建一个 Session，会不会很慢、很浪费？我们请助教说说。",
+      "question": "弈境每手棋都新建并销毁一个 Pi 内存 Session，这样做的开销大吗？为什么作者认为值得？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s5-01",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 .tbl-wrap",
+      "say": "Pi 默认是一个编码助手，会自动读进很多东西。弈境用这几项设置把它们挡在外面。自定义提示词替换默认前言。清空追加文件。不读 AGENTS.md 这类上下文文件。不列技能。不加载用户扩展。最后，只留领域工具。"
+    },
+    {
+      "id": "s5-02",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#d2-reset"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "这是屏蔽项开关台。我先恢复弈境的真实配置。看状态栏：混入 0 处，编码工具无，工具隔离校验通过。系统提示词只剩弈境自己的内容和一个 cwd 段，工具只有 8 个领域工具。"
+    },
+    {
+      "id": "s5-03",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#d2-reset"
+        },
+        {
+          "set": "#d2-sw [data-sw=builtin]",
+          "value": "false"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "现在只取消 noTools builtin。你可能以为 read 和 bash 会回来。没有。因为 tools 白名单还在，Pi 只启用名单里的工具。"
+    },
+    {
+      "id": "s5-04",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#d2-reset"
+        },
+        {
+          "set": "#d2-sw [data-sw=builtin]",
+          "value": "false"
+        },
+        {
+          "set": "#d2-sw [data-sw=allow]",
+          "value": "false"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "再把白名单也取消。这下编码工具回来了，模型可以按路径读文件、执行命令。工具隔离校验失败，PiDriver 会抛错，本回合一个请求都不发。两项配置加一道校验，三层保险。"
+    },
+    {
+      "id": "s5-05",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#d2-reset"
+        },
+        {
+          "set": "#d2-sw [data-sw=ctx]",
+          "value": "false"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "恢复，然后只取消 noContextFiles。系统提示词里混进了 project context 段。用户目录里的编码规范，就会混进棋手的提示词。对一个下棋的模型来说，这全是噪声。"
+    },
+    {
+      "id": "s5-06",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 .callout.warn",
+      "say": "不过有一段无论怎么设置都挡不住，就是 cwd 段。弈境的 cwd 是 userData 目录，所以本机路径会进入系统提示词。白皮书自己把它列为风险：和任务无关，还暴露本机路径。",
+      "nth": 0
+    },
+    {
+      "id": "s6-01",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 ol",
+      "say": "第三个重点：提示词怎样按局面切换。弈境不在会话里换提示词，也不用 before agent start。它每手先按局面选一个剧本，比如开局、中盘、残局、读秒紧张。再把固定的棋手角色和剧本全文拼成系统提示词。下一手重新选、重新拼。"
+    },
+    {
+      "id": "s6-02",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 .callout.note",
+      "say": "这个做法有个代价，原文也接受了。回合中途，局面可能变了，比如时间突然变紧，但系统提示词里的剧本不会跟着换。证据里记下的是回合开始时注入的剧本。模型需要的话，可以用 read knowledge 读新剧本。"
+    },
+    {
+      "id": "s7-01",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 0,
+      "say": "来做自测。第一题：下面哪项需求最能说明弈境为什么不用 RPC？A，需要显示 Canvas 棋盘。B，需要背景音乐。C，place stone 要在同一进程里同步调用 port.commit，当场完成权威校验。D，需要按量计费的模型。选完按空格。",
+      "explain": "答案是 C。界面需求两种方式都能做，A 和 B 说明不了什么。同步、权威的提交是 SDK 独有的，经过 RPC 就要变成跨进程的请求和应答。"
+    },
+    {
+      "id": "s7-02",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 1,
+      "say": "第二题：只把 noTools builtin 去掉，保留 tools 白名单。read 和 bash 会出现吗？A，不会，tools 列表是白名单，只启用匹配的工具。B，会，内置工具总是启用。C，会，但只有 read。D，Pi 会报错退出。选完按空格。",
+      "explain": "答案是 A。刚才开关台上看到了，白名单还在，编码工具就回不来。noTools 是第二道保险，工具隔离校验是第三道。"
+    },
+    {
+      "id": "s7-03",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 2,
+      "say": "第三题：弈境怎样在一局棋里切换系统提示词？A，在 before agent start 里改写。B，在 context 钩子里替换第一条消息。C，用斜杠命令加载剧本。D，每手新建 Session，用新选出的剧本重新装配。选完按空格。",
+      "explain": "答案是 D。弈境没有在会话里切换，也没有用 before agent start。每手一个 Session，每个 Session 一份按局面装配的提示词。A 是很多 Pi 扩展的常见做法，但弈境刻意不用。"
+    },
+    {
+      "id": "s7-04",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 3,
+      "say": "最后一题：下面哪一项是 SDK 方案的代价，而不是 RPC 方案的代价？A，扩展的 TUI 绘制代码在桌面上失效。B，失去进程级的故障隔离，Pi 版本锁进应用依赖。C，业务状态只能从事件流推断。D，新会话要重启子进程。选完按空格。",
+      "explain": "答案是 B。其余三项都是 RPC 方案的特点，正是边牧那一栏写的。SDK 的三项代价是：没有进程隔离，Pi 版本随应用发版，内存 Session 不落盘。"
+    },
+    {
+      "id": "s7-05",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .tbl-wrap",
+      "say": "我们收个尾。这一课的主线是：要把 Pi 当引擎，就用 SDK。弈境每手建一个内存 Session，用屏蔽项和白名单把它收窄成只会下棋的引擎，用完就扔。提示词的切换，也靠每手重建来实现。"
+    },
+    {
+      "id": "s7-06",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .related",
+      "say": "下一课 L04，我们进入这个 Session 内部，看 Pi 的双循环有哪些接入点，以及弈境怎样做到提交即停。这一课就到这里，有问题随时问右边的助教。"
+    }
+  ]
+}

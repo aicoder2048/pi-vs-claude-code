@@ -1,0 +1,18 @@
+{
+  "_说明": "讲稿里的缩写和长驼峰名的读法。字母缩写用空格隔开（不用顿号）。改了重新跑 lecture-audio。",
+  "RPC": "R P C",
+  "SDK": "S D K",
+  "IPC": "I P C",
+  "TUI": "T U I",
+  "LLM": "L L M",
+  "cwd": "C W D",
+  "SKILL": "skill",
+  "pstack": "P stack",
+  "needsReview": "needs review",
+  "modelTurn": "model turn",
+  "candidateReview": "candidate review",
+  "acknowledgeRisk": "acknowledge risk",
+  "acknowledgeMissedWin": "acknowledge missed win",
+  "declinedProvenWin": "declined proven win",
+  "unavoidableLossInOne": "unavoidable loss in one"
+}

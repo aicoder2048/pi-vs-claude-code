@@ -1,0 +1,346 @@
+{
+  "lesson": "L02-ports-invariants.html",
+  "title": "端口、单写者与 revision",
+  "steps": [
+    {
+      "id": "s0-01",
+      "section": "s0",
+      "kind": "say",
+      "target": ".hero",
+      "say": "欢迎来到第二课，端口、单写者与 revision。上一课我们说，权威留在宿主，模型通过端口提交。这一课看这句话怎样落到代码：业务层只认两个接口，棋谱只有一个写者，每个回合都带着版本号。"
+    },
+    {
+      "id": "s0-02",
+      "section": "s0",
+      "kind": "say",
+      "target": ".objectives",
+      "say": "学完这一课，你应该能做到几件事。说出 TurnPort 的四个成员。解释依赖倒置怎样让业务层不知道 Pi。列出六条不变量和它们的守护位置。看到一次可疑提交，指出是哪一层拦下的。最后，用 valid 的五个条件判断一个回合还有没有效。"
+    },
+    {
+      "id": "s1-01",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .codebox",
+      "say": "先看这两个接口。TurnPort 有四个成员：state 是回合开始时的快照，signal 是取消信号，log 写日志，commit 是唯一的写入通道。AgentDriver 更简单，只有一个 run 方法，接收这个端口。"
+    },
+    {
+      "id": "s1-02",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .grid-2",
+      "say": "第一个重点：依赖倒置。运行时是业务层去调用 Agent，可编译时反过来，是 Agent 依赖业务层。打个比方，L3 像一家银行，只发一种标准的取款凭证。来取钱的是 Pi 还是别的框架，银行不关心，它只认凭证。"
+    },
+    {
+      "id": "s1-03",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .callout.note",
+      "say": "课程这里补充了一个细节。port.state 是一份快照，用 structuredClone 复制出来。之后真实棋局继续变，快照不变。所以 L2 拿快照里的 revision 和模型传来的比一比，就能发现模型抄错了版本。"
+    },
+    {
+      "id": "s2-01",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 > p:first-of-type",
+      "say": "依赖倒置的好处，在组合根 main.ts 里看得最清楚。它决定给 GameService 注入哪个 driver。正常启动用 PiDriver，冒烟测试和初始化失败时换成替身。换 driver，业务层一行都不用改。"
+    },
+    {
+      "id": "s2-02",
+      "section": "s2",
+      "kind": "demo",
+      "target": "#demo0",
+      "actions": [
+        {
+          "click": "#demo0 [data-d=pi]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "先看正常启动。注入的是 PiDriver，它每手创建一个 Pi Session，模型通过 place stone 间接调用 port.commit。注意下面这句：GameService 的代码未改动，它只调用 driver.run。"
+    },
+    {
+      "id": "s2-03",
+      "section": "s2",
+      "kind": "demo",
+      "target": "#demo0",
+      "actions": [
+        {
+          "click": "#demo0 [data-d=smoke]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "切到冒烟替身。它等 200 毫秒，取启发式第一名，直接调 port.commit。不调用大模型，不花一分钱 API 费用。但它照样要过 signal 和 commit 的全部检查。GameService 那句话还是一样，未改动。"
+    },
+    {
+      "id": "s2-04",
+      "section": "s2",
+      "kind": "demo",
+      "target": "#demo0",
+      "actions": [
+        {
+          "click": "#demo0 [data-d=fail]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "再看初始化失败替身。Pi 起不来时，注入一个只会抛错的 driver。GameService 照常运行，棋钟继续走，界面显示错误，棋盘不变。三种 driver，业务层完全一样。"
+    },
+    {
+      "id": "s3-01",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 .tbl-wrap",
+      "say": "第二个重点：六条不变量。权威不是一句口号，是六条在代码里有固定位置的规则。棋谱只有一个写者。过期回合不能落子。迟到的响应赢不了超时的棋钟。每回合只提交一次。坐标和占用必须合法。规则是自由五子棋，知识包改不了它。"
+    },
+    {
+      "id": "s3-02",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 ol",
+      "say": "commit 的检查顺序值得记住。第一步先结算棋钟，超时就当场判负。然后看回合是否有效、是否已提交过。接着看是不是机器方回合，理由是否在 600 字以内。最后 play 校验坐标，通过才写入。先算时间，再谈有效性。"
+    },
+    {
+      "id": "s3-03",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 .callout.warn",
+      "say": "这里也提醒一下版本差异。白皮书写 L2 有 6 个工具，代码现状是 8 个。但本课讲的不变量都没变，valid 仍是五个条件，仍在 game-service.ts 的第 170 行。"
+    },
+    {
+      "id": "s4-01",
+      "section": "s4",
+      "kind": "say",
+      "target": "#demo1",
+      "say": "下面是一个攻击沙盘，列了七种可疑提交。选一种，看它依次经过哪些检查，哪一层拦下，错误文本发给了谁。特别注意错误去向：发给模型的错误，下一轮会进入上下文，模型可以改。"
+    },
+    {
+      "id": "s4-02",
+      "section": "s4",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#demo1 [data-a=oldrev]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "先看模型抄错 revision。参数形状合法，回合也有效，但 L2 的 checkRevision 拦下了它。错误文本是：版本错误，当前 revision 等于 17。模型下一轮读到这句，改传 17 再试就行。根本没走到 L3。"
+    },
+    {
+      "id": "s4-03",
+      "section": "s4",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#demo1 [data-a=timeout]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "对比一下超时后提交。假设心跳还没结算，L2 这边全都放行。到了 L3，commit 第一行先结算棋钟，发现机器方读秒耗尽，判人类胜。接着 valid 拒绝：过期、超时或重复的落子请求已拒绝。"
+    },
+    {
+      "id": "s4-04",
+      "section": "s4",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#demo1 [data-a=forge]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "再看渲染器伪造落子。来源可信，命令形状也合法，revision 也对。可是 humanMove 要求轮到人类，于是拦下：请等待机器方行棋。渲染器根本没有替模型落子的命令，它只能发人类的落子。"
+    },
+    {
+      "id": "s4-05",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 .callout.note",
+      "say": "课程补充了为什么要多道防线。L2 看的是回合开始时的快照和取消信号，L3 的 valid 看的是此刻的真实状态。两个时间点不同，所以各自都要有。就像刚才的超时，L2 没发现，L3 补上了。"
+    },
+    {
+      "id": "s5-01",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 .tbl-wrap",
+      "say": "第三个重点：revision 贯穿四层。它就是一个整数版本号。L4 发命令必须带上它。L3 比对它，并在每次改变时加一。L1 把它写进提示词。L2 的工具要求模型把它传回来。四层传的是同一个数。"
+    },
+    {
+      "id": "s5-02",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 ul",
+      "say": "什么操作会改它？人类落子和模型成功提交，走 calculate 加一。悔棋、取消、换模型、终局，走 invalidate 加一，同时中止当前回合。新局比较特别，revision 回到 0，局 ID 也换掉。"
+    },
+    {
+      "id": "s5-03",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 .callout.rule",
+      "say": "那 revision 回到 0，旧回合恰好也是 0，会不会混过去？不会。valid 不只比 revision，还比局 ID 和当前控制器。这就是为什么是五个条件，而不是一个。"
+    },
+    {
+      "id": "s6-01",
+      "section": "s6",
+      "kind": "say",
+      "target": "#demo2",
+      "say": "下面这个模拟器维护一局棋的 revision 和局 ID。每次机器回合开始，表格里多一行在途回合，五个条件逐个打勾。我们点几个按钮，看哪个回合还能提交。"
+    },
+    {
+      "id": "s6-02",
+      "section": "s6",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#demo2 [data-op=reset]"
+        },
+        {
+          "click": "#demo2 [data-op=move]"
+        },
+        {
+          "click": "#demo2 [data-op=cancel]"
+        },
+        {
+          "click": "#demo2 [data-op=retry]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "我先重来，然后人类落子，revision 变成 1，回合 1 启动。接着取消思考，revision 变成 2。再点重试，回合 2 启动，快照是 2。现在共 2 个机器回合，能提交的只有 1 个。"
+    },
+    {
+      "id": "s6-03",
+      "section": "s6",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#demo2 [data-op=reset]"
+        },
+        {
+          "click": "#demo2 [data-op=move]"
+        },
+        {
+          "click": "#demo2 [data-op=cancel]"
+        },
+        {
+          "click": "#demo2 [data-op=retry]"
+        },
+        {
+          "click": "#demo2 [data-op=commitOld]"
+        },
+        {
+          "click": "#demo2 [data-op=commit]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "同样的顺序，再让两个回合都提交。最早的回合 1 被拒绝，不满足未取消、同一 revision、当前控制器三条。最近的回合 2 提交成功，revision 变成 3，轮到人类。"
+    },
+    {
+      "id": "s6-04",
+      "section": "s6",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#demo2 [data-op=reset]"
+        },
+        {
+          "click": "#demo2 [data-op=move]"
+        },
+        {
+          "click": "#demo2 [data-op=new]"
+        },
+        {
+          "click": "#demo2 [data-op=commit]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "换个顺序。重来，人类落子，然后直接开新局。局从 A 换成 B，revision 回到 0。这时回合 1 再提交，被拒绝。除了未取消和同一 revision，还多了一条，同一局也不满足。"
+    },
+    {
+      "id": "s6-05",
+      "section": "s6",
+      "kind": "proxy",
+      "target": "#s6",
+      "say": "讲到这儿，有同学可能会问：这和数据库里的乐观锁，是不是一个思路？我们请助教来说说。",
+      "question": "弈境用 revision 拒绝过期回合的提交，和数据库的乐观锁或版本号并发控制是同一个思路吗？有什么不同？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s7-01",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 0,
+      "say": "来做自测。第一题：TurnPort 里哪个成员是跨层写入的唯一通道？A，state。B，commit。C，signal。D，log。选完按空格。",
+      "explain": "答案是 B，commit。L2 的工具只能通过 port.commit 请求落子，L3 在里面结算棋钟、检查 valid、校验规则，然后才写入。state 只是只读快照，别被它的名字骗了。"
+    },
+    {
+      "id": "s7-02",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 1,
+      "say": "第二题：冒烟测试换上一个替身 driver，哪一层的代码需要修改？A，L3 的 GameService。B，L2 的 gomoku 扩展。C，L4 的渲染器。D，都不用改，只在组合根 main.ts 里换注入对象。选完按空格。",
+      "explain": "答案是 D。依赖倒置让 L3 只认 AgentDriver 接口，main.ts 在冒烟模式下换个对象就行。选 A 的同学，再想想刚才那句：GameService 的代码未改动。"
+    },
+    {
+      "id": "s7-03",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 2,
+      "say": "第三题：模型思考时机器方棋钟耗尽，随后模型调用了 place stone。为什么不会落子？A，commit 先结算棋钟，判负并 invalidate，然后 valid 为假。B，Pi 的技术超时先触发。C，渲染器拒绝显示这手棋。D，L2 的工具调用预算已用完。选完按空格。",
+      "explain": "答案是 A。迟到的响应赢不了已经超时的棋钟，因为 commit 第一行就是结算棋钟。B 最迷惑人，但技术超时是 90 秒的另一回事，和棋钟无关。"
+    },
+    {
+      "id": "s7-04",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 3,
+      "say": "第四题：新局让 revision 回到 0，一个旧回合恰好也带着 revision 0 提交。结果是什么？A，落子成功，因为 revision 相同。B，落子成功，但被下一次心跳撤销。C，被拒绝，局 ID 和当前控制器都不符，旧回合的信号也已中止。D，L1 重新发起一次请求。选完按空格。",
+      "explain": "答案是 C。valid 有五个条件，不只比 revision。新局会 invalidate，换局 ID，还新建控制器。A 正是只比一个版本号时会掉进去的坑。"
+    },
+    {
+      "id": "s7-05",
+      "section": "s7",
+      "kind": "quiz",
+      "target": "#s7 .quiz",
+      "nth": 4,
+      "say": "最后一题：模型把 revision 抄错了，错误文本发给了谁？A，渲染器，弹出错误框。B，模型，它变成一条工具错误结果，下一轮进入上下文。C，日志文件，不通知任何人。D，Pi 运行时，让 run 崩溃。选完按空格。",
+      "explain": "答案是 B。checkRevision 抛出版本错误，Pi 把异常转成工具错误结果，模型据此修正。run 不会崩。第七课还会讲这条错误即提示词的回路。"
+    },
+    {
+      "id": "s7-06",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .tbl-wrap",
+      "say": "我们收个尾。这一课的主线是：业务层只发一张凭证，就是 TurnPort。所有写入都走 commit，先算棋钟，再查 valid 的五个条件。revision 贯穿四层，加上局 ID 和控制器，挡住迟到、过期和重复的提交。"
+    },
+    {
+      "id": "s7-07",
+      "section": "s7",
+      "kind": "say",
+      "target": "#s7 .related",
+      "say": "下一课 L03，我们看 L1 这一侧：弈境为什么不用 RPC 子进程，而是把 Pi SDK 嵌进主进程，每手创建一个全新的 Session。这一课就到这里，有问题随时问右边的助教。"
+    }
+  ]
+}

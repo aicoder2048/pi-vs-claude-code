@@ -1,0 +1,340 @@
+{
+  "lesson": "L04-loop-hooks.html",
+  "title": "双循环接入点：提交即停",
+  "steps": [
+    {
+      "id": "s0-01",
+      "section": "s0",
+      "kind": "say",
+      "target": ".hero",
+      "say": "欢迎来到第四课。上一课我们看了弈境怎样用 Pi SDK，每手棋开一个新 Session。这一课钻进循环内部。一句话预告：一手棋只跑一次 settle，真正的工作都在 run 内循环里，而落子成功就要立刻停。"
+    },
+    {
+      "id": "s0-02",
+      "section": "s0",
+      "kind": "say",
+      "target": ".objectives",
+      "say": "学完这一课，你应该能说清五件事。两层循环在 Pi 源码的哪里。为什么 run 数最多 2、请求最多 8、工具调用最多 16。七个接入点各是谁挂的。为什么光有 terminate 不够。还有两个 turn start 各管什么。"
+    },
+    {
+      "id": "s1-01",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .grid-2",
+      "say": "第一个重点：Pi 有两层循环。外层叫 settle，管的是停没停稳。一次 prompt 对应一次 settle，遇到重试、排队消息，它会再起一个 run。内层叫 run，反复转 turn。一个 turn 就是模型回复一次，再把这条回复里的工具执行完。"
+    },
+    {
+      "id": "s1-02",
+      "section": "s1",
+      "kind": "say",
+      "target": "#s1 .tbl-wrap",
+      "say": "你可以把外层想成一场会议，内层是会上一轮一轮的发言。白皮书给了源码位置，这张表不用背。只记三个关键点：工具执行前有个钩子，批次终止要看 terminate，顺序执行时每个工具之后都会检查是否已经中止。"
+    },
+    {
+      "id": "s2-01",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .grid-3",
+      "say": "第二个重点：用三个数给一次 settle 计数。N 是 run 数，只能是 1 或 2，因为压缩关了，也没有续跑，只有一次重试能再起 run。M 是请求数，最多 8，L1 数到第 9 次就中止。K 是工具调用数，最多 16，第 17 次会被拦下。"
+    },
+    {
+      "id": "s2-02",
+      "section": "s2",
+      "kind": "say",
+      "target": "#s2 .callout.rule",
+      "say": "所以这一节的核心句是：settle 外循环只是一层外壳，弈境的约束全落在 run 内循环上。请求数、工具数、提交即停，都在内循环里执行。外循环几乎只转一圈，回合之间也没有任何对话残留。"
+    },
+    {
+      "id": "s3-01",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 .tbl-wrap",
+      "say": "接入点总表把七个点按谁注册、挂在哪里、每次几次排在一起。扩展工厂在循环外，每手执行一次。tool call 钩子在每个工具执行前。place stone 返回 terminate。L1 订阅 turn start 和工具执行结束。最后是端口的 commit 和 log，跨层写入只走这一条通道。"
+    },
+    {
+      "id": "s3-02",
+      "section": "s3",
+      "kind": "say",
+      "target": "#s3 .callout.tip",
+      "say": "注意表里的第五和第六项，它们是宿主订阅，不是扩展事件。订阅只能看，不能拦。那为什么够用？因为弈境把流程控制放在宿主手里。宿主看到该停了，自己调 abort 就行，不需要钩子帮它拦截。"
+    },
+    {
+      "id": "s4-01",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 h3",
+      "nth": 0,
+      "say": "先看扩展工厂。它每手执行一次，把本回合的端口和剧本关进闭包里。工具调用计数、是否已提交、证据数组，都是这个闭包的状态。所以状态天然按回合隔离，旧回合的工具写不到新棋盘上。"
+    },
+    {
+      "id": "s4-02",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 pre",
+      "say": "再看 tool call 钩子，它是执行之前的那道闸。先确认回合还有效，再给调用计数，超过 16 就返回 block。Pi 在调它之前已经校验过参数，所以坐标一定合法。预算放在这里而不放在工具里，是因为非法调用也该计数，而且拦截没有副作用。"
+    },
+    {
+      "id": "s4-03",
+      "section": "s4",
+      "kind": "proxy",
+      "target": "#s4",
+      "say": "讲到这儿，有同学可能会问：钩子返回 block，和工具里直接抛错，对模型来说有区别吗？我们请助教来说说。",
+      "question": "弈境里 tool_call 钩子返回 block，和工具 execute 里直接抛错，在模型看来有什么区别？各适合什么情况？请用 3 句话、120 字以内回答，先给结论，不要列表和表格。"
+    },
+    {
+      "id": "s4-04",
+      "section": "s4",
+      "kind": "say",
+      "target": "#s4 .callout.warn",
+      "say": "八个工具里，只有 place stone 会写，而且只经过端口提交，只在被接受时才返回 terminate。其余七个都是只读的。还要提醒一句：白皮书写的是六个工具，那是旧版本。新增的两个连续冲四工具，第八课再讲。"
+    },
+    {
+      "id": "s5-01",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 > p:first-of-type",
+      "say": "第三个重点：terminate 为什么不够。Pi 的规则是，同一批工具全部返回 terminate，才不再请求模型。模型如果在一条回复里同时调了 place stone 和别的工具，别的工具就会否决它。落子已经成功了，Pi 却还会再请求一次。"
+    },
+    {
+      "id": "s5-02",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-batch [data-b=last]"
+        },
+        {
+          "click": "#d1-res [data-r=ok]"
+        },
+        {
+          "click": "#d1-mode [data-m=term]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "看模拟器。我选 analyze position 在前、place stone 在后，停机方式选只靠 terminate。看状态栏，已经落子，可 LLM 请求变成了 2。同批的 analyze position 没返回 terminate，这次多出的请求白白消耗预算和棋钟。"
+    },
+    {
+      "id": "s5-03",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-batch [data-b=last]"
+        },
+        {
+          "click": "#d1-res [data-r=ok]"
+        },
+        {
+          "click": "#d1-mode [data-m=abort]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "切到弈境的做法，terminate 加 abort。同样的批次，LLM 请求回到 1，多出的那次消失了。L1 订阅了工具执行结束，看到提交被接受，就调 abort。run 中止后，不会再请求模型。"
+    },
+    {
+      "id": "s5-04",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-batch [data-b=first]"
+        },
+        {
+          "click": "#d1-res [data-r=ok]"
+        },
+        {
+          "click": "#d1-mode [data-m=abort]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "再把顺序反过来，place stone 在前。这次执行的工具是 1 个，跳过的是 1 个。顺序批次在下一个工具之前检查到中止，后面的 analyze position 就不跑了。落子之后，同批剩下的工具没有意义。"
+    },
+    {
+      "id": "s5-05",
+      "section": "s5",
+      "kind": "demo",
+      "target": "#demo1",
+      "actions": [
+        {
+          "click": "#d1-batch [data-b=first]"
+        },
+        {
+          "click": "#d1-res [data-r=review]"
+        },
+        {
+          "click": "#d1-mode [data-m=abort]"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "最后把结果改成 needsReview，也就是提交被退回。这时没有落子，两个工具都执行了，LLM 请求是 2。这是有意的：退回的反馈必须进入下一次请求，让模型读到后再决定。没落子就不该停。"
+    },
+    {
+      "id": "s5-06",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 .callout.note",
+      "say": "还有个细节：abort 不能 await。事件回调本身在 run 里执行，而 abort 要等 run 空闲。在这里等，就永远等不到，形成死锁。白皮书记录，这个缺陷是在回归测试混合批次时发现的。"
+    },
+    {
+      "id": "s5-07",
+      "section": "s5",
+      "kind": "say",
+      "target": "#s5 .callout.tip",
+      "say": "就算 abort 没赶上，后面还有两道防护。L2 一旦记下已提交，任何工具都会抛出本回合已经落子。L3 的 valid 也会拒绝第二次提交。一层漏了，下一层兜住。"
+    },
+    {
+      "id": "s6-01",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 .vs",
+      "say": "第四个重点：两个 turn start，两件事。L1 订阅 turn start，是因为每个 turn 恰好一次请求，它是天然的计数器，管预算。L2 也挂了 turn start，给每条反馈打上请求序号，管证据。一个靠 abort 生效，一个只打时间戳。"
+    },
+    {
+      "id": "s6-02",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 > p:last-of-type",
+      "say": "为什么要序号？模型可以在一条回复里预先排好，先检查、再提交。两个工具执行时，模型根本还没看到检查结果。序号相同，就说明它没读过，place stone 返回 needsReview，不落子。打个比方，考试时先交卷、再看答案，不算会做。"
+    },
+    {
+      "id": "s6-03",
+      "section": "s6",
+      "kind": "say",
+      "target": "#s6 .callout.warn",
+      "say": "这里白皮书也过时了。它说 tool call 是唯一挂上的扩展事件。代码从 v2 起另挂了 turn start。准确的说法是：能改变流程的扩展回调，仍然只有 tool call，turn start 只是观察。"
+    },
+    {
+      "id": "s7-01",
+      "section": "s7",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#d2-sc [data-sc=normal]"
+        },
+        {
+          "click": "#d2-all"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "现在把一次 settle 拆成时间线，盯住 N、M、K 和 modelTurn。先看最常见的路径，我直接播完。一次观察，一次提交，提交即停。N 等于 1，M 等于 2，K 等于 2。"
+    },
+    {
+      "id": "s7-02",
+      "section": "s7",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#d2-sc [data-sc=review]"
+        },
+        {
+          "click": "#d2-all"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "换成同批预排遭退回。第二个 turn 里，检查和提交挤在一起，modelTurn 相同，提交被退回。第三个 turn 再提交才通过。结果 M 等于 3，K 等于 4。多花一次请求，换来模型真正看见检查结果。"
+    },
+    {
+      "id": "s7-03",
+      "section": "s7",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#d2-sc [data-sc=retry]"
+        },
+        {
+          "click": "#d2-all"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "再看请求出错重试。第一次请求报错，外循环再起一个 run，N 变成 2，这就是 N 的上限。M 等于 3，K 等于 2。课程作者推断，重试那次也计入 8 次请求预算。"
+    },
+    {
+      "id": "s7-04",
+      "section": "s7",
+      "kind": "demo",
+      "target": "#demo2",
+      "actions": [
+        {
+          "click": "#d2-sc [data-sc=budget]"
+        },
+        {
+          "click": "#d2-all"
+        },
+        {
+          "wait": 400
+        }
+      ],
+      "say": "最后看预算耗尽。模型一直试算、查知识，就是不提交。第 9 次 turn start 时，L1 中止，请求根本没发出去。M 停在 8，K 是 8，没有落子。而 modelTurn 记到了 9，因为两个监听者都看到了这次 turn start。"
+    },
+    {
+      "id": "s8-01",
+      "section": "s8",
+      "kind": "quiz",
+      "target": "#s8 .quiz",
+      "nth": 0,
+      "say": "来做自测。第一题：一条回复里调了 analyze position 和 place stone，提交成功。只靠 terminate 会怎样？A，立刻停下，因为 place stone 在最后。B，analyze position 被跳过。C，Pi 还会再请求一次模型。D，提交被撤销。选完按空格。",
+      "explain": "答案是 C。同批全部 terminate 才终止，analyze position 没有返回 terminate，所以多一次请求，多扣一段棋钟。A 最迷惑人，但顺序并不重要，看的是整批有没有全部同意。"
+    },
+    {
+      "id": "s8-02",
+      "section": "s8",
+      "kind": "quiz",
+      "target": "#s8 .quiz",
+      "nth": 1,
+      "say": "第二题：L1 的事件回调里为什么写 void abort，而不是 await？A，abort 是同步函数。B，回调在 run 内部执行，await 会等空闲，形成死锁。C，为了少写代码。D，await 会让 terminate 失效。选完按空格。",
+      "explain": "答案是 B。abort 会等 run 空闲，而回调本身就在 run 里执行，等空闲就永远等不到。A 不对，abort 恰恰是异步的，所以才有等不等的问题。"
+    },
+    {
+      "id": "s8-03",
+      "section": "s8",
+      "kind": "quiz",
+      "target": "#s8 .quiz",
+      "nth": 2,
+      "say": "第三题：L2 挂的 turn start 用来做什么？A，数 LLM 请求，第 9 次中止。B，重新装配系统提示词。C，拦截工具调用。D，给反馈打请求序号，判断模型是否在更早的请求里读过。选完按空格。",
+      "explain": "答案是 D。L2 的 modelTurn 是证据序号。A 是最迷惑人的错项，数请求、第 9 次中止的是 L1 的订阅，不是 L2。"
+    },
+    {
+      "id": "s8-04",
+      "section": "s8",
+      "kind": "quiz",
+      "target": "#s8 .quiz",
+      "nth": 3,
+      "say": "最后一题：弈境一次 settle 里最多有几个 run？A，2 个，只有一次重试能再起 run。B，1 个，外循环被关掉了。C，8 个，每次请求一个 run。D，不限，督促会续跑。选完按空格。",
+      "explain": "答案是 A。压缩关闭，没有续跑，没有排队消息，只有一次重试，所以最多 2 个。C 混淆了 run 和 turn，8 是请求数，请求对应的是 turn。"
+    },
+    {
+      "id": "s8-05",
+      "section": "s8",
+      "kind": "say",
+      "target": "#s8 .tbl-wrap",
+      "say": "我们收个尾。这一课的主线是：外循环只是外壳，约束全在内循环。三个数给它定了界，N 最多 2，M 最多 8，K 最多 16。提交即停靠两件事：terminate 要整批同意，所以 L1 看到成功就 abort。两个 turn start，一个管预算，一个管证据。"
+    },
+    {
+      "id": "s8-06",
+      "section": "s8",
+      "kind": "say",
+      "target": "#s8 .related",
+      "say": "下一课 L05，我们看三道闸怎样让一个回合有界：请求、工具、时间，再加上取消和棋钟。还会看弈境刻意不用的那些回调，以及为什么不用。这一课就到这里，有问题随时问右边的助教。"
+    }
+  ]
+}
