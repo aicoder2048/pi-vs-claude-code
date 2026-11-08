@@ -86,6 +86,10 @@ ext-agent-chain:
 ext-pi-pi:
     {{pi}} -e extensions/pi-pi.ts -e extensions/theme-cycler.ts
 
+# 14b. Pi Pi 中文版: TUI 与对话均为中文
+ext-pi-pi-cn:
+    {{pi}} -e extensions/pi-pi-cn.ts -e extensions/theme-cycler.ts
+
 # 15. Session Replay: scrollable timeline overlay of session history (legit)
 ext-session-replay:
     {{pi}} -e extensions/session-replay.ts -e extensions/minimal.ts

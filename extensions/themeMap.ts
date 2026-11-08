@@ -29,6 +29,7 @@ export const THEME_MAP: Record<string, string> = {
 	"damage-control":     "gruvbox",          // grounded, earthy safety
 	"minimal":            "synthwave",        // synthwave by default now!
 	"pi-pi":              "rose-pine",        // warm creative meta-agent
+	"pi-pi-cn":           "rose-pine",        // Chinese variant of pi-pi
 	"pure-focus":         "everforest",       // calm, distraction-free
 	"purpose-gate":       "tokyo-night",      // intentional, sharp focus
 	"session-replay":     "catppuccin-mocha", // soft, reflective history
