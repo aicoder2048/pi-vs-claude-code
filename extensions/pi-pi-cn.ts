@@ -6,11 +6,14 @@
  *
  * 与原版的区别：
  *   - TUI 全部中文：专家卡片、状态、通知、页脚、命令说明
- *   - 主智能体的 system prompt 为中文，并要求全程用中文对话
- *   - 专家子进程被要求用中文回答（代码、API 名、文件路径保持原样）
+ *   - 提示词不翻译：主智能体和专家都用原版英文提示词，末尾追加同一段
+ *     中文语言规则（.pi/agents/pi-pi-cn/lang-cn.md），对话与调研结果均为中文
  *   - 卡片宽度按终端列宽计算（visibleWidth），中文双宽字符不会挤歪边框
  *
- * 专家定义复用 .pi/agents/pi-pi/*.md（与原版共用，不另建目录）。
+ * 依赖的文件（相对启动目录，须在项目根目录启动 pi）：
+ *   .pi/agents/pi-pi/*.md               专家定义（与原版共用）
+ *   .pi/agents/pi-pi/pi-orchestrator.md 主智能体提示词（与原版共用）
+ *   .pi/agents/pi-pi-cn/lang-cn.md      中文语言规则
  *
  * 命令：
  *   /experts          — 列出专家及状态
@@ -71,12 +74,6 @@ const STATUS_CN: Record<ExpertStatus, string> = {
 	error: "出错",
 };
 
-/** 专家附加指令：要求子进程用中文回答。 */
-const EXPERT_LANG_RULE = `
-
-## 语言要求
-请用**简体中文**回答。代码、API 名、类型名、文件路径、命令行、文档原文引用保持原样，不要翻译。`;
-
 function displayName(name: string): string {
 	const cn = EXPERT_CN[name.toLowerCase()];
 	if (cn) return cn.name;
@@ -115,66 +112,25 @@ function parseAgentFile(filePath: string): ExpertDef | null {
 	}
 }
 
-// ── 主智能体 system prompt（中文） ─────────────────
+// ── 提示词文件 ────────────────────────────────────
+// 提示词是内容，不写在代码里。中文版不翻译原版提示词，
+// 而是在原版英文提示词末尾追加一段中文语言规则（主智能体和专家共用）。
 
-const ORCHESTRATOR_PROMPT_CN = `你是 **Pi Pi** —— 一个专门构建 Pi 智能体的元智能体。你为 Pi coding agent 创建扩展、主题、技能、配置、提示词模板和 TUI 组件。
+const ORCHESTRATOR_FILE = join(".pi", "agents", "pi-pi", "pi-orchestrator.md");
+const LANG_RULE_FILE = join(".pi", "agents", "pi-pi-cn", "lang-cn.md");
 
-## 语言
-- **始终用简体中文与用户对话**：解释、计划、提问、总结都用中文。
-- 代码、API 名、文件路径、命令保持英文原样。
-- 你写的代码里，注释和面向用户的 UI 文案默认用中文，除非用户另有要求。
-- 调用 query_experts 时，问题可以用中文写。
+/** 读取 .md 正文（去掉 frontmatter）。文件不存在返回 null。 */
+function readPromptBody(filePath: string): string | null {
+	if (!existsSync(filePath)) return null;
+	const raw = readFileSync(filePath, "utf-8");
+	const match = raw.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
+	return (match ? match[1] : raw).trim();
+}
 
-## 你的团队
-你有 {{EXPERT_COUNT}} 位领域专家，他们会并行调研 Pi 文档：
-{{EXPERT_NAMES}}
-
-## 工作方式
-
-### 第一阶段：调研（并行）
-收到构建需求后：
-1. 判断涉及哪些领域
-2. **只调用一次** \`query_experts\`，把所有相关专家的问题放进同一个数组 —— 它们作为并发子进程同时运行
-3. 问题要具体："怎样注册一个带 renderCall 的自定义工具？"，而不是"讲讲扩展"
-4. 等所有结果一起返回后再继续
-
-### 第二阶段：构建
-拿到所有专家的调研结果后：
-1. 把发现整合成一份连贯的实现计划
-2. 用你的代码工具（read、write、edit、bash、grep、find、ls）**亲自写出文件**
-3. 写完整、能跑的实现 —— 不留桩代码、不留 TODO
-4. 遵循代码库里已有的模式
-
-## 专家目录
-
-{{EXPERT_CATALOG}}
-
-## 规则
-
-1. **写任何 Pi 相关代码之前，先问专家。** 你需要最新的文档。
-2. **并行询问专家** —— 一次调用 query_experts，把所有问题放进数组。
-3. **问题要具体** —— 点明具体功能、API 方法或组件。
-4. **代码由你来写** —— 专家只做调研，不能改文件。
-5. **遵循 Pi 约定** —— schema 用 TypeBox，为兼容 Google 用 StringEnum，import 要正确。
-6. **文件要完整** —— 每个扩展都要有正确的 import、类型标注和全部功能。
-7. **新建扩展时补一条 justfile 条目**（格式：\`pi -e extensions/<name>.ts\`）。
-
-## 你能构建什么
-- **扩展**（.ts 文件）—— 自定义工具、事件钩子、命令、UI 组件
-- **主题**（.json 文件）—— 包含全部 51 个 token 的配色方案
-- **技能**（SKILL.md 目录）—— 带脚本的能力包
-- **配置**（settings.json）—— 配置文件
-- **提示词模板**（.md 文件）—— 带参数的可复用提示词
-- **智能体定义**（.md 文件）—— 带 frontmatter 的智能体人设
-
-## 文件位置
-- 扩展：\`extensions/\` 或 \`.pi/extensions/\`
-- 主题：\`.pi/themes/\`
-- 技能：\`.pi/skills/\`
-- 配置：\`.pi/settings.json\`
-- 提示词：\`.pi/prompts/\`
-- 智能体：\`.pi/agents/\`
-- 团队：\`.pi/agents/teams.yaml\``;
+/** 返回缺失的提示词文件路径（相对 cwd），全部存在则为空数组。 */
+function missingPromptFiles(cwd: string): string[] {
+	return [ORCHESTRATOR_FILE, LANG_RULE_FILE].filter(f => !existsSync(join(cwd, f)));
+}
 
 // ── 专家卡片配色 ──────────────────────────────────
 // 每位专家一个色相：bg 填充卡片内部，br 是同色相更亮的边框色。
@@ -367,6 +323,8 @@ export default function (pi: ExtensionAPI) {
 			? `${ctx.model.provider}/${ctx.model.id}`
 			: "openrouter/google/gemini-3-flash-preview";
 
+		const langRule = readPromptBody(join(ctx.cwd, LANG_RULE_FILE)) ?? "";
+
 		const args = [
 			"--mode", "json",
 			"-p",
@@ -375,7 +333,7 @@ export default function (pi: ExtensionAPI) {
 			"--model", model,
 			"--tools", state.def.tools,
 			"--thinking", "off",
-			"--append-system-prompt", state.def.systemPrompt + EXPERT_LANG_RULE,
+			"--append-system-prompt", state.def.systemPrompt + "\n\n" + langRule,
 			question,
 		];
 
@@ -654,10 +612,18 @@ export default function (pi: ExtensionAPI) {
 			.map(s => `${displayName(s.def.name)}（${s.def.name}）`)
 			.join("、");
 
-		const systemPrompt = ORCHESTRATOR_PROMPT_CN
+		const template = readPromptBody(join(_ctx.cwd, ORCHESTRATOR_FILE));
+		const langRule = readPromptBody(join(_ctx.cwd, LANG_RULE_FILE));
+		if (template === null || langRule === null) {
+			// session_start 已经报过错；这里不覆盖 system prompt，避免把错误文案当提示词喂给模型
+			return;
+		}
+
+		const systemPrompt = template
 			.replace("{{EXPERT_COUNT}}", experts.size.toString())
 			.replace("{{EXPERT_NAMES}}", expertNames)
-			.replace("{{EXPERT_CATALOG}}", expertCatalog);
+			.replace("{{EXPERT_CATALOG}}", expertCatalog)
+			+ "\n\n" + langRule;
 
 		return { systemPrompt };
 	});
@@ -673,6 +639,18 @@ export default function (pi: ExtensionAPI) {
 
 		loadExperts(_ctx.cwd);
 		updateWidget();
+
+		const missing = missingPromptFiles(_ctx.cwd);
+		if (missing.length > 0) {
+			_ctx.ui.setStatus("pi-pi-cn", "Pi Pi 中文版：缺少提示词文件");
+			_ctx.ui.notify(
+				`Pi Pi 中文版无法工作，缺少提示词文件（相对当前目录 ${_ctx.cwd}）：\n` +
+				missing.map(f => `  - ${f}`).join("\n") +
+				`\n\n请在项目根目录启动 pi，或补齐这些文件。`,
+				"error",
+			);
+			return;
+		}
 
 		const expertNames = Array.from(experts.values()).map(s => displayName(s.def.name)).join("、");
 		_ctx.ui.setStatus("pi-pi-cn", `Pi Pi 中文版（${experts.size} 位专家）`);
